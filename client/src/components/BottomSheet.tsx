@@ -198,7 +198,7 @@ export function BottomSheet({ activeMode, onModeChange, isGroup, onToggleGroup, 
             <div className="px-6 pt-1 pb-4">
               <h2 className="text-[22px] font-bold text-foreground mb-5 flex items-baseline gap-1.5 flex-wrap" data-testid="text-let-toast">
                 <span style={{ display: isOpen ? "inline" : "none" }}>
-                  Let <img src={toastLogoPath} alt="Toast" className="h-[34px] inline-block" style={{ verticalAlign: "bottom", marginBottom: "2px" }} /> decide
+                  Let <img src={toastLogoPath} alt="Toast" className="h-[34px] inline-block" style={{ verticalAlign: "bottom", marginBottom: "2px" }} /> decides
                 </span>
                 <span style={{ display: isOpen ? "none" : "inline" }}>Quick start</span>
               </h2>
