@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="th">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Request Logs</title>
+    <style>
+      body {
+        font-family: system-ui, -apple-system, sans-serif;
+        margin: 0;
+        background: #0f1824;
+        color: #e7eef7;
+      }
+      header {
+        padding: 12px 16px;
+        background: #111927;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      select,
+      input {
+        padding: 6px 8px;
+        border-radius: 6px;
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        background: #0b1220;
+        color: #e7eef7;
+      }
+      button {
+        padding: 8px 12px;
+        border: none;
+        border-radius: 8px;
+        background: linear-gradient(120deg, #13c1b6, #1d9bf0);
+        color: #0b1d29;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      th,
+      td {
+        padding: 8px 10px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        font-size: 12px;
+      }
+      th {
+        text-align: left;
+        background: rgba(255, 255, 255, 0.04);
+      }
+      #tableWrap {
+        height: calc(100vh - 60px);
+        overflow: auto;
+      }
+      .pill {
+        display: inline-block;
+        padding: 3px 8px;
+        border-radius: 999px;
+        font-size: 11px;
+      }
+      .pill.cache {
+        background: rgba(19, 193, 182, 0.15);
+        color: #7ef1e7;
+      }
+      .pill.fetch {
+        background: rgba(255, 111, 111, 0.18);
+        color: #ffc7c7;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div style="font-weight:700;">Request Logs</div>
+      <label>Source
+        <select id="source">
+          <option value="">all</option>
+          <option value="cache">cache</option>
+          <option value="refetch-cache-small">refetch-cache-small</option>
+          <option value="osm">osm</option>
+          <option value="google">google</option>
+          <option value="osm,google">osm,google</option>
+        </select>
+      </label>
+      <label>cacheHit
+        <select id="cacheHit">
+          <option value="">all</option>
+          <option value="true">true</option>
+          <option value="false">false</option>
+        </select>
+      </label>
+      <label>force
+        <select id="force">
+          <option value="">all</option>
+          <option value="true">true</option>
+          <option value="false">false</option>
+        </select>
+      </label>
+      <label>Limit <input id="limit" type="number" value="200" style="width:70px;" /></label>
+      <button id="reload">Reload</button>
+      <div id="status" style="margin-left:auto;font-size:12px;color:#9fb4d4;"></div>
+    </header>
+    <div id="tableWrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Lat,Lon</th>
+            <th>Radius</th>
+            <th>Query</th>
+            <th>Source</th>
+            <th>Count</th>
+            <th>CacheHit</th>
+            <th>Force</th>
+            <th>G.Search</th>
+            <th>G.Photo</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <script>
+      async function load() {
+        const params = new URLSearchParams();
+        const src = document.getElementById("source").value;
+        const cacheHit = document.getElementById("cacheHit").value;
+        const force = document.getElementById("force").value;
+        const limit = document.getElementById("limit").value || 200;
+        params.set("limit", limit);
+        if (src) params.set("source", src);
+        if (cacheHit) params.set("cacheHit", cacheHit);
+        if (force) params.set("force", force);
+        const res = await fetch(`/admin/logs?${params.toString()}`);
+        const json = await res.json();
+        render(json.data || []);
+        document.getElementById("status").textContent = `Loaded ${json.count} logs`;
+      }
+
+      function render(data) {
+        const tbody = document.getElementById("rows");
+        tbody.innerHTML = "";
+        data.forEach((row) => {
+          const tr = document.createElement("tr");
+          const date = new Date(row.ts);
+          tr.innerHTML = `
+            <td>${date.toISOString().replace("T", " ").slice(0, 19)}</td>
+            <td>${Number(row.lat).toFixed(5)}, ${Number(row.lon).toFixed(5)}</td>
+            <td>${row.radius}</td>
+            <td>${row.query}</td>
+            <td>${row.source}</td>
+            <td>${row.resultCount}</td>
+            <td>${row.cacheHit ? '<span class="pill cache">true</span>' : '<span class="pill fetch">false</span>'}</td>
+            <td>${row.force ? "true" : "false"}</td>
+            <td>${row.googleSearch ? "yes" : "no"}</td>
+            <td>${row.googlePhoto ? "yes" : "no"}</td>
+          `;
+          tbody.appendChild(tr);
+        });
+      }
+
+      document.getElementById("reload").addEventListener("click", load);
+      document.getElementById("source").addEventListener("change", load);
+      document.getElementById("cacheHit").addEventListener("change", load);
+      document.getElementById("force").addEventListener("change", load);
+      document.getElementById("limit").addEventListener("change", load);
+      load().catch(console.error);
+    </script>
+  </body>
+</html>

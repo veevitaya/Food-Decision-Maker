@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="th">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Low-Cost Restaurant Map (OSM + Cache)</title>
+    <link
+      href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css"
+      rel="stylesheet"
+    />
+    <style>
+      .marker-thumb {
+        width: 46px;
+        height: 46px;
+        border-radius: 8px;
+        border: 2px solid white;
+        box-shadow: 0 6px 12px rgba(0, 0, 0, 0.25);
+        transform: translateY(-6px);
+        background-size: cover;
+        background-position: center;
+        cursor: pointer;
+        background-color: #ffffff;
+      }
+      .marker-default {
+        width: 26px;
+        height: 26px;
+        border-radius: 50%;
+        border: 2px solid white;
+        background: linear-gradient(140deg, #13c1b6, #1d9bf0);
+        box-shadow: 0 3px 6px rgba(0, 0, 0, 0.2);
+        transform: translateY(-3px);
+        cursor: pointer;
+      }
+      body,
+      html {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        font-family: "Inter", system-ui, -apple-system, sans-serif;
+        background: linear-gradient(145deg, #0b2b3c, #0f4761);
+        color: #f5f7fa;
+      }
+      #app {
+        display: grid;
+        grid-template-columns: 320px 1fr;
+        height: 100%;
+      }
+      #sidebar {
+        padding: 16px;
+        backdrop-filter: blur(10px);
+        background: rgba(255, 255, 255, 0.07);
+        border-right: 1px solid rgba(255, 255, 255, 0.08);
+      }
+      #map {
+        width: 100%;
+        height: 100%;
+      }
+      h1 {
+        font-size: 20px;
+        margin: 0 0 8px;
+      }
+      label {
+        display: block;
+        font-size: 12px;
+        margin: 8px 0 4px;
+        color: #cfe8ff;
+      }
+      input {
+        width: 100%;
+        padding: 8px;
+        border-radius: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        background: rgba(255, 255, 255, 0.08);
+        color: #fff;
+        outline: none;
+      }
+      button {
+        width: 100%;
+        margin-top: 12px;
+        padding: 10px;
+        border: none;
+        border-radius: 10px;
+        background: linear-gradient(120deg, #13c1b6, #1d9bf0);
+        color: #0b1d29;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      #results {
+        margin-top: 14px;
+        max-height: calc(100vh - 240px);
+        overflow: auto;
+      }
+      .card {
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 10px;
+        padding: 10px;
+        margin-bottom: 10px;
+      }
+      .card h3 {
+        margin: 0 0 6px;
+        font-size: 15px;
+      }
+      .card small {
+        color: #b9d7f4;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div id="sidebar">
+        <h1>ค้นหาร้านอาหาร (OSM)</h1>
+        <p style="margin:0 0 12px; color:#b9d7f4;">
+          ใช้ข้อมูล OpenStreetMap + แคช ลดค่าใช้จ่าย Google Places
+        </p>
+        <label>Latitude</label>
+        <input id="lat" value="13.7563" />
+        <label>Longitude</label>
+        <input id="lon" value="100.5018" />
+        <label>รัศมี (เมตร)</label>
+        <input id="radius" value="28000" />
+        <button id="locate" style="margin-top:8px;background:linear-gradient(120deg,#7bdcb5,#1d9bf0);">
+          ใช้ตำแหน่งปัจจุบัน
+        </button>
+        <label style="display:flex;align-items:center;gap:8px;margin-top:8px;">
+          <input type="checkbox" id="onlyPhotos" />
+          แสดงเฉพาะที่มีรูป
+        </label>
+        <button id="search">ค้นหา</button>
+        <button id="prefetch" style="margin-top:8px;background:linear-gradient(120deg,#ffb347,#ff5f6d);">
+          แคชพื้นที่นี้ (force)
+        </button>
+        <div style="margin-top:10px;font-size:12px;color:#b9d7f4;">
+          <span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:#ccc;margin-right:6px;border:2px solid white;box-shadow:0 0 4px rgba(0,0,0,0.3);"></span> มีรูป (thumbnail)
+          <span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:linear-gradient(140deg,#13c1b6,#1d9bf0);margin:0 6px 0 12px;border:2px solid white;"></span> ไม่มีรูป
+        </div>
+        <div id="status" style="margin-top:6px;font-size:12px;color:#b9d7f4;"></div>
+        <div id="results"></div>
+      </div>
+      <div id="map"></div>
+    </div>
+
+    <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+    <script>
+      const map = new maplibregl.Map({
+        container: "map",
+        // ใช้สไตล์ถนนจริง (Carto Positron GL – ไม่ต้องใช้ key)
+        style: "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
+        center: [100.5018, 13.7563],
+        zoom: 13,
+      });
+      map.addControl(new maplibregl.NavigationControl());
+
+      const markers = [];
+      const apiBase = "";
+
+      async function fetchPlaces() {
+        const lat = parseFloat(document.getElementById("lat").value);
+        const lon = parseFloat(document.getElementById("lon").value);
+        const radius = parseInt(document.getElementById("radius").value, 10);
+        const url = `${apiBase}/places?lat=${lat}&lon=${lon}&radius=${radius}&q=restaurant`;
+        const res = await fetch(url);
+        const json = await res.json();
+        renderResults(json.data || []);
+      }
+
+      function renderResults(data) {
+        const onlyPhotos = document.getElementById("onlyPhotos").checked;
+        const filtered = onlyPhotos
+          ? data.filter((p) => p.photos && p.photos.length)
+          : data;
+
+        markers.forEach((m) => m.remove());
+        markers.length = 0;
+        const box = document.getElementById("results");
+        box.innerHTML = "";
+        const status = document.getElementById("status");
+        status.textContent =
+          filtered.length > 0
+            ? `แสดง ${filtered.length}/${data.length} แห่ง${
+                onlyPhotos ? " (เฉพาะที่มีรูป)" : ""
+              }`
+            : `ไม่พบผล ลองเพิ่มรัศมีหรือปิดตัวกรองรูป`;
+
+        filtered.forEach((place) => {
+          const photo = place.photos && place.photos.length ? place.photos[0] : null;
+          const html = [
+            `<div style="font-size:14px;font-weight:700;margin-bottom:4px;">${place.name || "ไม่ระบุชื่อ"}</div>`,
+            `<div style="font-size:12px;color:#556;line-height:1.4;">${place.address || "ไม่พบที่อยู่"}</div>`,
+            photo
+              ? `<div style="margin:6px 0;"><img src="${photo}" alt="photo" style="width:220px;max-width:90vw;border-radius:8px;"/></div>`
+              : "",
+            place.cuisine && place.cuisine.length
+              ? `<div style="font-size:12px;margin-top:4px;">อาหาร: ${place.cuisine.join(", ")}</div>`
+              : "",
+            place.phone ? `<div style="font-size:12px;">โทร: ${place.phone}</div>` : "",
+            place.website
+              ? `<div style="font-size:12px;"><a href="${place.website}" target="_blank">เว็บไซต์</a></div>`
+              : "",
+            place.openingHours
+              ? `<div style="font-size:12px;">เวลาเปิด: ${place.openingHours}</div>`
+              : "",
+            `<div style="font-size:11px;color:#6b7b8c;margin-top:4px;">ละติจูด: ${place.lat.toFixed(
+              5
+            )}, ลองจิจูด: ${place.lon.toFixed(5)}</div>`,
+            `<div style="font-size:11px;color:#6b7b8c;">Source: ${place.source}</div>`,
+          ]
+            .filter(Boolean)
+            .join("");
+
+          const el = document.createElement("div");
+          if (photo) {
+            el.className = "marker-thumb";
+            el.style.backgroundImage = `url(${photo})`;
+            el.title = `${place.name} (มีรูป)`;
+          } else {
+            el.className = "marker-default";
+            el.title = place.name;
+          }
+
+          const m = new maplibregl.Marker({ element: el, anchor: "bottom" })
+            .setLngLat([place.lon, place.lat])
+            .setPopup(new maplibregl.Popup({ closeButton: true }).setHTML(html))
+            .addTo(map);
+          markers.push(m);
+          const card = document.createElement("div");
+          card.className = "card";
+          card.innerHTML = `
+            ${photo ? `<img src="${photo}" style="width:100%;border-radius:10px;margin-bottom:8px;" alt="photo">` : ""}
+            <h3>${place.name}</h3>
+            <small>${place.address || "ไม่มีที่อยู่"}</small><br/>
+            <small>Source: ${place.source}${photo ? " · มีรูป" : ""}</small>`;
+          box.appendChild(card);
+        });
+      }
+
+      document.getElementById("search").addEventListener("click", () => {
+        const lat = parseFloat(document.getElementById("lat").value);
+        const lon = parseFloat(document.getElementById("lon").value);
+        map.flyTo({ center: [lon, lat], zoom: 14 });
+        fetchPlaces();
+      });
+      document.getElementById("onlyPhotos").addEventListener("change", fetchPlaces);
+
+      document.getElementById("locate").addEventListener("click", () => {
+        if (!navigator.geolocation) {
+          alert("เบราว์เซอร์ไม่รองรับการขอตำแหน่ง");
+          return;
+        }
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            const { latitude, longitude } = pos.coords;
+            document.getElementById("lat").value = latitude.toFixed(6);
+            document.getElementById("lon").value = longitude.toFixed(6);
+            map.flyTo({ center: [longitude, latitude], zoom: 15 });
+            fetchPlaces();
+          },
+          (err) => {
+            alert("ขอตำแหน่งไม่สำเร็จ: " + err.message);
+          },
+          { enableHighAccuracy: true, timeout: 8000, maximumAge: 30000 }
+        );
+      });
+
+      document.getElementById("prefetch").addEventListener("click", async () => {
+        const lat = parseFloat(document.getElementById("lat").value);
+        const lon = parseFloat(document.getElementById("lon").value);
+        const radius = parseInt(document.getElementById("radius").value, 10);
+        const url = `${apiBase}/places?lat=${lat}&lon=${lon}&radius=${radius}&q=restaurant&force=true`;
+        const res = await fetch(url);
+        const json = await res.json();
+        document.getElementById("status").textContent = `Prefetched: ${
+          Array.isArray(json.data) ? json.data.length : json.cached
+        } items`;
+        fetchPlaces();
+      });
+
+      // initial load
+      fetchPlaces().catch(console.error);
+    </script>
+  </body>
+</html>

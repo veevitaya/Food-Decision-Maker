@@ -1,0 +1,31 @@
+{
+  "name": "googlemap-low-cost",
+  "version": "1.0.0",
+  "description": "Low-cost restaurant map search using OSM/Overpass with aggressive caching and optional Google fallback.",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "npm run build && node dist/index.js",
+    "build": "tsc --project tsconfig.json",
+    "start": "node dist/index.js",
+    "lint": "echo \"add eslint later\""
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.5.0",
+    "dotenv": "^16.6.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.12",
+    "ts-node": "^10.9.2",
+    "tsx": "^4.7.1",
+    "typescript": "^5.6.3"
+  },
+  "keywords": [
+    "osm",
+    "overpass",
+    "maplibre",
+    "places"
+  ],
+  "author": "",
+  "license": "ISC"
+}

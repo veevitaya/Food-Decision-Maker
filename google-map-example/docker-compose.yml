@@ -1,0 +1,19 @@
+version: "3.9"
+services:
+  app:
+    build: .
+    ports:
+      - "4000:4000"
+    environment:
+      - PORT=4000
+      - PROVIDER_FALLBACK=${PROVIDER_FALLBACK:-none}
+      - GOOGLE_PLACES_API_KEY=${GOOGLE_PLACES_API_KEY:-}
+      - CACHE_TTL_PLACES=${CACHE_TTL_PLACES:-604800000}
+      - CACHE_TTL_GEOCODE=${CACHE_TTL_GEOCODE:-1209600000}
+      - PREFETCH_INTERVAL_MS=${PREFETCH_INTERVAL_MS:-43200000}
+      - OVERPASS_ENDPOINT=${OVERPASS_ENDPOINT:-https://overpass-api.de/api/interpreter}
+      - DB_PATH=/usr/src/app/data/app.db
+    volumes:
+      - ./data:/usr/src/app/data
+      - ./public:/usr/src/app/public:ro
+    restart: unless-stopped

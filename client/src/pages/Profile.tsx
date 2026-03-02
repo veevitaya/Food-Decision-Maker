@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useLocation } from "wouter";
 import { useLineProfile } from "@/hooks/use-line-profile";
-import { sendGroupInvite } from "@/lib/liff";
+import { getLiffIdToken, sendGroupInvite } from "@/lib/liff";
 import { BottomNav } from "@/components/BottomNav";
 import { useSavedRestaurants } from "@/hooks/use-saved-restaurants";
 import { ChevronRight, UserPlus, Unlink, LogIn, LogOut, X, Store, User, Star, TrendingUp, Image, Sparkles, Plus, Check, Crown, Eye, ExternalLink, MapPin, Clock, BarChart3, ArrowUpRight, ArrowDownRight, Utensils, Zap, Calendar, Megaphone, Tag, Percent, Trash2 } from "lucide-react";
@@ -129,9 +129,15 @@ function saveProfile(profile: LocalProfile) {
 
 async function syncToServer(lineUserId: string, profile: LocalProfile) {
   try {
+    const token = getLiffIdToken();
+    if (!token) return;
+
     await fetch("/api/profile", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
       credentials: "include",
       body: JSON.stringify({
         lineUserId,
@@ -150,7 +156,12 @@ async function syncToServer(lineUserId: string, profile: LocalProfile) {
 
 async function fetchFromServer(lineUserId: string): Promise<Partial<LocalProfile> | null> {
   try {
-    const res = await fetch(`/api/profile/${lineUserId}`, { credentials: "include" });
+    const token = getLiffIdToken();
+    if (!token) return null;
+    const res = await fetch(`/api/profile/${lineUserId}`, {
+      credentials: "include",
+      headers: { Authorization: `Bearer ${token}` },
+    });
     if (!res.ok) return null;
     const data = await res.json();
     return {

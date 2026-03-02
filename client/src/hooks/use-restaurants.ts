@@ -2,20 +2,50 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, type RestaurantResponse, type UserPreferenceResponse } from "@shared/routes";
 import { z } from "zod";
 
+type RestaurantsQueryOptions = {
+  mode?: string;
+  lat?: number;
+  lng?: number;
+  query?: string;
+  radius?: number;
+  forceRefresh?: boolean;
+  sourcePreference?: "osm-first" | "google-first" | "hybrid";
+};
+
 // Fetch restaurants for the swipe deck
-export function useRestaurants(mode?: string) {
+export function useRestaurants(options: RestaurantsQueryOptions = {}) {
+  const {
+    mode,
+    lat,
+    lng,
+    query,
+    radius,
+    forceRefresh,
+    sourcePreference,
+  } = options;
+
   return useQuery({
-    queryKey: [api.restaurants.list.path, { mode }],
+    queryKey: [
+      api.restaurants.list.path,
+      { mode, lat, lng, query, radius, forceRefresh, sourcePreference },
+    ],
     queryFn: async () => {
-      // Build query string if mode is provided
       const params = new URLSearchParams();
       if (mode) params.append("mode", mode);
-      
+      if (typeof lat === "number") params.append("lat", String(lat));
+      if (typeof lng === "number") params.append("lng", String(lng));
+      if (query) params.append("query", query);
+      if (typeof radius === "number") params.append("radius", String(radius));
+      if (typeof forceRefresh === "boolean") {
+        params.append("forceRefresh", String(forceRefresh));
+      }
+      if (sourcePreference) params.append("sourcePreference", sourcePreference);
+
       const url = params.toString() ? `${api.restaurants.list.path}?${params.toString()}` : api.restaurants.list.path;
-      
+
       const res = await fetch(url, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch restaurants");
-      
+
       const data = await res.json();
       return api.restaurants.list.responses[200].parse(data);
     },
