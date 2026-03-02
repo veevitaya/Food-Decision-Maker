@@ -1,6 +1,0 @@
-node_modules
-dist
-data
-npm-debug.log
-Dockerfile
-.dockerignore
