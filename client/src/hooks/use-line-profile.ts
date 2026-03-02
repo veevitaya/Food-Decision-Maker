@@ -8,7 +8,7 @@ let cachedProfile: LineProfile | null = null;
 let listeners: Set<() => void> = new Set();
 
 function notify() {
-  for (const l of listeners) l();
+  listeners.forEach((listener) => listener());
 }
 
 try {
@@ -37,7 +37,7 @@ export function useLineProfile() {
 
   useEffect(() => {
     if (!isLiffAvailable()) return;
-    initLiff().then((ready) => {
+    initLiff({ autoLogin: false }).then((ready) => {
       setLiffReady(ready);
       if (ready && isLoggedIn()) {
         setLoading(true);
@@ -50,9 +50,11 @@ export function useLineProfile() {
   }, []);
 
   const handleLogin = useCallback(() => {
-    if (liffReady) {
-      login();
-    }
+    if (liffReady) return login();
+    // If login is clicked before LIFF init completes, init first and then login.
+    initLiff({ autoLogin: false }).then((ready) => {
+      if (ready) login();
+    });
   }, [liffReady]);
 
   const handleLogout = useCallback(() => {

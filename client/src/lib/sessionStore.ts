@@ -14,7 +14,7 @@ let sessions: ActiveSession[] = [];
 let listeners: Set<() => void> = new Set();
 
 function notify() {
-  for (const l of listeners) l();
+  listeners.forEach((listener) => listener());
   try {
     sessionStorage.setItem("toast_sessions", JSON.stringify(sessions));
   } catch {}

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { insertRestaurantSchema, insertUserPreferenceSchema, restaurants, userPreferences } from './schema';
+import { insertUserPreferenceSchema, userPreferences } from './schema';
 
 export const errorSchemas = {
   validation: z.object({
@@ -14,6 +14,37 @@ export const errorSchemas = {
   }),
 };
 
+const restaurantListItemSchema = z.object({
+  id: z.number(),
+  name: z.string(),
+  description: z.string(),
+  imageUrl: z.string(),
+  lat: z.string(),
+  lng: z.string(),
+  category: z.string(),
+  priceLevel: z.number(),
+  rating: z.string(),
+  address: z.string(),
+  isNew: z.boolean().nullable().optional(),
+  trendingScore: z.number().nullable().optional(),
+  source: z.enum(["cache", "osm", "google", "mixed"]).optional(),
+  distanceMeters: z.number().optional(),
+  photos: z.array(z.string()).optional(),
+  freshnessScore: z.number().optional(),
+  isFallback: z.boolean().optional(),
+  phone: z.string().optional(),
+  openingHours: z.array(z.object({
+    day: z.string(),
+    hours: z.string(),
+  })).optional(),
+  reviews: z.array(z.object({
+    author: z.string(),
+    rating: z.number().min(1).max(5),
+    text: z.string(),
+    timeAgo: z.string().optional(),
+  })).optional(),
+});
+
 export const api = {
   restaurants: {
     list: {
@@ -24,16 +55,19 @@ export const api = {
         lat: z.coerce.number().optional(),
         lng: z.coerce.number().optional(),
         query: z.string().optional(),
+        radius: z.coerce.number().optional(),
+        forceRefresh: z.coerce.boolean().optional(),
+        sourcePreference: z.enum(["osm-first", "google-first", "hybrid"]).optional().default("osm-first"),
       }).optional(),
       responses: {
-        200: z.array(z.custom<typeof restaurants.$inferSelect>()),
+        200: z.array(restaurantListItemSchema),
       }
     },
     suggestions: {
       method: 'GET' as const,
       path: '/api/restaurants/suggestions' as const,
       responses: {
-        200: z.array(z.custom<typeof restaurants.$inferSelect>()),
+        200: z.array(restaurantListItemSchema),
       }
     }
   },

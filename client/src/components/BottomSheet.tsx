@@ -43,7 +43,7 @@ export function BottomSheet({ activeMode, onModeChange, isGroup, onToggleGroup, 
   const { mainVibes, moreVibes, recordVibe } = useVibeFrequency();
 
   const { data: suggestions = [], isLoading: isLoadingSuggestions } = useSuggestions();
-  const { data: newNearby = [], isLoading: isLoadingNearby } = useRestaurants("new");
+  const { data: newNearby = [], isLoading: isLoadingNearby } = useRestaurants({ mode: "new" });
 
   const closedTranslateY = "72%";
   const openTranslateY = "0%";

@@ -197,7 +197,7 @@ export default function SoloResults() {
 
     setTimeout(() => {
       const nextMenu = getNextMenu();
-      setUsedIds((prev) => new Set([...prev, nextMenu.id]));
+      setUsedIds((prev) => new Set([...Array.from(prev), nextMenu.id]));
 
       if (otherSide === "left") {
         setLeftOption(nextMenu);

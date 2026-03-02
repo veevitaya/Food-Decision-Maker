@@ -1,6 +1,18 @@
-import { pgTable, text, serial, integer, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, boolean, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
+
+export type RestaurantOpeningHour = {
+  day: string;
+  hours: string;
+};
+
+export type RestaurantReview = {
+  author: string;
+  rating: number;
+  text: string;
+  timeAgo?: string;
+};
 
 export const restaurants = pgTable("restaurants", {
   id: serial("id").primaryKey(),
@@ -15,11 +27,14 @@ export const restaurants = pgTable("restaurants", {
   address: text("address").notNull(),
   isNew: boolean("is_new").default(false),
   trendingScore: integer("trending_score").default(0),
+  phone: text("phone"),
+  openingHours: jsonb("opening_hours").$type<RestaurantOpeningHour[]>(),
+  reviews: jsonb("reviews").$type<RestaurantReview[]>(),
 });
 
 export const insertRestaurantSchema = createInsertSchema(restaurants).omit({ id: true });
 export type Restaurant = typeof restaurants.$inferSelect;
-export type InsertRestaurant = z.infer<typeof insertRestaurantSchema>;
+export type InsertRestaurant = typeof restaurants.$inferInsert;
 
 export const userPreferences = pgTable("user_preferences", {
   id: serial("id").primaryKey(),
@@ -34,6 +49,7 @@ export type InsertUserPreference = z.infer<typeof insertUserPreferenceSchema>;
 export const userProfiles = pgTable("user_profiles", {
   id: serial("id").primaryKey(),
   lineUserId: text("line_user_id").notNull().unique(),
+  role: text("role").notNull().default("user"),
   displayName: text("display_name").notNull(),
   pictureUrl: text("picture_url"),
   statusMessage: text("status_message"),

@@ -270,8 +270,8 @@ export default function GroupSwipe() {
     if (!item) return;
 
     if (dir === "right" || dir === "super") {
-      setLiked((prev) => new Set([...prev, id]));
-      if (dir === "super") setSuperLiked((prev) => new Set([...prev, id]));
+      setLiked((prev) => new Set([...Array.from(prev), id]));
+      if (dir === "super") setSuperLiked((prev) => new Set([...Array.from(prev), id]));
     }
 
     setCurrentIndex((prev) => {
