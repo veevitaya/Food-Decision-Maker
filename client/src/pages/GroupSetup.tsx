@@ -1,7 +1,12 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { useLocation } from "wouter";
 import { BottomNav } from "@/components/BottomNav";
+import { LocateFixed } from "lucide-react";
+import { InteractiveMap } from "@/components/InteractiveMap";
+import { useUserLocation } from "@/hooks/use-user-location";
+import { useRestaurants } from "@/hooks/use-restaurants";
+import { getProfile, initLiff, isLiffAvailable, sendGroupInvite } from "@/lib/liff";
 
 const LOCATIONS_GROUP = [
   { emoji: "🍢", label: "Street food" },
@@ -40,6 +45,39 @@ export default function GroupSetup() {
   const [selectedBudget, setSelectedBudget] = useState<string>("");
   const [selectedDiet, setSelectedDiet] = useState<string[]>([]);
   const [inviteSent, setInviteSent] = useState(false);
+  const [creatorName, setCreatorName] = useState("You");
+  const [creatorAvatarUrl, setCreatorAvatarUrl] = useState<string | null>(null);
+  const [selectedPinId, setSelectedPinId] = useState<number | null>(null);
+  const [locating, setLocating] = useState(false);
+  const [locationOverride, setLocationOverride] = useState<{ lat: number; lng: number } | null>(null);
+  const userLocation = useUserLocation();
+  const effectiveLocation = locationOverride ?? userLocation;
+
+  const { data: restaurants = [] } = useRestaurants({
+    lat: effectiveLocation.lat,
+    lng: effectiveLocation.lng,
+    radius: 5000,
+    limit: 20,
+    localOnly: true,
+    sourcePreference: "osm-first",
+  });
+
+  const mapPins = useMemo(
+    () =>
+      restaurants
+        .filter((r) => !Number.isNaN(Number(r.lat)) && !Number.isNaN(Number(r.lng)))
+        .map((r) => ({
+          id: r.id,
+          name: r.name,
+          emoji: "FD",
+          category: r.category,
+          price: "$".repeat(Math.max(1, r.priceLevel || 1)),
+          imageUrl: r.imageUrl || r.photos?.[0] || null,
+          lat: Number(r.lat),
+          lng: Number(r.lng),
+        })),
+    [restaurants],
+  );
 
   const toggleList = (list: string[], item: string, setter: (v: string[]) => void) => {
     if (list.includes(item)) setter(list.filter((i) => i !== item));
@@ -47,11 +85,62 @@ export default function GroupSetup() {
   };
 
   const handleInvite = () => {
-    setInviteSent(true);
-    const text = encodeURIComponent("Join my Toast session! Let's decide what to eat together 🍞✨");
-    window.open(`https://line.me/R/share?text=${text}`, "_blank");
-    setTimeout(() => navigate("/group/waiting"), 1500);
+    void startSession(true);
   };
+
+  const startSession = async (shareInvite: boolean) => {
+    let resolvedCreator = creatorName;
+    let resolvedCreatorAvatarUrl = creatorAvatarUrl;
+    if (isLiffAvailable()) {
+      await initLiff({ autoLogin: false });
+      const profile = await getProfile();
+      if (profile?.displayName) {
+        resolvedCreator = profile.displayName;
+        setCreatorName(profile.displayName);
+      }
+      if (profile?.pictureUrl) {
+        resolvedCreatorAvatarUrl = profile.pictureUrl;
+        setCreatorAvatarUrl(profile.pictureUrl);
+      }
+    }
+    const res = await fetch("/api/group/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({
+        locations: selectedLocations,
+        budget: selectedBudget,
+        diet: selectedDiet,
+        creatorName: resolvedCreator,
+        creatorAvatarUrl: resolvedCreatorAvatarUrl || undefined,
+      }),
+    });
+    if (!res.ok) return;
+    const payload = await res.json();
+    const code = payload?.session?.code;
+    if (!code) return;
+    localStorage.setItem(`group_member_name_${code}`, resolvedCreator);
+    if (shareInvite) {
+      setInviteSent(true);
+      await sendGroupInvite(code);
+    }
+    navigate(`/group/waiting?session=${encodeURIComponent(code)}`);
+  };
+
+  function recenterToCurrentLocation() {
+    if (!("geolocation" in navigator)) return;
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setLocationOverride({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        setLocating(false);
+      },
+      () => {
+        setLocating(false);
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
+    );
+  }
 
   return (
     <div className="w-full min-h-[100dvh] bg-white flex flex-col" data-testid="group-setup-page">
@@ -62,15 +151,25 @@ export default function GroupSetup() {
       <div className="flex-1 overflow-y-auto px-6 pb-32">
         <motion.div {...staggerIn(0.05)}>
           <h2 className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-3 mt-2">Area</h2>
-          <div className="w-full h-40 rounded-2xl overflow-hidden mb-5 border border-gray-100"
+          <div className="relative w-full h-44 rounded-2xl overflow-hidden mb-5 border border-gray-100"
             style={{ boxShadow: "var(--shadow-card)" }}
           >
-            <iframe
-              title="Location map"
-              src="https://www.openstreetmap.org/export/embed.html?bbox=100.50%2C13.73%2C100.56%2C13.76&layer=mapnik&marker=13.7466%2C100.5393"
-              className="w-full h-full border-0"
-              style={{ filter: "saturate(0.9) contrast(0.92) brightness(1.05)" }}
+            <InteractiveMap
+              pins={mapPins}
+              center={[effectiveLocation.lat, effectiveLocation.lng]}
+              zoom={13}
+              selectedPinId={selectedPinId}
+              onPinSelect={(id) => setSelectedPinId((prev) => (prev === id ? null : id))}
+              filteredCategory={null}
             />
+            <button
+              onClick={recenterToCurrentLocation}
+              disabled={locating}
+              className="absolute right-3 top-3 z-[65] h-9 w-9 rounded-full bg-white border border-gray-200 shadow-md flex items-center justify-center disabled:opacity-70"
+              aria-label="Use current location"
+            >
+              <LocateFixed className={`w-4 h-4 text-foreground ${locating ? "animate-pulse-soft" : ""}`} />
+            </button>
           </div>
         </motion.div>
 
@@ -185,7 +284,7 @@ export default function GroupSetup() {
               ←
             </button>
             <button
-              onClick={() => navigate("/group/waiting")}
+              onClick={() => void startSession(false)}
               data-testid="button-start-session"
               className="flex-1 py-4 rounded-full bg-foreground text-white font-bold text-[15px] active:scale-[0.97] transition-transform duration-200"
               style={{ boxShadow: "0 8px 25px -5px rgba(0,0,0,0.25)" }}

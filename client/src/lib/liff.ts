@@ -1,8 +1,22 @@
 import liff from "@line/liff";
 
-const LIFF_ID = import.meta.env.VITE_LIFF_ID || "";
+const RAW_LIFF_ID = import.meta.env.VITE_LIFF_ID;
+const LIFF_ID = RAW_LIFF_ID || "";
 const AUTO_LOGIN =
   (import.meta.env.VITE_LIFF_AUTO_LOGIN || "false").toLowerCase() === "true";
+
+if (!LIFF_ID) {
+  const viteKeys = Object.keys(import.meta.env).filter((key) => key.startsWith("VITE_"));
+  console.log("[LIFF env debug] VITE_LIFF_ID is empty or missing.", {
+    mode: import.meta.env.MODE,
+    dev: import.meta.env.DEV,
+    prod: import.meta.env.PROD,
+    VITE_LIFF_ID: RAW_LIFF_ID ?? null,
+    VITE_LIFF_AUTO_LOGIN: import.meta.env.VITE_LIFF_AUTO_LOGIN ?? null,
+    availableViteKeys: viteKeys,
+    hint: "Client code only receives Vite env vars prefixed with VITE_. Restart dev server after editing .env.",
+  });
+}
 
 export interface LineProfile {
   userId: string;
@@ -17,6 +31,7 @@ type InitOptions = {
 
 let initialized = false;
 let initPromise: Promise<void> | null = null;
+const GROUP_LIFF_INVITE_BASE = "https://liff.line.me/2009257970-yD2Hc8Zt";
 
 export function isLiffAvailable(): boolean {
   return LIFF_ID.length > 0;
@@ -84,6 +99,13 @@ export function getLiffIdToken(): string | null {
   return liff.getIDToken() || null;
 }
 
+/** Returns the nonce embedded in the ID token, if present.
+ *  Required for server-side verification when LIFF runs in an external browser (PC). */
+export function getLiffNonce(): string | null {
+  if (!initialized || !liff.isLoggedIn()) return null;
+  return liff.getDecodedIDToken()?.nonce ?? null;
+}
+
 export function getLiffAccessToken(): string | null {
   if (!initialized || !liff.isLoggedIn()) return null;
   return liff.getAccessToken() || null;
@@ -122,7 +144,7 @@ export async function sendInvite(mode: string): Promise<boolean> {
 }
 
 export async function sendGroupInvite(sessionId: string): Promise<boolean> {
-  const appUrl = window.location.origin;
-  const message = `Toast Group Session!\n\nJoin our food swiping session and let's find the perfect meal together.\n\n${appUrl}/group/waiting?session=${sessionId}`;
+  const joinUrl = `${GROUP_LIFF_INVITE_BASE}?room=${encodeURIComponent(sessionId)}`;
+  const message = `Toast Group Session!\n\nJoin our food swiping session and let's find the perfect meal together.\n\n${joinUrl}`;
   return shareMessage(message);
 }

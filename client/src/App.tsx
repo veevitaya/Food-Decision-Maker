@@ -20,9 +20,18 @@ import ToastPicks from "@/pages/ToastPicks";
 import AdminDashboard from "@/pages/admin/AdminDashboard";
 import AdminRestaurants from "@/pages/admin/AdminRestaurants";
 import AdminRestaurantEditor from "@/pages/admin/AdminRestaurantEditor";
+import AdminRestaurantImport from "@/pages/admin/AdminRestaurantImport";
+import AdminMapCheck from "@/pages/admin/AdminMapCheck";
 import AdminUsers from "@/pages/admin/AdminUsers";
 import AdminPlaces from "@/pages/admin/AdminPlaces";
-import { getLiffIdToken, initLiff, isLiffAvailable, isLoggedIn, login } from "@/lib/liff";
+import AdminSessions from "@/pages/admin/AdminSessions";
+import AdminLogin from "@/pages/admin/AdminLogin";
+import AdminCampaigns from "@/pages/admin/AdminCampaigns";
+import AdminBanners from "@/pages/admin/AdminBanners";
+import AdminAnalytics from "@/pages/admin/AdminAnalytics";
+import AdminConfig from "@/pages/admin/AdminConfig";
+import AdminLayout from "@/pages/admin/AdminLayout";
+import { getLiffIdToken, getLiffNonce, initLiff, isLiffAvailable, isLoggedIn, login } from "@/lib/liff";
 
 const pageVariants = {
   initial: { opacity: 0, y: 8 },
@@ -91,26 +100,77 @@ function Router() {
         <Route path="/toast-picks">
           <AnimatedPage><ToastPicks /></AnimatedPage>
         </Route>
-        <Route path="/admin">
-          <AnimatedPage><AdminDashboard /></AnimatedPage>
-        </Route>
-        <Route path="/admin/restaurants">
-          <AnimatedPage><AdminRestaurants /></AnimatedPage>
-        </Route>
-        <Route path="/admin/restaurants/:id">
-          <AnimatedPage><AdminRestaurantEditor /></AnimatedPage>
-        </Route>
-        <Route path="/admin/users">
-          <AnimatedPage><AdminUsers /></AnimatedPage>
-        </Route>
-        <Route path="/admin/places">
-          <AnimatedPage><AdminPlaces /></AnimatedPage>
-        </Route>
         <Route>
           <AnimatedPage><NotFound /></AnimatedPage>
         </Route>
       </Switch>
     </AnimatePresence>
+  );
+}
+
+function AdminRouter() {
+  const [location] = useLocation();
+  return (
+    <Switch location={location}>
+      <Route path="/admin/login">
+        <AdminLogin />
+      </Route>
+      <Route path="/admin/dashboard">
+        <AdminLayout>
+          <AdminDashboard />
+        </AdminLayout>
+      </Route>
+      <Route path="/admin/campaigns">
+        <AdminLayout>
+          <AdminCampaigns />
+        </AdminLayout>
+      </Route>
+      <Route path="/admin/banners">
+        <AdminLayout>
+          <AdminBanners />
+        </AdminLayout>
+      </Route>
+      <Route path="/admin/analytics">
+        <AdminLayout>
+          <AdminAnalytics />
+        </AdminLayout>
+      </Route>
+      <Route path="/admin/config">
+        <AdminLayout>
+          <AdminConfig />
+        </AdminLayout>
+      </Route>
+      <Route path="/admin/restaurants/import/google">
+        <AdminRestaurantImport />
+      </Route>
+      <Route path="/admin/map-check">
+        <AdminMapCheck />
+      </Route>
+      <Route path="/admin/restaurants/:id">
+        <AdminRestaurantEditor />
+      </Route>
+      <Route path="/admin/restaurants">
+        <AdminLayout>
+          <AdminRestaurants />
+        </AdminLayout>
+      </Route>
+      <Route path="/admin/users">
+        <AdminLayout>
+          <AdminUsers />
+        </AdminLayout>
+      </Route>
+      <Route path="/admin/sessions">
+        <AdminSessions />
+      </Route>
+      <Route path="/admin/places">
+        <AdminPlaces />
+      </Route>
+      <Route path="/admin">
+        <AdminLayout>
+          <AdminDashboard />
+        </AdminLayout>
+      </Route>
+    </Switch>
   );
 }
 
@@ -122,6 +182,13 @@ function RequireLiffAuth({ children }: { children: React.ReactNode }) {
     let mounted = true;
     const run = async () => {
       if (!isLiffAvailable()) {
+        const viteKeys = Object.keys(import.meta.env).filter((key) => key.startsWith("VITE_"));
+        console.log("[Auth startup debug] LIFF unavailable at startup.", {
+          mode: import.meta.env.MODE,
+          VITE_LIFF_ID: import.meta.env.VITE_LIFF_ID ?? null,
+          availableViteKeys: viteKeys,
+          hint: "Set VITE_LIFF_ID in .env and restart the dev/build process.",
+        });
         if (!mounted) return;
         setErrorMessage("LIFF is not configured. Set VITE_LIFF_ID before running the app.");
         setState("error");
@@ -150,9 +217,11 @@ function RequireLiffAuth({ children }: { children: React.ReactNode }) {
           return;
         }
 
+        const nonce = getLiffNonce();
         const verifyRes = await fetch("/api/auth/line/verify", {
           headers: {
             Authorization: `Bearer ${idToken}`,
+            ...(nonce ? { "X-Liff-Nonce": nonce } : {}),
           },
           credentials: "include",
         });
@@ -200,13 +269,29 @@ function RequireLiffAuth({ children }: { children: React.ReactNode }) {
 }
 
 function App() {
+  const [location, navigate] = useLocation();
+  const isAdminPath = location.startsWith("/admin");
+
+  useEffect(() => {
+    if (isAdminPath) return;
+    const params = new URLSearchParams(window.location.search);
+    const room = (params.get("room") || "").trim().toUpperCase();
+    if (!room) return;
+    if (location === "/group/waiting") return;
+    navigate(`/group/waiting?session=${encodeURIComponent(room)}`);
+  }, [isAdminPath, location, navigate]);
+
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <Toaster />
-        <RequireLiffAuth>
-          <Router />
-        </RequireLiffAuth>
+        {isAdminPath ? (
+          <AdminRouter />
+        ) : (
+          <RequireLiffAuth>
+            <Router />
+          </RequireLiffAuth>
+        )}
       </TooltipProvider>
     </QueryClientProvider>
   );

@@ -1,19 +1,17 @@
-import { useRef } from "react";
+import { useMemo, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useLocation } from "wouter";
 import { useSessions, removeSession, type ActiveSession } from "@/lib/sessionStore";
-
-const MEMBER_AVATARS: Record<string, string> = {
-  You: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100&h=100&fit=crop&crop=face",
-  Nook: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100&h=100&fit=crop&crop=face",
-  Beam: "https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=100&h=100&fit=crop&crop=face",
-};
 
 function SessionCard({ session, onNavigate }: { session: ActiveSession; onNavigate: (route: string) => void }) {
   const elapsed = Math.floor((Date.now() - session.startedAt) / 60000);
   const timeLabel = elapsed < 1 ? "Just started" : `${elapsed}m ago`;
 
-  const memberNames = session.type === "group" ? ["You", "Nook", "Beam"] : ["You"];
+  const memberNames = useMemo(() => {
+    if (session.type !== "group") return ["You"];
+    const count = Math.max(1, Math.min(8, session.memberCount || 1));
+    return Array.from({ length: count }).map((_, i) => (i === 0 ? "You" : `Member ${i + 1}`));
+  }, [session.memberCount, session.type]);
 
   return (
     <motion.div
@@ -34,12 +32,13 @@ function SessionCard({ session, onNavigate }: { session: ActiveSession; onNaviga
         <div className="flex items-center gap-3 min-w-0 flex-1">
           <div className="flex -space-x-1.5 flex-shrink-0">
             {memberNames.map((name) => (
-              <img
+              <div
                 key={name}
-                src={MEMBER_AVATARS[name] || MEMBER_AVATARS.You}
-                alt={name}
-                className="w-7 h-7 rounded-full border-2 border-white object-cover"
-              />
+                title={name}
+                className="w-7 h-7 rounded-full border-2 border-white bg-gray-200 text-[10px] font-semibold text-gray-700 flex items-center justify-center"
+              >
+                {name.slice(0, 1).toUpperCase()}
+              </div>
             ))}
           </div>
           <div className="min-w-0">

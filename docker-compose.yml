@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: toast
     ports:
-      - "5433:5432"
+      - "5439:5432"
     volumes:
       - toast_db_data:/var/lib/postgresql/data
     healthcheck:

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from "react";
+import { useUserLocation } from "@/hooks/use-user-location";
 import { useLocation } from "wouter";
-import { SlidersHorizontal, X } from "lucide-react";
+import { LocateFixed, MapPin, SlidersHorizontal, X } from "lucide-react";
 import { BottomSheet } from "@/components/BottomSheet";
 import { BottomNav } from "@/components/BottomNav";
 import { SessionBar } from "@/components/SessionBar";
@@ -9,21 +10,19 @@ import { useSessions } from "@/lib/sessionStore";
 import { useTasteProfile } from "@/hooks/use-taste-profile";
 import { useRestaurants } from "@/hooks/use-restaurants";
 
-const DEFAULT_LAT = 13.7420;
-const DEFAULT_LNG = 100.54;
 
 const CATEGORY_EMOJI: Record<string, string> = {
-  thai: "??",
-  sushi: "??",
-  pizza: "??",
-  cafe: "?",
-  coffee: "?",
-  burger: "??",
-  breakfast: "??",
-  bubble: "??",
-  bar: "??",
-  dessert: "??",
-  bakery: "??",
+  thai: "TH",
+  sushi: "JP",
+  pizza: "PZ",
+  cafe: "CF",
+  coffee: "CF",
+  burger: "BG",
+  breakfast: "BF",
+  bubble: "BT",
+  bar: "BR",
+  dessert: "DS",
+  bakery: "BK",
 };
 
 function getEmoji(category: string): string {
@@ -31,7 +30,7 @@ function getEmoji(category: string): string {
   for (const k of Object.keys(CATEGORY_EMOJI)) {
     if (key.includes(k)) return CATEGORY_EMOJI[k];
   }
-  return "???";
+  return "FD";
 }
 
 export default function Home() {
@@ -47,29 +46,40 @@ export default function Home() {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedPinId, setSelectedPinId] = useState<number | null>(null);
   const [showFilters, setShowFilters] = useState(false);
-  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number }>({ lat: DEFAULT_LAT, lng: DEFAULT_LNG });
+  const [locating, setLocating] = useState(false);
+  const [locationOverride, setLocationOverride] = useState<{ lat: number; lng: number } | null>(null);
+  const [locationError, setLocationError] = useState("");
+  const userLocation = useUserLocation();
+  const effectiveLocation = locationOverride ?? userLocation;
 
   const inputRef = useRef<HTMLInputElement>(null);
   const filterRef = useRef<HTMLDivElement>(null);
 
   const { data: restaurants = [] } = useRestaurants({
-    lat: userLocation.lat,
-    lng: userLocation.lng,
+    lat: effectiveLocation.lat,
+    lng: effectiveLocation.lng,
     radius: 5000,
+    limit: 20,
+    localOnly: true,
     sourcePreference: "osm-first",
   });
 
   useEffect(() => {
-    if ("geolocation" in navigator) {
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          setUserLocation({ lat: position.coords.latitude, lng: position.coords.longitude });
-        },
-        () => {},
-        { enableHighAccuracy: false, timeout: 5000, maximumAge: 300000 },
-      );
-    }
-  }, []);
+    const total = restaurants.length;
+    const withImageUrl = restaurants.filter((r) => Boolean(r.imageUrl && r.imageUrl.trim())).length;
+    const withPhotoFallback = restaurants.filter((r) => Boolean(r.photos?.[0])).length;
+    const withoutAnyImage = restaurants.filter((r) => !(r.imageUrl && r.imageUrl.trim()) && !r.photos?.[0]).length;
+    console.log("[liff-map-debug] restaurants image summary", {
+      total,
+      withImageUrl,
+      withPhotoFallback,
+      withoutAnyImage,
+      sampleWithoutImage: restaurants
+        .filter((r) => !(r.imageUrl && r.imageUrl.trim()) && !r.photos?.[0])
+        .slice(0, 5)
+        .map((r) => ({ id: r.id, name: r.name })),
+    });
+  }, [restaurants]);
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -99,7 +109,10 @@ export default function Home() {
     return uniq.slice(0, 10).map((label) => ({ label, emoji: getEmoji(label) }));
   }, [restaurants]);
 
-  const mapCenter = useMemo<[number, number]>(() => [userLocation.lat, userLocation.lng], [userLocation]);
+  const mapCenter = useMemo<[number, number]>(
+    () => [effectiveLocation.lat, effectiveLocation.lng],
+    [effectiveLocation],
+  );
 
   const mapPins = useMemo(
     () =>
@@ -110,14 +123,46 @@ export default function Home() {
           name: r.name,
           emoji: getEmoji(r.category),
           category: r.category,
-          price: "?".repeat(Math.max(1, r.priceLevel || 1)),
+          price: "$".repeat(Math.max(1, r.priceLevel || 1)),
+          imageUrl: r.imageUrl || r.photos?.[0] || null,
           lat: Number(r.lat),
           lng: Number(r.lng),
         })),
     [restaurants],
   );
 
+  useEffect(() => {
+    const withImage = mapPins.filter((p) => Boolean(p.imageUrl && p.imageUrl.trim())).length;
+    const withoutImage = mapPins.length - withImage;
+    console.log("[liff-map-debug] mapped pins", {
+      totalPins: mapPins.length,
+      withImage,
+      withoutImage,
+      sampleImagePins: mapPins
+        .filter((p) => Boolean(p.imageUrl && p.imageUrl.trim()))
+        .slice(0, 3)
+        .map((p) => ({ id: p.id, name: p.name, imageUrl: p.imageUrl })),
+    });
+  }, [mapPins]);
+
   const selected = selectedPinId ? restaurants.find((r) => r.id === selectedPinId) : null;
+
+  function recenterToCurrentLocation() {
+    if (!("geolocation" in navigator)) return;
+    setLocating(true);
+    setLocationError("");
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setLocationOverride({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        setLocating(false);
+      },
+      (err) => {
+        setLocationError(err.message || "Failed to get location");
+        setLocating(false);
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 },
+    );
+  }
 
   return (
     <div className="relative w-full h-[100dvh] overflow-hidden bg-[#F0EDE8]" data-testid="home-page">
@@ -131,6 +176,24 @@ export default function Home() {
           filteredCategory={activeCategory}
         />
       </div>
+      <button
+        onClick={recenterToCurrentLocation}
+        disabled={locating}
+        className="absolute right-4 top-[88px] z-[65] h-11 w-11 rounded-full bg-white border border-gray-200 shadow-md flex items-center justify-center disabled:opacity-70"
+        aria-label="Use current location"
+        data-testid="button-current-location"
+      >
+        <LocateFixed className={`w-5 h-5 text-foreground ${locating ? "animate-pulse-soft" : ""}`} />
+      </button>
+      <div className="absolute left-4 right-20 top-[92px] z-[64]">
+        <div className="inline-flex max-w-full items-center gap-1.5 rounded-full bg-white/95 backdrop-blur border border-gray-200 px-3 py-1.5 text-[11px] text-foreground shadow-sm">
+          <MapPin className="w-3.5 h-3.5 shrink-0" />
+          <span className="truncate">
+            {locationOverride ? "Current" : "Default"}: {effectiveLocation.lat.toFixed(4)}, {effectiveLocation.lng.toFixed(4)}
+          </span>
+        </div>
+        {locationError ? <p className="text-[11px] text-red-600 mt-1">{locationError}</p> : null}
+      </div>
 
       {selected && (
         <div className="absolute left-4 right-4 bottom-[24%] z-[45] bg-white rounded-2xl p-3 shadow-lg" data-testid={`card-pin-${selected.id}`}>
@@ -138,7 +201,7 @@ export default function Home() {
             <div className="min-w-0">
               <p className="font-bold text-sm truncate">{selected.name}</p>
               <p className="text-xs text-muted-foreground truncate">{selected.category}</p>
-              <p className="text-xs text-muted-foreground truncate">?? {selected.address}</p>
+              <p className="text-xs text-muted-foreground truncate">{selected.address}</p>
             </div>
             <button className="text-xs font-semibold" onClick={() => navigate(`/restaurant/${selected.id}`)}>Open</button>
           </div>
@@ -214,6 +277,7 @@ export default function Home() {
         }}
         suggestionTitle={getSuggestionTitle}
         suggestionSubtitle="Places you might love"
+        userLocation={effectiveLocation}
       />
 
       <SessionBar />

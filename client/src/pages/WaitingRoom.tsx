@@ -2,35 +2,97 @@ import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useLocation } from "wouter";
 import { BottomNav } from "@/components/BottomNav";
+import { getProfile, initLiff, isLiffAvailable } from "@/lib/liff";
 import mascotImg from "@assets/toast_mascot_nobg.png";
 
-const MOCK_MEMBERS = [
-  { name: "You", avatar: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100&h=100&fit=crop&crop=face", joined: true },
-  { name: "Nook", avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100&h=100&fit=crop&crop=face", joined: false },
-  { name: "Beam", avatar: "https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=100&h=100&fit=crop&crop=face", joined: false },
-];
+type Member = {
+  id: number;
+  name: string;
+  avatarUrl?: string | null;
+  joined: boolean;
+};
 
 export default function WaitingRoom() {
   const [, navigate] = useLocation();
-  const [members, setMembers] = useState(MOCK_MEMBERS);
+  const [members, setMembers] = useState<Member[]>([]);
   const [nudgedMembers, setNudgedMembers] = useState<Set<string>>(new Set());
+  const [sessionCode, setSessionCode] = useState<string>("");
 
   useEffect(() => {
-    const t1 = setTimeout(() => {
-      setMembers((prev) => prev.map((m) => m.name === "Nook" ? { ...m, joined: true } : m));
-    }, 3000);
-    const t2 = setTimeout(() => {
-      setMembers((prev) => prev.map((m) => m.name === "Beam" ? { ...m, joined: true } : m));
-    }, 6000);
-    return () => { clearTimeout(t1); clearTimeout(t2); };
+    const params = new URLSearchParams(window.location.search);
+    const code = (params.get("session") || params.get("room") || "").trim().toUpperCase();
+    if (!code) return;
+    setSessionCode(code);
+
+    const join = async () => {
+      let memberName = "";
+      let avatarUrl = "";
+
+      if (isLiffAvailable()) {
+        await initLiff({ autoLogin: false });
+        const profile = await getProfile();
+        console.log("[waiting-room-debug] liff profile", profile);
+        if (profile?.displayName) memberName = profile.displayName;
+        if (profile?.pictureUrl) avatarUrl = profile.pictureUrl;
+      }
+
+      if (!memberName) {
+        const memberKey = `group_member_name_${code}`;
+        memberName = localStorage.getItem(memberKey) || "You";
+        localStorage.setItem(memberKey, memberName);
+      }
+
+      const joinPayload = {
+        name: memberName,
+        avatarUrl: avatarUrl || undefined,
+      };
+      console.log("[waiting-room-debug] join payload", joinPayload);
+      const joinRes = await fetch(`/api/group/sessions/${encodeURIComponent(code)}/join`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(joinPayload),
+      });
+      const joinJson = await joinRes.json().catch(() => null);
+      console.log("[waiting-room-debug] join response", { status: joinRes.status, body: joinJson });
+    };
+
+    const load = async () => {
+      const res = await fetch(`/api/group/sessions/${encodeURIComponent(code)}`, { credentials: "include" });
+      if (!res.ok) return;
+      const payload = await res.json();
+      console.log("[waiting-room-debug] session payload members", payload?.members);
+      setMembers((payload.members || []).map((m: any) => ({
+        id: m.id,
+        name: m.name,
+        avatarUrl: m.avatarUrl,
+        joined: !!m.joined,
+      })));
+    };
+
+    void join().then(load);
+    const timer = setInterval(load, 2500);
+    return () => clearInterval(timer);
   }, []);
 
-  const allJoined = members.every((m) => m.joined);
+  useEffect(() => {
+    console.log(
+      "[waiting-room-debug] render members avatar state",
+      members.map((m) => ({
+        id: m.id,
+        name: m.name,
+        avatarUrl: m.avatarUrl ?? null,
+        renderMode: m.avatarUrl ? "image" : "fallback-initial",
+      })),
+    );
+  }, [members]);
+
+  const allJoined = members.length > 0 && members.every((m) => m.joined);
   const joinedCount = members.filter((m) => m.joined).length;
 
   const handleNudgeMember = (memberName: string) => {
     setNudgedMembers((prev) => new Set(prev).add(memberName));
-    const text = `Hey ${memberName}! We're waiting for you on Toast 🍞 Join our food session!`;
+    const text = `Hey ${memberName}! We're waiting for you on Toast. Join our food session!`;
     window.open(`https://line.me/R/share?text=${encodeURIComponent(text)}`, "_blank");
   };
 
@@ -40,8 +102,6 @@ export default function WaitingRoom() {
         <div className="absolute top-[15%] left-[10%] w-32 h-32 bg-amber-50/40 rounded-full blur-3xl" />
         <div className="absolute bottom-[20%] right-[15%] w-40 h-40 bg-amber-50/40 rounded-full blur-3xl" />
       </div>
-
-      
 
       <motion.div
         initial={{ scale: 0, opacity: 0 }}
@@ -65,6 +125,7 @@ export default function WaitingRoom() {
       >
         Waiting for friends...
       </motion.h1>
+      <p className="text-xs text-muted-foreground mb-2">Session: {sessionCode || "-"}</p>
       <motion.div
         initial={{ y: 16, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
@@ -74,7 +135,7 @@ export default function WaitingRoom() {
         <div className="flex gap-1">
           {members.map((m) => (
             <div
-              key={m.name}
+              key={m.id}
               className={`w-2 h-2 rounded-full transition-all duration-500 ${m.joined ? "bg-[hsl(160,60%,45%)]" : "bg-gray-200"}`}
             />
           ))}
@@ -85,7 +146,7 @@ export default function WaitingRoom() {
       <div className="flex gap-8 mb-12">
         {members.map((m, idx) => (
           <motion.div
-            key={m.name}
+            key={m.id}
             initial={{ scale: 0, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             transition={{ delay: 0.3 + idx * 0.08, type: "spring", damping: 18, stiffness: 200 }}
@@ -101,27 +162,12 @@ export default function WaitingRoom() {
                 }`}
                 style={m.joined ? { boxShadow: "0 6px 20px -4px rgba(0,200,100,0.15)" } : {}}
               >
-                {m.joined ? (
-                  <img src={m.avatar} alt={m.name} className="w-full h-full object-cover" />
+                {m.avatarUrl ? (
+                  <img src={m.avatarUrl} alt={m.name} className="w-full h-full object-cover" />
                 ) : (
-                  <div className="w-full h-full bg-gray-100 flex items-center justify-center relative">
-                    <img src={m.avatar} alt={m.name} className="w-full h-full object-cover opacity-30 grayscale" />
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <div className="w-5 h-5 rounded-full border-2 border-gray-300 border-t-transparent animate-spin" style={{ animationDuration: "1s" }} />
-                    </div>
-                  </div>
+                  <div className="w-full h-full bg-gray-100 flex items-center justify-center">{m.name.slice(0, 1)}</div>
                 )}
               </div>
-              {m.joined && (
-                <motion.div
-                  initial={{ scale: 0 }}
-                  animate={{ scale: 1 }}
-                  transition={{ type: "spring", damping: 12, stiffness: 300, delay: 0.15 }}
-                  className="absolute -bottom-0.5 -right-0.5 w-6 h-6 rounded-full bg-[hsl(160,60%,45%)] flex items-center justify-center border-2 border-white"
-                >
-                  <span className="text-white text-[10px] font-bold">✓</span>
-                </motion.div>
-              )}
             </div>
             <span className="text-sm font-bold">{m.name}</span>
             <span className={`text-[11px] font-semibold transition-colors duration-500 ${m.joined ? "text-[hsl(160,60%,45%)]" : "text-muted-foreground"}`}>
@@ -141,7 +187,7 @@ export default function WaitingRoom() {
                   style={{ boxShadow: "0 2px 10px rgba(0,0,0,0.06)" }}
                 >
                   <span className={`text-sm inline-block ${!nudgedMembers.has(m.name) ? "animate-icon-wiggle" : ""}`}>
-                    👋
+                    nudge
                   </span>
                   {nudgedMembers.has(m.name) ? "Sent!" : "Nudge"}
                 </motion.button>
@@ -152,7 +198,7 @@ export default function WaitingRoom() {
       </div>
 
       <motion.button
-        onClick={() => allJoined && navigate("/group/swipe")}
+        onClick={() => allJoined && navigate(`/group/swipe?session=${encodeURIComponent(sessionCode)}`)}
         data-testid="button-start-swiping"
         initial={{ y: 20, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
@@ -165,7 +211,7 @@ export default function WaitingRoom() {
         style={allJoined ? { boxShadow: "var(--shadow-glow-primary)" } : {}}
         disabled={!allJoined}
       >
-        {allJoined ? "Start Swiping! 🍽️" : `Waiting for ${members.length - joinedCount} more...`}
+        {allJoined ? "Start Swiping" : members.length === 0 ? "Loading session..." : `Waiting for ${members.length - joinedCount} more...`}
       </motion.button>
 
       <BottomNav />

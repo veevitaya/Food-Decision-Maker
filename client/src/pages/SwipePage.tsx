@@ -3,6 +3,7 @@ import { motion, useMotionValue, useTransform, type PanInfo } from "framer-motio
 import { useLocation } from "wouter";
 import { useTasteProfile } from "@/hooks/use-taste-profile";
 import { useRestaurants } from "@/hooks/use-restaurants";
+import { useUserLocation } from "@/hooks/use-user-location";
 import { sendInvite, isLiffAvailable, initLiff } from "@/lib/liff";
 import { BottomNav } from "@/components/BottomNav";
 import type { RestaurantResponse } from "@shared/routes";
@@ -53,9 +54,9 @@ function SwipeCard({
           <h2 className="text-white text-[28px] font-semibold mb-1 drop-shadow-lg">{item.name}</h2>
           <div className="flex items-center gap-2 text-white/90 text-sm">
             <span>{item.category}</span>
-            <span>·</span>
+            <span>ï¿½</span>
             <span>{"?".repeat(Math.max(1, item.priceLevel || 1))}</span>
-            <span>·</span>
+            <span>ï¿½</span>
             <span>? {item.rating}</span>
           </div>
         </div>
@@ -76,11 +77,20 @@ export default function SwipePage() {
   const [, navigate] = useLocation();
   const params = new URLSearchParams(window.location.search);
   const mode = params.get("mode") || "all";
+  const userLocation = useUserLocation();
   const [currentIndex, setCurrentIndex] = useState(0);
   const [likedCount, setLikedCount] = useState(0);
   const { recordSwipe } = useTasteProfile();
 
-  const { data: restaurants = [] } = useRestaurants({ mode });
+  const { data: restaurants = [], isError } = useRestaurants({
+    mode,
+    lat: userLocation.lat,
+    lng: userLocation.lng,
+    radius: 5000,
+    limit: 30,
+    localOnly: true,
+    sourcePreference: "osm-first",
+  });
   const items = useMemo(() => restaurants.slice(0, 30), [restaurants]);
 
   const modeLabels: Record<string, string> = {
@@ -151,7 +161,13 @@ export default function SwipePage() {
       </div>
 
       <div className="flex-1 relative px-5 pb-4">
-        {items.length === 0 ? (
+        {isError ? (
+          <div className="flex flex-col items-center justify-center h-full text-center">
+            <h2 className="text-xl font-semibold mb-2">Could not load items</h2>
+            <p className="text-muted-foreground mb-6 text-sm">Please try again in a moment.</p>
+            <button onClick={() => navigate("/")} className="px-6 py-3 rounded-full bg-foreground text-white font-bold text-sm">Home</button>
+          </div>
+        ) : items.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center">
             <h2 className="text-xl font-semibold mb-2">No items yet</h2>
             <p className="text-muted-foreground mb-6 text-sm">Try another mode or location.</p>

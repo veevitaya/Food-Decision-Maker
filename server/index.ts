@@ -1,16 +1,42 @@
 import express, { type Request, Response, NextFunction } from "express";
+import session from "express-session";
+import MemoryStore from "memorystore";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 
 const app = express();
 const httpServer = createServer(app);
+app.set("trust proxy", 1);
 
 declare module "http" {
   interface IncomingMessage {
     rawBody: unknown;
   }
 }
+
+declare module "express-session" {
+  interface SessionData {
+    isAdmin?: boolean;
+  }
+}
+
+const MemoryStoreSession = MemoryStore(session);
+app.use(
+  session({
+    secret: process.env.SESSION_SECRET || "dev-secret-change-in-production",
+    resave: false,
+    saveUninitialized: false,
+    proxy: true,
+    cookie: {
+      httpOnly: true,
+      secure: "auto",
+      sameSite: "lax",
+      maxAge: 24 * 60 * 60 * 1000,
+    },
+    store: new MemoryStoreSession({ checkPeriod: 86_400_000 }),
+  }),
+);
 
 app.use(
   express.json({
@@ -49,7 +75,17 @@ app.use((req, res, next) => {
     if (path.startsWith("/api")) {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
       if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
+        if (Array.isArray(capturedJsonResponse)) {
+          logLine += ` :: response=array(${capturedJsonResponse.length})`;
+        } else if (
+          typeof capturedJsonResponse === "object" &&
+          "items" in capturedJsonResponse &&
+          Array.isArray((capturedJsonResponse as any).items)
+        ) {
+          logLine += ` :: response.items=${(capturedJsonResponse as any).items.length}`;
+        } else {
+          logLine += " :: response=object";
+        }
       }
 
       log(logLine);
@@ -75,9 +111,6 @@ app.use((req, res, next) => {
     return res.status(status).json({ message });
   });
 
-  // importantly only setup vite in development and after
-  // setting up all the other routes so the catch-all route
-  // doesn't interfere with the other routes
   if (process.env.NODE_ENV === "production") {
     serveStatic(app);
   } else {
@@ -85,10 +118,6 @@ app.use((req, res, next) => {
     await setupVite(httpServer, app);
   }
 
-  // ALWAYS serve the app on the port specified in the environment variable PORT
-  // Other ports are firewalled. Default to 5000 if not specified.
-  // this serves both the API and the client.
-  // It is the only port that is not firewalled.
   const port = parseInt(process.env.PORT || "5000", 10);
   httpServer.listen(
     {

@@ -8,6 +8,8 @@ type RestaurantsQueryOptions = {
   lng?: number;
   query?: string;
   radius?: number;
+  limit?: number;
+  localOnly?: boolean;
   forceRefresh?: boolean;
   sourcePreference?: "osm-first" | "google-first" | "hybrid";
 };
@@ -20,6 +22,8 @@ export function useRestaurants(options: RestaurantsQueryOptions = {}) {
     lng,
     query,
     radius,
+    limit,
+    localOnly,
     forceRefresh,
     sourcePreference,
   } = options;
@@ -27,7 +31,7 @@ export function useRestaurants(options: RestaurantsQueryOptions = {}) {
   return useQuery({
     queryKey: [
       api.restaurants.list.path,
-      { mode, lat, lng, query, radius, forceRefresh, sourcePreference },
+      { mode, lat, lng, query, radius, limit, localOnly, forceRefresh, sourcePreference },
     ],
     queryFn: async () => {
       const params = new URLSearchParams();
@@ -36,6 +40,8 @@ export function useRestaurants(options: RestaurantsQueryOptions = {}) {
       if (typeof lng === "number") params.append("lng", String(lng));
       if (query) params.append("query", query);
       if (typeof radius === "number") params.append("radius", String(radius));
+      if (typeof limit === "number") params.append("limit", String(limit));
+      if (typeof localOnly === "boolean") params.append("localOnly", String(localOnly));
       if (typeof forceRefresh === "boolean") {
         params.append("forceRefresh", String(forceRefresh));
       }

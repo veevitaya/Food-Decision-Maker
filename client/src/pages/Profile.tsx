@@ -87,6 +87,48 @@ interface OwnerProfile {
   campaigns: Campaign[];
 }
 
+type InsightOverviewStat = {
+  value: number;
+  trend: number;
+  label: string;
+};
+
+type InsightOverview = {
+  impressions: InsightOverviewStat;
+  swipes: InsightOverviewStat;
+  saves: InsightOverviewStat;
+  grabTaps: InsightOverviewStat;
+};
+
+type InsightHourlyPoint = { hour: number; value: number };
+type InsightWeeklyPoint = { day: string; views: number; orders: number };
+type InsightMenuItem = { name: string; swipes: number; likes: number; conversionRate: number };
+type InsightPeakHour = { time: string; label: string; activity: number };
+type InsightUserAction = { action: string; count: number };
+
+type OwnerInsightsResponse = {
+  overview: InsightOverview;
+  hourlyData: InsightHourlyPoint[];
+  weeklyData: InsightWeeklyPoint[];
+  topMenuItems: InsightMenuItem[];
+  peakHours: InsightPeakHour[];
+  userActions: InsightUserAction[];
+  conversionRate: string;
+  avgTimeOnPage: string;
+  returnVisitors: string;
+  currentPeakHour: string;
+  bestDay: string;
+};
+
+type OwnerInsightActionWithUi = InsightUserAction & {
+  icon: typeof TrendingUp;
+  color: string;
+};
+
+type OwnerInsightsViewModel = Omit<OwnerInsightsResponse, "userActions"> & {
+  userActions: OwnerInsightActionWithUi[];
+};
+
 function getStoredProfile(): LocalProfile {
   try {
     const stored = localStorage.getItem(PROFILE_STORAGE_KEY);
@@ -676,79 +718,33 @@ function ProfileToggle({ isOwnerMode, onToggle }: { isOwnerMode: boolean; onTogg
   );
 }
 
-function generateMockInsights() {
+function getDefaultInsights(): OwnerInsightsViewModel {
   const now = new Date();
   const hour = now.getHours();
 
-  const baseViews = 1247;
-  const baseSwipes = 834;
-  const baseTaps = 312;
-  const baseOrders = 89;
-  const baseMaps = 156;
-  const baseDetailViews = 423;
-
-  const viewsTrend = 12.3;
-  const swipesTrend = 8.7;
-  const tapsTrend = -2.1;
-  const ordersTrend = 15.4;
-
-  const hourlyData = Array.from({ length: 24 }, (_, i) => {
-    let base = 10;
-    if (i >= 7 && i <= 9) base = 35;
-    if (i >= 11 && i <= 13) base = 80;
-    if (i >= 14 && i <= 16) base = 25;
-    if (i >= 17 && i <= 20) base = 65;
-    if (i >= 21 && i <= 23) base = 40;
-    return { hour: i, value: base + Math.floor(Math.random() * 15) };
-  });
-
-  const dayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  const weeklyData = dayLabels.map((day, i) => ({
-    day,
-    views: [45, 78, 82, 95, 88, 120, 110][i] + Math.floor(Math.random() * 20),
-    orders: [8, 12, 14, 16, 13, 22, 19][i] + Math.floor(Math.random() * 5),
-  }));
-
-  const topMenuItems = [
-    { name: "Pad Thai", swipes: 234, likes: 189, conversionRate: 80.8 },
-    { name: "Tom Yum Soup", swipes: 198, likes: 156, conversionRate: 78.8 },
-    { name: "Green Curry", swipes: 176, likes: 132, conversionRate: 75.0 },
-    { name: "Mango Sticky Rice", swipes: 145, likes: 128, conversionRate: 88.3 },
-    { name: "Som Tum", swipes: 112, likes: 78, conversionRate: 69.6 },
-  ];
-
-  const peakHours = [
-    { time: "12:00 - 13:00", label: "Lunch peak", activity: 95 },
-    { time: "18:00 - 19:00", label: "Dinner rush", activity: 88 },
-    { time: "20:00 - 21:00", label: "Late dinner", activity: 72 },
-    { time: "11:00 - 12:00", label: "Pre-lunch", activity: 65 },
-  ];
-
-  const userActions = [
-    { action: "Swiped right (liked)", count: baseSwipes, icon: TrendingUp, color: "text-green-500" },
-    { action: "Viewed details", count: baseDetailViews, icon: Eye, color: "text-blue-500" },
-    { action: "Opened map directions", count: baseMaps, icon: MapPin, color: "text-orange-500" },
-    { action: "Tapped 'Order on Grab'", count: baseOrders, icon: ExternalLink, color: "text-emerald-500" },
-    { action: "Saved to favorites", count: baseTaps, icon: Star, color: "text-yellow-500" },
-  ];
-
   return {
     overview: {
-      impressions: { value: baseViews, trend: viewsTrend, label: "Impressions" },
-      swipes: { value: baseSwipes, trend: swipesTrend, label: "Swipe Views" },
-      saves: { value: baseTaps, trend: tapsTrend, label: "Saves" },
-      grabTaps: { value: baseOrders, trend: ordersTrend, label: "Grab Taps" },
+      impressions: { value: 0, trend: 0, label: "Impressions" },
+      swipes: { value: 0, trend: 0, label: "Swipe Views" },
+      saves: { value: 0, trend: 0, label: "Saves" },
+      grabTaps: { value: 0, trend: 0, label: "Grab Taps" },
     },
-    hourlyData,
-    weeklyData,
-    topMenuItems,
-    peakHours,
-    userActions,
-    conversionRate: ((baseOrders / baseViews) * 100).toFixed(1),
-    avgTimeOnPage: "1m 42s",
-    returnVisitors: "34%",
+    hourlyData: Array.from({ length: 24 }, (_, i) => ({ hour: i, value: 0 })),
+    weeklyData: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => ({ day, views: 0, orders: 0 })),
+    topMenuItems: [],
+    peakHours: [],
+    userActions: [
+      { action: "Swiped right (liked)", count: 0, icon: TrendingUp, color: "text-green-500" },
+      { action: "Viewed details", count: 0, icon: Eye, color: "text-blue-500" },
+      { action: "Opened map directions", count: 0, icon: MapPin, color: "text-orange-500" },
+      { action: "Tapped 'Order on Grab'", count: 0, icon: ExternalLink, color: "text-emerald-500" },
+      { action: "Saved to favorites", count: 0, icon: Star, color: "text-yellow-500" },
+    ],
+    conversionRate: "0.0",
+    avgTimeOnPage: "0m 00s",
+    returnVisitors: "0%",
     currentPeakHour: hour >= 11 && hour <= 13 ? "Lunch" : hour >= 17 && hour <= 21 ? "Dinner" : hour >= 7 && hour <= 10 ? "Breakfast" : "Off-peak",
-    bestDay: "Friday",
+    bestDay: "N/A",
   };
 }
 
@@ -785,7 +781,34 @@ function OwnerDashboard() {
     maxRedemptions: "",
   });
 
-  const insights = useMemo(() => generateMockInsights(), []);
+  const { data: insightsData } = useQuery({
+    queryKey: ["owner-insights"],
+    queryFn: async (): Promise<OwnerInsightsResponse> => {
+      const res = await fetch("/api/owner/insights", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load owner insights");
+      return (await res.json()) as OwnerInsightsResponse;
+    },
+  });
+
+  const insights = useMemo(() => {
+    const base = getDefaultInsights();
+    if (!insightsData) return base;
+    const actionsByName: Record<string, number> = {};
+    for (const action of insightsData.userActions || []) {
+      actionsByName[action.action] = Number(action.count || 0);
+    }
+    return {
+      ...base,
+      ...insightsData,
+      userActions: [
+        { action: "Swiped right (liked)", count: actionsByName["Swiped right (liked)"] ?? 0, icon: TrendingUp, color: "text-green-500" },
+        { action: "Viewed details", count: actionsByName["Viewed details"] ?? 0, icon: Eye, color: "text-blue-500" },
+        { action: "Opened map directions", count: actionsByName["Opened map directions"] ?? 0, icon: MapPin, color: "text-orange-500" },
+        { action: "Tapped 'Order on Grab'", count: actionsByName["Tapped 'Order on Grab'"] ?? 0, icon: ExternalLink, color: "text-emerald-500" },
+        { action: "Saved to favorites", count: actionsByName["Saved to favorites"] ?? 0, icon: Star, color: "text-yellow-500" },
+      ],
+    };
+  }, [insightsData]);
 
   const updateOwner = (updates: Partial<OwnerProfile>) => {
     const updated = { ...ownerProfile, ...updates };
