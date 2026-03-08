@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C /c/Users/garin/OneDrive/Desktop/Projects/Food-Decision-Maker status --short)"
+    ]
+  }
+}

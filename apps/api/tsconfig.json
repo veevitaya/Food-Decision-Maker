@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "include": ["**/*", "../../packages/shared/**/*", "../../packages/algorithms/src/**/*"],
+  "exclude": ["node_modules", "dist"],
+  "compilerOptions": {
+    "baseUrl": ".",
+    "types": ["node"],
+    "paths": {
+      "@shared/*": ["../../packages/shared/*"],
+      "@algorithms": ["../../packages/algorithms/src/index.ts"],
+      "@algorithms/*": ["../../packages/algorithms/src/*"]
+    }
+  }
+}

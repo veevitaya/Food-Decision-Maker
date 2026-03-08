@@ -1,0 +1,10 @@
+{
+  "name": "@toast/shared",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "exports": {
+    "./schema": "./schema.ts",
+    "./routes": "./routes.ts"
+  }
+}

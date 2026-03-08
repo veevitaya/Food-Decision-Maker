@@ -1,0 +1,13 @@
+{
+  "name": "@toast/api",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx --env-file=../../.env index.ts",
+    "build": "tsx --env-file=../../.env ../../script/build.ts",
+    "start": "node --env-file=../../.env dist/index.cjs",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  }
+}

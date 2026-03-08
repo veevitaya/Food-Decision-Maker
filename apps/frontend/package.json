@@ -1,0 +1,11 @@
+{
+  "name": "@toast/frontend",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 3000",
+    "build": "vite build",
+    "check": "tsc -p tsconfig.json --noEmit"
+  }
+}

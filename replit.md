@@ -2,6 +2,15 @@
 
 A Tinder-style food discovery app that helps users decide what to eat, solo or with friends.
 
+## Monorepo Run Commands
+- Install: `pnpm install`
+- Start all apps: `pnpm dev`
+- Start frontend only: `pnpm dev:frontend` (`http://localhost:3000`)
+- Start admin only: `pnpm dev:admin` (`http://localhost:3001`)
+- Start API only: `pnpm dev:api` (`http://localhost:3002`)
+- Apply DB schema (Drizzle): `pnpm db:push`
+- Manual SQL migration file for behavior/privacy tables: `migrations/0001_behavior_and_privacy.sql`
+
 ## Architecture
 - **Frontend**: React + Vite + TailwindCSS + Framer Motion
 - **Backend**: Express.js + PostgreSQL (Drizzle ORM)
