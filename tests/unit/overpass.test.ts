@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { queryOverpass } from "../../server/services/places/providers/overpass";
+import { queryOverpass } from "../../apps/api/services/places/providers/overpass";
 
 const VALID_RESPONSE = {
   elements: [

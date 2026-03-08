@@ -13,6 +13,7 @@ import {
   userFeatureSnapshots,
   itemFeatureSnapshots,
   consentLogs,
+  analyticsDailyRollups,
   type Restaurant,
   type InsertRestaurant,
   type UserPreference,
@@ -38,8 +39,11 @@ import {
   type InsertItemFeatureSnapshot,
   type ConsentLog,
   type InsertConsentLog,
+  type AnalyticsDailyRollup,
+  placesTiles,
+  type PlacesTile,
 } from "@shared/schema";
-import { eq, desc, ilike, or, and, lte, gte, SQL } from "drizzle-orm";
+import { eq, desc, ilike, or, and, lte, gte, lt, sql, SQL } from "drizzle-orm";
 import type { NormalizedPlace } from "./services/places/types";
 
 type GroupSessionSettings = {
@@ -78,6 +82,9 @@ export interface IStorage {
   createPlacesRequestLog(data: InsertPlacesRequestLog): Promise<PlacesRequestLog>;
   listPlacesRequestLogs(limit?: number): Promise<PlacesRequestLog[]>;
   findOrCreateFromPlace(place: NormalizedPlace): Promise<number>;
+  getPlacesTile(tileKey: string): Promise<PlacesTile | undefined>;
+  upsertPlacesTile(tileKey: string, resultCount: number, source: string): Promise<void>;
+  findRestaurantsNear(lat: number, lng: number, radiusMeters: number): Promise<Restaurant[]>;
   listGroupSessions(limit?: number): Promise<GroupSession[]>;
   deleteGroupSession(id: number): Promise<boolean>;
   listCampaigns(): Promise<Campaign[]>;
@@ -93,6 +100,7 @@ export interface IStorage {
   createEventLog(data: InsertEventLog): Promise<EventLog | null>;
   listEventLogsByUser(userId: string): Promise<EventLog[]>;
   listEventLogs(limit?: number, since?: Date): Promise<EventLog[]>;
+  listActiveUsersInRange(start: Date, end: Date): Promise<Set<string>>;
   listUserFeatureSnapshots(limit?: number): Promise<UserFeatureSnapshot[]>;
   listItemFeatureSnapshots(limit?: number): Promise<ItemFeatureSnapshot[]>;
   upsertUserFeatureSnapshot(userId: string, data: Partial<InsertUserFeatureSnapshot>): Promise<UserFeatureSnapshot>;
@@ -101,7 +109,10 @@ export interface IStorage {
   createConsentLog(data: InsertConsentLog): Promise<ConsentLog>;
   getLatestConsent(userId: string, consentType?: string): Promise<ConsentLog | undefined>;
   deletePrivacyData(userId: string): Promise<number>;
+  listUserPreferences(userId: string): Promise<UserPreference[]>;
   runDataRetention(rawEventDays?: number, aggregateDays?: number): Promise<{ rawEventsDeleted: number; snapshotsDeleted: number }>;
+  upsertDailyRollup(date: string, data: Omit<AnalyticsDailyRollup, "date" | "updatedAt">): Promise<AnalyticsDailyRollup>;
+  listDailyRollups(days: number): Promise<AnalyticsDailyRollup[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -278,6 +289,40 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(placesRequestLogs).orderBy(desc(placesRequestLogs.ts)).limit(limit);
   }
 
+  async getPlacesTile(tileKey: string): Promise<PlacesTile | undefined> {
+    const [row] = await db.select().from(placesTiles).where(eq(placesTiles.tileKey, tileKey)).limit(1);
+    return row;
+  }
+
+  async upsertPlacesTile(tileKey: string, resultCount: number, source: string): Promise<void> {
+    await db
+      .insert(placesTiles)
+      .values({ tileKey, resultCount, source, lastFetchedAt: new Date() })
+      .onConflictDoUpdate({
+        target: placesTiles.tileKey,
+        set: { resultCount, source, lastFetchedAt: new Date() },
+      });
+  }
+
+  /**
+   * Bounding-box query on the restaurants table.
+   * lat/lng are stored as TEXT so we cast to numeric in SQL.
+   * delta = radiusMeters / 111_320 converts meters to degrees (approx, sufficient for Bangkok).
+   */
+  async findRestaurantsNear(lat: number, lng: number, radiusMeters: number): Promise<Restaurant[]> {
+    const delta = radiusMeters / 111_320;
+    return db
+      .select()
+      .from(restaurants)
+      .where(
+        and(
+          sql`CAST(${restaurants.lat} AS numeric) BETWEEN ${lat - delta} AND ${lat + delta}`,
+          sql`CAST(${restaurants.lng} AS numeric) BETWEEN ${lng - delta} AND ${lng + delta}`,
+        ),
+      )
+      .limit(200);
+  }
+
   async findOrCreateFromPlace(place: NormalizedPlace): Promise<number> {
     // Try to find by name (case-insensitive) first, then check proximity in JS
     const candidates = await db
@@ -397,12 +442,13 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
-  async listEventLogsByUser(userId: string): Promise<EventLog[]> {
+  async listEventLogsByUser(userId: string, limit = 500): Promise<EventLog[]> {
     return db
       .select()
       .from(eventLogs)
       .where(eq(eventLogs.userId, userId))
-      .orderBy(desc(eventLogs.createdAt));
+      .orderBy(desc(eventLogs.createdAt))
+      .limit(limit);
   }
 
   async listEventLogs(limit = 500, since?: Date): Promise<EventLog[]> {
@@ -419,6 +465,18 @@ export class DatabaseStorage implements IStorage {
       .from(eventLogs)
       .orderBy(desc(eventLogs.createdAt))
       .limit(limit);
+  }
+
+  async listActiveUsersInRange(start: Date, end: Date): Promise<Set<string>> {
+    const rows = await db
+      .select({ userId: eventLogs.userId })
+      .from(eventLogs)
+      .where(and(gte(eventLogs.createdAt, start), lt(eventLogs.createdAt, end)));
+    const result = new Set<string>();
+    for (const row of rows) {
+      if (row.userId) result.add(row.userId);
+    }
+    return result;
   }
 
   async listUserFeatureSnapshots(limit = 2000): Promise<UserFeatureSnapshot[]> {
@@ -521,9 +579,14 @@ export class DatabaseStorage implements IStorage {
 
   async deletePrivacyData(userId: string): Promise<number> {
     const events = await db.delete(eventLogs).where(eq(eventLogs.userId, userId)).returning({ id: eventLogs.id });
+    await db.delete(userPreferences).where(eq(userPreferences.userId, userId));
     await db.delete(userFeatureSnapshots).where(eq(userFeatureSnapshots.userId, userId));
     await db.delete(consentLogs).where(eq(consentLogs.userId, userId));
     return events.length;
+  }
+
+  async listUserPreferences(userId: string): Promise<UserPreference[]> {
+    return db.select().from(userPreferences).where(eq(userPreferences.userId, userId));
   }
 
   async runDataRetention(rawEventDays = 180, aggregateDays = 365): Promise<{ rawEventsDeleted: number; snapshotsDeleted: number }> {
@@ -545,6 +608,28 @@ export class DatabaseStorage implements IStorage {
       rawEventsDeleted: rawDeleted.length,
       snapshotsDeleted: snapshotDeleted.length,
     };
+  }
+
+  async upsertDailyRollup(date: string, data: Omit<AnalyticsDailyRollup, "date" | "updatedAt">): Promise<AnalyticsDailyRollup> {
+    const now = new Date();
+    const [row] = await db
+      .insert(analyticsDailyRollups)
+      .values({ date, ...data, updatedAt: now })
+      .onConflictDoUpdate({
+        target: analyticsDailyRollups.date,
+        set: { ...data, updatedAt: now },
+      })
+      .returning();
+    return row;
+  }
+
+  async listDailyRollups(days: number): Promise<AnalyticsDailyRollup[]> {
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    return db
+      .select()
+      .from(analyticsDailyRollups)
+      .where(gte(analyticsDailyRollups.date, since))
+      .orderBy(desc(analyticsDailyRollups.date));
   }
 }
 

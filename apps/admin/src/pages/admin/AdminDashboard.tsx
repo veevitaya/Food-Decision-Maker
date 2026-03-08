@@ -50,6 +50,22 @@ interface UserSegment {
   estimatedCount: number;
 }
 
+interface DashboardDetails {
+  conversionFunnel: Array<{ label: string; value: number; pct: number; color: string }>;
+  geoHotspots: Array<{ zone: string; abbr: string; orders: number; growth: string }>;
+  trendingCuisines: Array<{ name: string; growth: number; max: number; color: string }>;
+  topRestaurants: Array<{ name: string; swipes: number; conversion: number; trend: "up" | "down" }>;
+  deliveryAttribution: Array<{ name: string; clicks: number; pct: number; color: string; avgOrder: string }>;
+  deliveryClicks: number;
+}
+
+interface KpiTrends {
+  dates: string[];
+  eventCounts: number[];
+  userCounts: number[];
+  swipeCounts: number[];
+}
+
 function getEventDotColor(eventType: string) {
   switch (eventType) {
     case "swipe_right":
@@ -107,10 +123,10 @@ const fallbackDashboard: DashboardData = {
 };
 
 const fallbackSegments: UserSegment[] = [
-  { id: "power", name: "Power Users", description: "Highly active users", estimatedCount: 45 },
-  { id: "new", name: "New Users", description: "Joined recently", estimatedCount: 120 },
-  { id: "thai", name: "Thai Food Lovers", description: "Prefer Thai cuisine", estimatedCount: 89 },
-  { id: "budget", name: "Budget Diners", description: "Price-conscious", estimatedCount: 67 },
+  { id: "power", name: "Power Users", description: "Highly active users", estimatedCount: 0 },
+  { id: "new", name: "New Users", description: "Joined recently", estimatedCount: 0 },
+  { id: "thai", name: "Thai Food Lovers", description: "Prefer Thai cuisine", estimatedCount: 0 },
+  { id: "budget", name: "Budget Diners", description: "Price-conscious", estimatedCount: 0 },
 ];
 
 const CONVERSION_FUNNEL = [
@@ -258,12 +274,32 @@ export default function AdminDashboard() {
     queryKey: ["/api/analytics/user-segments"],
   });
 
+  const { data: details } = useQuery<DashboardDetails>({
+    queryKey: ["/api/admin/dashboard/details"],
+  });
+
+  const { data: kpiTrends } = useQuery<KpiTrends>({
+    queryKey: ["/api/admin/analytics/kpi-trends"],
+  });
+
   const stats = dashboard || fallbackDashboard;
   const recentEvents = (events || []).slice(0, 20);
   const userSegments = segments || fallbackSegments;
   const totalSegmentUsers = userSegments.reduce((sum, s) => sum + s.estimatedCount, 0);
-  const maxRestaurantSwipes = Math.max(...TOP_RESTAURANTS.map((r) => r.swipes));
-  const maxGeoOrders = Math.max(...GEO_HOTSPOTS.map((s) => s.orders));
+
+  const conversionFunnel = details?.conversionFunnel ?? CONVERSION_FUNNEL;
+  const geoHotspots = details?.geoHotspots ?? GEO_HOTSPOTS;
+  const trendingCuisines = details?.trendingCuisines ?? TRENDING_CUISINES;
+  const topRestaurants = details?.topRestaurants ?? TOP_RESTAURANTS;
+  const deliveryAttribution = details?.deliveryAttribution ?? DELIVERY_ATTRIBUTION;
+  const deliveryClicksTotal = details?.deliveryClicks ?? 4739;
+
+  const maxRestaurantSwipes = Math.max(...topRestaurants.map((r) => r.swipes));
+  const maxGeoOrders = Math.max(...geoHotspots.map((s) => s.orders));
+
+  const userSparkline = kpiTrends?.userCounts ?? [18, 24, 32, 28, 35, 42, 48];
+  const swipeSparkline = kpiTrends?.swipeCounts ?? [120, 180, 210, 190, 260, 310, 340];
+  const eventSparkline = kpiTrends?.eventCounts ?? [320, 380, 410, 390, 450, 480, 520];
 
   const kpis = [
     {
@@ -272,7 +308,7 @@ export default function AdminDashboard() {
       icon: Users,
       delta: "+12%",
       deltaUp: true,
-      sparkline: [18, 24, 32, 28, 35, 42, 48],
+      sparkline: userSparkline,
       iconColor: "text-blue-500",
     },
     {
@@ -290,16 +326,16 @@ export default function AdminDashboard() {
       icon: MousePointerClick,
       delta: "+340",
       deltaUp: true,
-      sparkline: [120, 180, 210, 190, 260, 310, 340],
+      sparkline: swipeSparkline,
       iconColor: "text-purple-500",
     },
     {
       label: "Delivery Clicks",
-      value: 4739,
+      value: deliveryClicksTotal,
       icon: Truck,
       delta: "+18%",
       deltaUp: true,
-      sparkline: [320, 380, 410, 390, 450, 480, 520],
+      sparkline: eventSparkline,
       iconColor: "text-emerald-500",
     },
     {
@@ -462,7 +498,7 @@ export default function AdminDashboard() {
             </div>
           </div>
           <div className="flex flex-col items-center gap-1">
-            {CONVERSION_FUNNEL.map((step, idx) => {
+            {conversionFunnel.map((step, idx) => {
               const widthPct = Math.max(20, step.pct);
               return (
                 <div key={step.label} className="w-full flex flex-col items-center" data-testid={`funnel-step-${idx}`}>
@@ -471,14 +507,14 @@ export default function AdminDashboard() {
                     style={{
                       width: `${widthPct}%`,
                       backgroundColor: step.color,
-                      borderRadius: idx === 0 ? "8px 8px 2px 2px" : idx === CONVERSION_FUNNEL.length - 1 ? "2px 2px 8px 8px" : "2px",
+                      borderRadius: idx === 0 ? "8px 8px 2px 2px" : idx === conversionFunnel.length - 1 ? "2px 2px 8px 8px" : "2px",
                     }}
                   >
                     <span className={`text-[11px] font-semibold whitespace-nowrap ${idx >= 3 ? "text-white" : "text-foreground"}`}>
                       {step.label} — {step.value.toLocaleString()}
                     </span>
                   </div>
-                  {idx < CONVERSION_FUNNEL.length - 1 && (
+                  {idx < conversionFunnel.length - 1 && (
                     <div className="w-0 h-0 border-l-[4px] border-r-[4px] border-t-[4px] border-transparent border-t-gray-300 dark:border-t-border" />
                   )}
                 </div>
@@ -502,9 +538,9 @@ export default function AdminDashboard() {
             </div>
           </div>
           <div className="flex items-start gap-5">
-            <DeliveryRing data={DELIVERY_ATTRIBUTION} />
+            <DeliveryRing data={deliveryAttribution} />
             <div className="flex-1 grid grid-cols-1 gap-2">
-              {DELIVERY_ATTRIBUTION.map((platform) => (
+              {deliveryAttribution.map((platform) => (
                 <div
                   key={platform.name}
                   className="flex items-center gap-3 rounded-xl bg-gray-50 dark:bg-muted px-3 py-2.5"
@@ -538,7 +574,7 @@ export default function AdminDashboard() {
             </div>
           </div>
           <div className="space-y-2.5">
-            {TOP_RESTAURANTS.map((r, idx) => (
+            {topRestaurants.map((r, idx) => (
               <div key={r.name} data-testid={`top-restaurant-${idx}`}>
                 <div className="flex items-center justify-between mb-1">
                   <div className="flex items-center gap-2">
@@ -586,7 +622,7 @@ export default function AdminDashboard() {
             </div>
           </div>
           <div className="flex items-end gap-2 h-36" data-testid="geo-chart">
-            {GEO_HOTSPOTS.map((spot, idx) => {
+            {geoHotspots.map((spot, idx) => {
               const heightPct = (spot.orders / maxGeoOrders) * 100;
               return (
                 <div key={spot.zone} className="flex-1 flex flex-col items-center gap-1" data-testid={`geo-spot-${idx}`}>
@@ -622,7 +658,7 @@ export default function AdminDashboard() {
             </div>
           </div>
           <div className="grid grid-cols-3 gap-x-2 gap-y-4">
-            {TRENDING_CUISINES.slice(0, 3).map((cuisine) => (
+            {trendingCuisines.slice(0, 3).map((cuisine) => (
               <div key={cuisine.name} className="flex flex-col items-center gap-1" data-testid={`trending-cuisine-${cuisine.name.toLowerCase().replace(/\s/g, "-")}`}>
                 <RadialArc value={cuisine.growth} max={cuisine.max} color={cuisine.color} size={52} />
                 <span className="text-[10px] font-medium text-foreground text-center leading-tight">{cuisine.name}</span>
@@ -630,7 +666,7 @@ export default function AdminDashboard() {
             ))}
           </div>
           <div className="grid grid-cols-2 gap-x-2 gap-y-3 mt-4 pt-3 border-t border-gray-100 dark:border-border">
-            {TRENDING_CUISINES.slice(3).map((cuisine) => (
+            {trendingCuisines.slice(3).map((cuisine) => (
               <div key={cuisine.name} className="flex items-center gap-2" data-testid={`trending-cuisine-${cuisine.name.toLowerCase().replace(/\s/g, "-")}`}>
                 <RadialArc value={cuisine.growth} max={cuisine.max} color={cuisine.color} size={36} />
                 <div>

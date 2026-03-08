@@ -28,6 +28,51 @@ function computeDistanceMeters(lat1: number, lng1: number, lat2: number, lng2: n
   return Math.round(2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
 }
 
+/**
+ * Clamp and normalize cuisine affinity to [0, 1].
+ * The feature-update job already normalizes, but this is a defensive second pass
+ * to handle legacy snapshots stored before normalization was introduced.
+ */
+function normalizeAffinity(raw: Record<string, number>): Record<string, number> {
+  const max = Math.max(1, ...Object.values(raw));
+  if (max <= 1) return raw;
+  return Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, parseFloat((v / max).toFixed(4))]));
+}
+
+/**
+ * Diversity spread: ensure at most floor(limit/2) items from any single category.
+ * Items are inserted in score-descending order, so the highest-scoring items
+ * from each category are always preferred.
+ */
+function applyDiversitySpread<T extends { score: number; category: string }>(
+  scored: T[],
+  limit: number,
+): T[] {
+  const maxPerCategory = Math.max(1, Math.floor(limit / 2));
+  const categoryCounts: Record<string, number> = {};
+  const primary: T[] = [];
+  const overflow: T[] = [];
+
+  for (const item of scored) {
+    const cat = (item.category || "other").trim().toLowerCase();
+    const count = categoryCounts[cat] ?? 0;
+    if (count < maxPerCategory && primary.length < limit) {
+      primary.push(item);
+      categoryCounts[cat] = count + 1;
+    } else {
+      overflow.push(item);
+    }
+  }
+
+  // Fill remaining slots from overflow (best-scoring, regardless of category)
+  for (const item of overflow) {
+    if (primary.length >= limit) break;
+    primary.push(item);
+  }
+
+  return primary;
+}
+
 export function buildPersonalizedRecommendations(params: {
   restaurants: Restaurant[];
   feature: UserFeatureSnapshot | null;
@@ -35,18 +80,30 @@ export function buildPersonalizedRecommendations(params: {
   lng?: number;
   context?: RecommendationContext | null;
   limit?: number;
-}): { source: "personalized" | "segment" | "trending"; items: Array<Restaurant & { score: number; explanation: string[] }> } {
-  const { restaurants, feature, lat, lng, context = null, limit = 20 } = params;
+  itemCtrs?: Map<number, number>;
+}): { source: "personalized" | "sparse_blend" | "segment" | "trending"; items: Array<Restaurant & { score: number; explanation: string[] }> } {
+  const { restaurants, feature, lat, lng, context = null, limit = 20, itemCtrs } = params;
 
   if (restaurants.length === 0) {
     return { source: "trending", items: [] };
   }
 
+  // New-restaurant boost: +0.15 for restaurants with fewer than 10 CTR events
+  function newRestaurantBoost(restaurantId: number): number {
+    const ctr = itemCtrs?.get(restaurantId) ?? 0;
+    return ctr < 10 ? 0.15 : 0;
+  }
+
   if (feature) {
+    // Defensive normalization for any legacy snapshots with affinity > 1
+    const normalizedAffinity = normalizeAffinity(feature.cuisineAffinity ?? {});
+    const affinityKeys = Object.keys(normalizedAffinity).length;
+    const isSparseUser = affinityKeys < 3;
+
     const scored = scoreRecommendations(
       restaurants.map((restaurant) => toRecommendationItem(restaurant, lat, lng)),
       {
-        cuisineAffinity: feature.cuisineAffinity,
+        cuisineAffinity: normalizedAffinity,
         preferredPriceLevel: feature.preferredPriceLevel ?? 2,
         dislikedItemIds: feature.dislikedItemIds ?? [],
         activeHours: feature.activeHours ?? [],
@@ -54,18 +111,47 @@ export function buildPersonalizedRecommendations(params: {
       context,
     );
 
-    const items = scored
-      .slice(0, limit)
+    if (isSparseUser) {
+      // Sparse user: blend 70% popularity + 30% personalized score
+      const categoryCounts = restaurants.reduce<Record<string, number>>((acc, r) => {
+        const key = (r.category || "other").trim().toLowerCase();
+        acc[key] = (acc[key] ?? 0) + 1;
+        return acc;
+      }, {});
+      const maxCategoryCount = Math.max(1, ...Object.values(categoryCounts));
+
+      const blended = scored
+        .map((score) => {
+          const restaurant = restaurants.find((r) => r.id === score.id)!;
+          const key = (restaurant.category || "other").trim().toLowerCase();
+          const popularityScore = (categoryCounts[key] ?? 0) / maxCategoryCount;
+          const trend = Math.max(0, Math.min(1, (restaurant.trendingScore ?? 0) / 100));
+          const popularityBlend = trend * 0.65 + popularityScore * 0.35;
+          const blendedScore = 0.7 * popularityBlend + 0.3 * score.score + newRestaurantBoost(restaurant.id);
+          return {
+            ...restaurant,
+            score: Number(blendedScore.toFixed(4)),
+            explanation: ["Sparse user: blending popularity and early preference signals", ...score.explanation],
+          };
+        })
+        .sort((a, b) => b.score - a.score);
+
+      return { source: "sparse_blend", items: applyDiversitySpread(blended, limit) };
+    }
+
+    const full = scored
       .map((score) => {
         const restaurant = restaurants.find((r) => r.id === score.id)!;
+        const boostedScore = score.score + newRestaurantBoost(restaurant.id);
         return {
           ...restaurant,
-          score: Number(score.score.toFixed(4)),
+          score: Number(boostedScore.toFixed(4)),
           explanation: score.explanation,
         };
-      });
+      })
+      .sort((a, b) => b.score - a.score);
 
-    return { source: "personalized", items };
+    return { source: "personalized", items: applyDiversitySpread(full, limit) };
   }
 
   const categoryCounts = restaurants.reduce<Record<string, number>>((acc, restaurant) => {
@@ -85,7 +171,7 @@ export function buildPersonalizedRecommendations(params: {
         Number.isFinite(lat) && Number.isFinite(lng)
           ? Math.min(computeDistanceMeters(lat as number, lng as number, Number(restaurant.lat), Number(restaurant.lng)) / 10000, 1)
           : 0.4;
-      const score = Number((trend * 0.65 + categoryPopularity * 0.35 - distancePenalty * 0.15).toFixed(4));
+      const score = Number((trend * 0.65 + categoryPopularity * 0.35 - distancePenalty * 0.15 + newRestaurantBoost(restaurant.id)).toFixed(4));
       return {
         ...restaurant,
         score,
@@ -96,11 +182,10 @@ export function buildPersonalizedRecommendations(params: {
         ],
       };
     })
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit);
+    .sort((a, b) => b.score - a.score);
 
   return {
     source: "segment",
-    items: segmentItems,
+    items: applyDiversitySpread(segmentItems, limit),
   };
 }

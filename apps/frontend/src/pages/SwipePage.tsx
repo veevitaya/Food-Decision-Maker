@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { motion, useMotionValue, useTransform, PanInfo, AnimatePresence, useAnimate } from "framer-motion";
 import { useLocation } from "wouter";
+import { useQuery } from "@tanstack/react-query";
 import { useTasteProfile } from "@/hooks/use-taste-profile";
 import { sendInvite } from "@/lib/liff";
 import { BottomNav } from "@/components/BottomNav";
@@ -64,28 +65,12 @@ const RESTAURANT_SWIPE_CARDS: RestaurantCard[] = [
   { id: 341, name: "P'Aor Tom Yum", category: "🇹🇭 Thai · Soup", tags: ["🦐 Prawns", "🌶️ Spicy", "🔥 Cult"], description: "Legendary creamy tom yum goong with massive river prawns.", imageUrl: "https://images.unsplash.com/photo-1548943487-a2e4e43b4853?w=600&auto=format&fit=crop&q=60", priceLevel: 2, rating: "4.9", address: "Phetchaburi Rd", isNew: false, matchChance: 0.8 },
 ];
 
-const CAMPAIGN_CARD_IDS = MOCK_HOME_CAMPAIGNS.map(c => c.id);
-
-const CAMPAIGN_SWIPE_CARDS: RestaurantCard[] = MOCK_HOME_CAMPAIGNS.map((c, idx) => ({
-  id: idx,
-  name: c.restaurantName,
-  category: `🏷️ ${c.title}`,
-  tags: [
-    c.dealType === "percentage" ? `💰 ${c.dealValue}% off` :
-    c.dealType === "bogo" ? "🎁 Buy 1 Get 1" :
-    c.dealType === "freeItem" ? `🎁 Free ${c.dealValue}` :
-    `💰 ฿${c.dealValue} off`,
-    "🏷️ Limited time",
-    "⭐ Verified deal",
-  ],
-  description: c.description,
-  imageUrl: c.restaurantImage,
-  priceLevel: 2,
-  rating: "4.7",
-  address: "Bangkok",
-  isNew: false,
-  matchChance: 0,
-}));
+function makeDealTag(dealType: string, dealValue: string): string {
+  if (dealType === "percentage") return `💰 ${dealValue}% off`;
+  if (dealType === "bogo") return "🎁 Buy 1 Get 1";
+  if (dealType === "freeItem") return `🎁 Free ${dealValue}`;
+  return `💰 ฿${dealValue} off`;
+}
 
 const RESTAURANT_MODES = new Set(["saved", "partner", "fancy", "spicy", "healthy", "campaigns", "restaurants"]);
 
@@ -487,11 +472,36 @@ export default function SwipePage() {
   const [showMatch, setShowMatch] = useState(false);
   const { recordSwipe } = useTasteProfile();
 
+  const { data: apiCampaigns } = useQuery<Array<{ id: string; title: string; dealType: string; dealValue: string; endDate: string; restaurantName: string; restaurantImage: string; description: string }>>({
+    queryKey: ["/api/campaigns/active"],
+    queryFn: async () => {
+      const res = await fetch("/api/campaigns/active");
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: mode === "campaigns",
+  });
+  const campaignSource = (apiCampaigns && apiCampaigns.length > 0) ? apiCampaigns : MOCK_HOME_CAMPAIGNS;
+  const campaignCardIds = campaignSource.map((c) => c.id);
+  const campaignSwipeCards: RestaurantCard[] = campaignSource.map((c, idx) => ({
+    id: idx,
+    name: c.restaurantName,
+    category: `🏷️ ${c.title}`,
+    tags: [makeDealTag(c.dealType, c.dealValue), "🏷️ Limited time", "⭐ Verified deal"],
+    description: c.description,
+    imageUrl: c.restaurantImage || MOCK_HOME_CAMPAIGNS[idx % MOCK_HOME_CAMPAIGNS.length]?.restaurantImage || "",
+    priceLevel: 2,
+    rating: "4.7",
+    address: "Bangkok",
+    isNew: false,
+    matchChance: 0,
+  }));
+
   const isCampaignMode = mode === "campaigns";
   const isDrinksMode = mode === "drinks";
   const isRestaurantMode = RESTAURANT_MODES.has(mode);
   const menuItems = isDrinksMode ? DRINKS_SWIPE_MENUS : SWIPE_MENUS;
-  const restaurantItems = isCampaignMode ? CAMPAIGN_SWIPE_CARDS : RESTAURANT_SWIPE_CARDS;
+  const restaurantItems = isCampaignMode ? campaignSwipeCards : RESTAURANT_SWIPE_CARDS;
   const items = isRestaurantMode ? restaurantItems : menuItems;
 
   const modeLabels: Record<string, string> = {
@@ -558,7 +568,7 @@ export default function SwipePage() {
 
   const handleTap = (item: any) => {
     if (isCampaignMode) {
-      const campaignId = CAMPAIGN_CARD_IDS[item.id];
+      const campaignId = campaignCardIds[item.id];
       if (campaignId) navigate(`/campaign/${campaignId}`);
     } else if (isRestaurantMode) {
       navigate(`/restaurant/${item.id}`);

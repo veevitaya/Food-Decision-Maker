@@ -192,11 +192,22 @@ export default function RestaurantList() {
   const category = params.get("category") || "Restaurants";
   const isBars = category === "Bars";
 
+  // Filter API restaurants by category keyword; fall back to mock if API returns nothing
+  const apiFiltered = category === "Restaurants"
+    ? apiRestaurants
+    : apiRestaurants.filter((r) =>
+        r.category?.toLowerCase().includes(category.toLowerCase()) ||
+        r.name?.toLowerCase().includes(category.toLowerCase()) ||
+        r.description?.toLowerCase().includes(category.toLowerCase()),
+      );
+
   const mockList = MOCK_RESTAURANTS_BY_MENU[category];
-  const restaurants = mockList
-    ? mockList.map((r) => ({ ...r, lat: "13.7466", lng: "100.5393", isNew: false, trendingScore: 80 }))
-    : apiRestaurants;
-  const loading = mockList ? false : isLoading;
+  const restaurants = (apiFiltered.length > 0)
+    ? apiFiltered
+    : mockList
+      ? mockList.map((r) => ({ ...r, lat: "13.7466", lng: "100.5393", isNew: false, trendingScore: 80 }))
+      : apiRestaurants;
+  const loading = (apiFiltered.length === 0 && !mockList) ? isLoading : false;
 
   return (
     <div className="w-full min-h-[100dvh] bg-white" data-testid="restaurant-list-page">

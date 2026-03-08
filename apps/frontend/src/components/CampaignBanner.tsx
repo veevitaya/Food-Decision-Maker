@@ -1,5 +1,6 @@
 import { motion } from "framer-motion";
 import { useLocation } from "wouter";
+import { useQuery } from "@tanstack/react-query";
 import { Sparkles } from "lucide-react";
 
 interface CampaignBannerData {
@@ -158,6 +159,15 @@ function getDaysLeft(endDate: string) {
 
 export function HomeCampaignBanner() {
   const [, navigate] = useLocation();
+  const { data: apiCampaigns } = useQuery<CampaignBannerData[]>({
+    queryKey: ["/api/campaigns/active"],
+    queryFn: async () => {
+      const res = await fetch("/api/campaigns/active");
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+  const campaigns = (apiCampaigns && apiCampaigns.length > 0) ? apiCampaigns : MOCK_HOME_CAMPAIGNS;
 
   return (
     <div className="mb-2" data-testid="home-campaign-banner">
@@ -176,7 +186,7 @@ export function HomeCampaignBanner() {
         className="flex gap-3 overflow-x-auto hide-scrollbar pl-6 pr-4 pb-1"
         style={{ scrollbarWidth: "none", WebkitOverflowScrolling: "touch" }}
       >
-        {MOCK_HOME_CAMPAIGNS.map((campaign, idx) => (
+        {campaigns.map((campaign, idx) => (
           <motion.div
             key={campaign.id}
             initial={{ opacity: 0, y: 8 }}
@@ -228,10 +238,18 @@ interface RestaurantCampaignBannerProps {
 
 export function RestaurantCampaignBanner({ restaurantId }: RestaurantCampaignBannerProps) {
   const [, navigate] = useLocation();
-  const campaigns = MOCK_RESTAURANT_CAMPAIGNS[restaurantId];
-  if (!campaigns || campaigns.length === 0) return null;
-
-  const campaign = campaigns[0];
+  const { data: apiCampaigns } = useQuery<CampaignBannerData[]>({
+    queryKey: ["/api/campaigns/active"],
+    queryFn: async () => {
+      const res = await fetch("/api/campaigns/active");
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+  const apiMatch = apiCampaigns?.find((c) => Number(c.restaurantId) === restaurantId);
+  const mockCampaigns = MOCK_RESTAURANT_CAMPAIGNS[restaurantId];
+  const campaign = apiMatch ?? (mockCampaigns && mockCampaigns.length > 0 ? mockCampaigns[0] : null);
+  if (!campaign) return null;
 
   return (
     <div className="mb-6" data-testid="restaurant-campaign-banner">

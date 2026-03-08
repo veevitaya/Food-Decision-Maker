@@ -212,6 +212,7 @@ export default function Home() {
   const { recordVibe } = useVibeFrequency();
   const { data: suggestions = [], isLoading: suggestionsLoading } = useSuggestions();
   const { data: nearbyRestaurants = [], isLoading: nearbyLoading } = useRestaurants("new");
+  const { data: allRestaurants = [] } = useRestaurants();
   const { profile: userProfile } = useLineProfile();
 
   const [personalizedRecs, setPersonalizedRecs] = useState<PersonalizedRec[]>([]);
@@ -306,34 +307,67 @@ export default function Home() {
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
+  const EMOJI_MAP: Record<string, string> = { Thai: "🇹🇭", Sushi: "🍣", Burgers: "🍔", Pizza: "🍕", Bars: "🍸", Cafe: "☕", Desserts: "🍰", Chinese: "🥟", Breakfast: "🍳", "Bubble Tea": "🧋", Bakery: "🥐", Coffee: "☕", Korean: "🇰🇷", Japanese: "🇯🇵", Italian: "🍝", Ramen: "🍜", Mexican: "🌮" };
+  const getPriceLabel = (level: number) => "฿".repeat(Math.max(1, Math.min(4, level || 1)));
+
+  const restaurantPins = useMemo(() => {
+    if (allRestaurants.length === 0) return RESTAURANT_PINS;
+    return allRestaurants
+      .filter((r) => Number.isFinite(Number(r.lat)) && Number.isFinite(Number(r.lng)))
+      .map((r) => ({
+        id: r.id,
+        name: r.name,
+        emoji: EMOJI_MAP[r.category] || "🍽️",
+        category: r.category,
+        lat: Number(r.lat),
+        lng: Number(r.lng),
+        rating: String(r.rating ?? "4.5"),
+        price: getPriceLabel(r.priceLevel ?? 1),
+        imageUrl: r.imageUrl ?? "",
+        description: r.description ?? "",
+      }));
+  }, [allRestaurants]);
+
+  const searchable = useMemo(() => {
+    if (allRestaurants.length === 0) return ALL_SEARCHABLE;
+    return allRestaurants.map((r) => ({
+      id: r.id,
+      name: r.name,
+      category: r.category,
+      rating: String(r.rating ?? "4.5"),
+      address: r.address ?? "",
+      menus: (r.description ?? "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w.length > 2),
+    }));
+  }, [allRestaurants]);
+
   const searchResults = useMemo(() => {
     if (!searchQuery.trim()) return [];
     const q = searchQuery.toLowerCase();
-    const nameMatches: typeof ALL_SEARCHABLE = [];
-    const categoryMatches: typeof ALL_SEARCHABLE = [];
-    const menuMatches: typeof ALL_SEARCHABLE = [];
+    type SearchItem = typeof searchable[0];
+    const nameMatches: SearchItem[] = [];
+    const categoryMatches: SearchItem[] = [];
+    const menuMatches: SearchItem[] = [];
     const seen = new Set<number>();
-    for (const r of ALL_SEARCHABLE) { if (r.name.toLowerCase().includes(q)) { nameMatches.push(r); seen.add(r.id); } }
-    for (const r of ALL_SEARCHABLE) { if (seen.has(r.id)) continue; if (r.category.toLowerCase().includes(q)) { categoryMatches.push(r); seen.add(r.id); } }
-    for (const r of ALL_SEARCHABLE) { if (seen.has(r.id)) continue; if (r.menus.some(m => m.includes(q))) { menuMatches.push(r); seen.add(r.id); } }
+    for (const r of searchable) { if (r.name.toLowerCase().includes(q)) { nameMatches.push(r); seen.add(r.id); } }
+    for (const r of searchable) { if (seen.has(r.id)) continue; if (r.category.toLowerCase().includes(q)) { categoryMatches.push(r); seen.add(r.id); } }
+    for (const r of searchable) { if (seen.has(r.id)) continue; if (r.menus.some((m) => m.includes(q))) { menuMatches.push(r); seen.add(r.id); } }
     return [...nameMatches.slice(0, 5), ...categoryMatches.slice(0, 4), ...menuMatches.slice(0, 6)].slice(0, 10);
-  }, [searchQuery]);
+  }, [searchQuery, searchable]);
 
   const mapCenter = useMemo<[number, number]>(() => [userLocation.lat, userLocation.lng], [userLocation]);
   const mapPins = useMemo(() =>
-    RESTAURANT_PINS.map(p => ({ id: p.id, name: p.name, emoji: p.emoji, category: p.category, price: p.price, lat: p.lat, lng: p.lng })),
-  []);
+    restaurantPins.map((p) => ({ id: p.id, name: p.name, emoji: p.emoji, category: p.category, price: p.price, lat: p.lat, lng: p.lng })),
+  [restaurantPins]);
 
   const MAP_CATEGORIES = useMemo(() => {
-    const cats = Array.from(new Set(RESTAURANT_PINS.map(p => p.category)));
-    const emojiMap: Record<string, string> = { Thai: "🇹🇭", Sushi: "🍣", Burgers: "🍔", Pizza: "🍕", Bars: "🍸", Cafe: "☕", Desserts: "🍰", Chinese: "🥟", Breakfast: "🍳", "Bubble Tea": "🧋", Bakery: "🥐" };
-    return cats.map(c => ({ label: c, emoji: emojiMap[c] || "🍽️" }));
-  }, []);
+    const cats = Array.from(new Set(restaurantPins.map((p) => p.category)));
+    return cats.map((c) => ({ label: c, emoji: EMOJI_MAP[c] || "🍽️" }));
+  }, [restaurantPins]);
 
   const filteredMapCards = useMemo(() => {
-    if (!selectedCategory) return RESTAURANT_PINS.slice(0, 6);
-    return RESTAURANT_PINS.filter(p => p.category === selectedCategory);
-  }, [selectedCategory]);
+    if (!selectedCategory) return restaurantPins.slice(0, 6);
+    return restaurantPins.filter((p) => p.category === selectedCategory);
+  }, [selectedCategory, restaurantPins]);
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 

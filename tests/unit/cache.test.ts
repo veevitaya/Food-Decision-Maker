@@ -7,8 +7,8 @@ import {
   isSufficient,
   isFreshAndSufficient,
   _clearForTest,
-} from "../../server/services/places/cache/cacheRepo";
-import type { NormalizedPlace } from "../../server/services/places/types";
+} from "../../apps/api/services/places/cache/cacheRepo";
+import type { NormalizedPlace } from "../../apps/api/services/places/types";
 
 const makePlace = (name: string): NormalizedPlace => ({
   id: `osm:node:${name}`,

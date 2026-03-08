@@ -127,6 +127,14 @@ export default function AdminRestaurants() {
     },
   });
 
+  const bootstrapClaimMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/admin/claims/bootstrap-test", {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/claims"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/owners"] });
+    },
+  });
+
   const getOwnerForRestaurant = (restaurantId: number): RestaurantOwner | undefined => {
     return owners.find((o) => o.restaurantId === restaurantId);
   };
@@ -214,6 +222,30 @@ export default function AdminRestaurants() {
           </div>
         )}
       </div>
+
+      {owners.length === 0 && claims.length === 0 && (
+        <Card className="rounded-2xl border-dashed border-gray-200 dark:border-border p-5" data-testid="card-empty-owner-claims">
+          <div className="flex items-start gap-3">
+            <FileText className="w-5 h-5 text-muted-foreground mt-0.5" />
+            <div>
+              <p className="text-sm font-medium text-foreground">No owner claims yet</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                This page is ready. It will show owner records and claim review queue after owners submit claims from the Owner Dashboard.
+              </p>
+              <Button
+                type="button"
+                size="sm"
+                className="mt-3"
+                onClick={() => bootstrapClaimMutation.mutate()}
+                disabled={bootstrapClaimMutation.isPending}
+                data-testid="button-bootstrap-test-claim"
+              >
+                {bootstrapClaimMutation.isPending ? "Creating..." : "Create Test Owner + Claim"}
+              </Button>
+            </div>
+          </div>
+        </Card>
+      )}
 
       {activeTab === "restaurants" ? (
         <div className="bg-white dark:bg-card rounded-2xl border border-gray-100 dark:border-border overflow-hidden" data-testid="table-restaurants">

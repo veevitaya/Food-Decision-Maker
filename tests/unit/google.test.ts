@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { queryGoogle, _resetForTest, _getDailySpend } from "../../server/services/places/providers/google";
+import { queryGoogle, _resetForTest, _getDailySpend } from "../../apps/api/services/places/providers/google";
 
 const GOOGLE_PLACE = (id: string, photoRef?: string) => ({
   place_id: id,

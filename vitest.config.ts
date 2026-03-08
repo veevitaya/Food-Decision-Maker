@@ -10,7 +10,8 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      "@shared": path.resolve(import.meta.dirname, "shared"),
+      "@shared": path.resolve(import.meta.dirname, "packages/shared"),
+      "@algorithms": path.resolve(import.meta.dirname, "packages/algorithms/src"),
     },
   },
 });

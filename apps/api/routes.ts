@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from "express";
 import type { Server } from "http";
+import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
@@ -7,14 +8,22 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import express from "express";
+import bcrypt from "bcryptjs";
 import { getBearerToken, requireVerifiedLineUser, verifyLineIdToken } from "./lineAuth";
 import * as placesService from "./services/places/placesService";
-import type { RestaurantOpeningHour, RestaurantReview } from "@shared/schema";
+import type { RestaurantOpeningHour, RestaurantReview, AdminRole, AdminPermission } from "@shared/schema";
+import { ROLE_DEFAULT_PERMISSIONS } from "@shared/schema";
 import type { NormalizedPlace } from "./services/places/types";
 import { buildPersonalizedRecommendations } from "./services/recommendations/personalized";
+import { enqueueFeatureUpdate } from "./jobs/featureUpdateJob";
+import { getRecCache, setRecCache } from "./lib/recCache";
 import { getKey, getSource, setKey, ALLOWED_SERVICE_IDS, loadFromDb } from "./lib/apiKeyStore";
 import { persistAnalyticsQualityReport } from "./jobs/analyticsQuality";
 import { appendSecurityAudit } from "./lib/opsLog";
+import { checkSLOs } from "./lib/slo";
+import { sendAlert } from "./lib/alerting";
+
+const isDev = process.env.NODE_ENV !== "production";
 
 function requireAdminSession(req: Request, res: Response): boolean {
   if (req.session?.isAdmin) return true;
@@ -43,6 +52,36 @@ function requireAnalyticsAccess(req: Request, res: Response): boolean {
   if (req.session?.sessionType === "owner") return true;
   res.status(401).json({ message: "Analytics access required" });
   return false;
+}
+
+function requireOwnerOrAdmin(req: Request, res: Response): boolean {
+  if (req.session?.isAdmin) return true;
+  if (req.session?.sessionType === "owner") return true;
+  res.status(401).json({ message: "Owner or admin login required" });
+  return false;
+}
+
+/**
+ * Returns a guard that checks:
+ *  1. The request has an active admin session
+ *  2. The admin's role grants the requested permission
+ *
+ * The env-based admin always gets "superadmin" role (all permissions).
+ */
+function requirePermission(perm: AdminPermission) {
+  return (req: Request, res: Response): boolean => {
+    if (!req.session?.isAdmin) {
+      res.status(401).json({ message: "Admin login required" });
+      return false;
+    }
+    const role: AdminRole = req.session.adminRole ?? "superadmin";
+    const granted = ROLE_DEFAULT_PERMISSIONS[role] ?? [];
+    if (!granted.includes(perm)) {
+      res.status(403).json({ message: `Permission denied: ${perm} required` });
+      return false;
+    }
+    return true;
+  };
 }
 
 type RestaurantListInput = NonNullable<z.infer<typeof api.restaurants.list.input>>;
@@ -111,57 +150,6 @@ function appendEventAudit(record: EventIngestAuditRecord) {
     eventIngestAudits.length = EVENT_INGEST_AUDIT_LIMIT;
   }
 }
-
-const DEFAULT_CAMPAIGNS = [
-  {
-    id: 1,
-    title: "Lunch Rush Boost",
-    status: "active",
-    dealType: "discount",
-    dealValue: "15% off",
-    restaurantOwnerKey: "owner_siam_01",
-    startDate: "2026-03-01",
-    endDate: "2026-03-30",
-    targetGroups: ["Solo Diners", "Power Users"],
-    impressions: 24200,
-    clicks: 1180,
-    dailyBudget: 1800,
-    totalBudget: 54000,
-    spent: 33120,
-  },
-  {
-    id: 2,
-    title: "Weekend Family Bundle",
-    status: "draft",
-    dealType: "bundle",
-    dealValue: "2 for 1",
-    restaurantOwnerKey: "owner_ari_07",
-    startDate: "2026-03-10",
-    endDate: "2026-04-01",
-    targetGroups: ["Families", "Couples"],
-    impressions: 10300,
-    clicks: 420,
-    dailyBudget: 1200,
-    totalBudget: 36000,
-    spent: 10200,
-  },
-  {
-    id: 3,
-    title: "Late Night Noodles",
-    status: "paused",
-    dealType: "specialMenu",
-    dealValue: "Free drink",
-    restaurantOwnerKey: "owner_thonglor_04",
-    startDate: "2026-02-01",
-    endDate: "2026-03-15",
-    targetGroups: ["Late Night", "Friends Group"],
-    impressions: 18650,
-    clicks: 760,
-    dailyBudget: 950,
-    totalBudget: 28500,
-    spent: 21450,
-  },
-];
 
 const DEFAULT_BANNERS = [
   {
@@ -298,19 +286,7 @@ const DEFAULT_ADMIN_CONFIG_VALUE: Record<string, unknown> = {
   ],
 };
 
-let seededCampaigns = false;
 let seededBanners = false;
-
-async function ensureDefaultCampaigns() {
-  if (seededCampaigns) return;
-  const existing = await storage.listCampaigns();
-  if (existing.length === 0) {
-    for (const item of DEFAULT_CAMPAIGNS) {
-      await storage.createCampaign(item);
-    }
-  }
-  seededCampaigns = true;
-}
 
 async function ensureDefaultBanners() {
   if (seededBanners) return;
@@ -322,6 +298,37 @@ async function ensureDefaultBanners() {
   }
   seededBanners = true;
 }
+
+type StoredOwner = {
+  id: number;
+  restaurantId: number;
+  displayName: string;
+  email: string;
+  phone?: string | null;
+  lineUserId?: string | null;
+  isVerified?: boolean;
+  paymentConnected?: boolean;
+  paymentMethod?: string | null;
+  subscriptionTier?: string;
+  subscriptionExpiry?: string | null;
+  verificationStatus?: string;
+};
+
+type StoredClaim = {
+  id: number;
+  restaurantId: number;
+  ownerId: number;
+  ownershipType?: string | null;
+  status: "pending" | "approved" | "rejected";
+  submittedAt: string;
+  reviewNotes?: string | null;
+  proofDocuments?: string[] | null;
+  verificationChecklist?: Array<{ id: string; label: string; checked: boolean }> | null;
+  notes?: string | null;
+};
+
+const OWNERS_CONFIG_KEY = "restaurant_owners";
+const CLAIMS_CONFIG_KEY = "restaurant_claims";
 
 async function buildAnalyticsEvents(): Promise<AnalyticsEventRecord[]> {
   const logs = await storage.listEventLogs(500);
@@ -700,6 +707,58 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
 
+  // ── WebSocket for group sessions ────────────────────────────────────────────
+  // Clients connect to ws://host/group-ws?code=ABC123 and receive push updates
+  // whenever a member joins. No more polling GET /api/group/sessions/:code.
+  const groupRooms = new Map<string, Set<WebSocket>>();
+  const wss = new WebSocketServer({ noServer: true });
+
+  httpServer.on("upgrade", (request, socket, head) => {
+    const url = new URL(request.url ?? "/", `http://${request.headers.host}`);
+    if (url.pathname === "/group-ws") {
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        wss.emit("connection", ws, request);
+      });
+    } else {
+      socket.destroy();
+    }
+  });
+
+  wss.on("connection", async (ws, request) => {
+    const url = new URL((request as any).url ?? "/", `http://${(request as any).headers.host}`);
+    const code = url.searchParams.get("code")?.trim().toUpperCase();
+    if (!code) { ws.close(4000, "Missing session code"); return; }
+
+    // Verify the group session actually exists before admitting the client
+    try {
+      const session = await storage.getGroupSessionByCode(code);
+      if (!session) { ws.close(4001, "Session not found"); return; }
+    } catch {
+      ws.close(4002, "Server error");
+      return;
+    }
+
+    if (!groupRooms.has(code)) groupRooms.set(code, new Set());
+    groupRooms.get(code)!.add(ws);
+
+    ws.on("close", () => {
+      const room = groupRooms.get(code);
+      if (room) {
+        room.delete(ws);
+        if (room.size === 0) groupRooms.delete(code);
+      }
+    });
+  });
+
+  function broadcastGroupUpdate(code: string, event: unknown): void {
+    const room = groupRooms.get(code);
+    if (!room || room.size === 0) return;
+    const msg = JSON.stringify(event);
+    for (const client of room) {
+      if (client.readyState === WebSocket.OPEN) client.send(msg);
+    }
+  }
+
   // Preload API keys from DB into memory store
   await loadFromDb((key) => storage.getAdminConfig(key));
 
@@ -844,7 +903,7 @@ export async function registerRoutes(
       const input: Partial<RestaurantListInput> = api.restaurants.list.input?.parse(req.query) ?? {};
       const resultLimit = Number.isFinite(input.limit) ? Math.max(1, Math.min(100, Number(input.limit))) : undefined;
       const localOnly = Boolean(input.localOnly);
-      console.log("[restaurants-debug] request", {
+      if (isDev) console.log("[restaurants-debug] request", {
         mode: input.mode ?? null,
         lat: input.lat ?? null,
         lng: input.lng ?? null,
@@ -897,7 +956,7 @@ export async function registerRoutes(
           freshnessScore: undefined,
           isFallback: p.isFallback ?? false,
         }));
-        console.log("[restaurants-debug] geo-result", {
+        if (isDev) console.log("[restaurants-debug] geo-result", {
           source: result.source,
           fromCache: result.fromCache,
           isFallback: result.isFallback,
@@ -936,7 +995,7 @@ export async function registerRoutes(
             ? withinRadius
             : withDistance.sort((a, b) => (a.distanceMeters ?? 0) - (b.distanceMeters ?? 0));
 
-          if (withinRadius.length === 0) {
+          if (isDev && withinRadius.length === 0) {
             console.log("[restaurants-debug] localOnly-radius-empty-fallback", {
               radius,
               dbTotalWithCoords: withDistance.length,
@@ -948,12 +1007,12 @@ export async function registerRoutes(
           restaurants = dbItems;
           logSource = "osm";
         }
-        console.log("[restaurants-debug] db-result", { count: restaurants.length, localOnly });
+        if (isDev) console.log("[restaurants-debug] db-result", { count: restaurants.length, localOnly });
       }
 
       if (typeof resultLimit === "number") {
         restaurants = restaurants.slice(0, resultLimit);
-        console.log("[restaurants-debug] applied-limit", { limit: resultLimit, countAfterLimit: restaurants.length });
+        if (isDev) console.log("[restaurants-debug] applied-limit", { limit: resultLimit, countAfterLimit: restaurants.length });
       }
 
       try {
@@ -1076,39 +1135,40 @@ export async function registerRoutes(
   });
 
   // ── Admin authentication ────────────────────────────────────────────────
-  app.post("/api/admin/login", (req, res) => {
+  app.post("/api/admin/login", async (req, res) => {
     const { email, username, password } = (req.body ?? {}) as { email?: string; username?: string; password?: string };
     const loginId = (email ?? username ?? "").trim();
     if (!loginId || typeof password !== "string") {
       return res.status(400).json({ message: "Email/username and password are required" });
     }
-    if (
-      loginId === process.env.ADMIN_EMAIL &&
-      password === process.env.ADMIN_PASSWORD
-    ) {
-      if (!req.session) {
-        return res.status(500).json({ message: "Session middleware unavailable" });
-      }
-      req.session.isAdmin = true;
-      req.session.sessionType = "admin";
-      req.session.username = loginId;
-      void appendSecurityAudit({
-        ts: new Date().toISOString(),
-        level: "info",
-        source: "auth",
-        message: "admin_login_success",
-        metadata: { loginId, ip: req.ip },
-      });
-      return res.json({ ok: true, username: loginId, role: "admin" });
+
+    // Verify email first
+    if (loginId !== process.env.ADMIN_EMAIL) {
+      void appendSecurityAudit({ ts: new Date().toISOString(), level: "warn", source: "auth", message: "admin_login_failed", metadata: { loginId, ip: req.ip } });
+      return res.status(401).json({ message: "Invalid login or password" });
     }
-    void appendSecurityAudit({
-      ts: new Date().toISOString(),
-      level: "warn",
-      source: "auth",
-      message: "admin_login_failed",
-      metadata: { loginId, ip: req.ip },
-    });
-    return res.status(401).json({ message: "Invalid login or password" });
+
+    // Password check: prefer bcrypt hash; fall back to plaintext for dev backwards-compat
+    const hashEnv = process.env.ADMIN_PASSWORD_HASH;
+    const plainEnv = process.env.ADMIN_PASSWORD;
+    const passwordValid = hashEnv
+      ? await bcrypt.compare(password, hashEnv)
+      : (plainEnv ? password === plainEnv : false);
+
+    if (!passwordValid) {
+      void appendSecurityAudit({ ts: new Date().toISOString(), level: "warn", source: "auth", message: "admin_login_failed", metadata: { loginId, ip: req.ip } });
+      return res.status(401).json({ message: "Invalid login or password" });
+    }
+
+    if (!req.session) {
+      return res.status(500).json({ message: "Session middleware unavailable" });
+    }
+    req.session.isAdmin = true;
+    req.session.adminRole = "superadmin"; // env-based admin always has full access
+    req.session.sessionType = "admin";
+    req.session.username = loginId;
+    void appendSecurityAudit({ ts: new Date().toISOString(), level: "info", source: "auth", message: "admin_login_success", metadata: { loginId, ip: req.ip } });
+    return res.json({ ok: true, username: loginId, role: "superadmin" });
   });
 
   app.post("/api/admin/owner-login", async (req, res) => {
@@ -1120,8 +1180,12 @@ export async function registerRoutes(
       }
 
       const ownerEmail = (process.env.OWNER_EMAIL ?? "owner@example.com").trim();
-      const ownerPassword = process.env.OWNER_PASSWORD ?? "change-me-owner";
-      if (loginEmail.toLowerCase() !== ownerEmail.toLowerCase() || password !== ownerPassword) {
+      const ownerHashEnv = process.env.OWNER_PASSWORD_HASH;
+      const ownerPlainEnv = process.env.OWNER_PASSWORD ?? "change-me-owner";
+      const ownerPasswordValid = ownerHashEnv
+        ? await bcrypt.compare(password, ownerHashEnv)
+        : password === ownerPlainEnv;
+      if (loginEmail.toLowerCase() !== ownerEmail.toLowerCase() || !ownerPasswordValid) {
         void appendSecurityAudit({
           ts: new Date().toISOString(),
           level: "warn",
@@ -1184,10 +1248,12 @@ export async function registerRoutes(
 
   app.get("/api/admin/me", (req, res) => {
     if (req.session?.isAdmin) {
+      const role: AdminRole = req.session.adminRole ?? "superadmin";
       return res.json({
         isAdmin: true,
         username: req.session.username ?? process.env.ADMIN_EMAIL ?? "admin",
-        role: "admin",
+        role,
+        permissions: ROLE_DEFAULT_PERMISSIONS[role] ?? [],
         sessionType: "admin",
       });
     }
@@ -1195,6 +1261,7 @@ export async function registerRoutes(
       return res.json({
         isAdmin: false,
         role: "owner",
+        permissions: [],
         sessionType: "owner",
         email: req.session.ownerEmail ?? "owner@example.com",
         restaurantId: req.session.ownerRestaurantId ?? null,
@@ -1207,7 +1274,6 @@ export async function registerRoutes(
   app.get("/api/admin/dashboard", async (req, res) => {
     try {
       if (!requireAdminSession(req, res)) return;
-      await ensureDefaultCampaigns();
       await ensureDefaultBanners();
       const allRestaurants = await storage.getRestaurants();
       const allProfiles = await storage.listProfiles(2000);
@@ -1300,7 +1366,6 @@ export async function registerRoutes(
   async function listCampaignsHandler(req: Request, res: Response) {
     try {
       if (!requireAdminSession(req, res)) return;
-      await ensureDefaultCampaigns();
       const query = z.object({
         status: z.enum(["draft", "active", "paused", "ended"]).optional(),
         search: z.string().optional(),
@@ -1351,7 +1416,6 @@ export async function registerRoutes(
   async function listCampaignsLegacyHandler(req: Request, res: Response) {
     try {
       if (!requireAdminSession(req, res)) return;
-      await ensureDefaultCampaigns();
       const campaigns = await storage.listCampaigns();
       res.json(campaigns);
     } catch {
@@ -1362,7 +1426,6 @@ export async function registerRoutes(
   async function getCampaignHandler(req: Request, res: Response) {
     try {
       if (!requireAdminSession(req, res)) return;
-      await ensureDefaultCampaigns();
       const id = Number(req.params.id);
       if (!Number.isFinite(id)) return res.status(400).json({ message: "Invalid campaign id" });
       const campaigns = await storage.listCampaigns();
@@ -1653,7 +1716,6 @@ export async function registerRoutes(
   app.get("/api/analytics/summary", async (req, res) => {
     try {
       if (!requireAdminSession(req, res)) return;
-      await ensureDefaultCampaigns();
       const allRestaurants = await storage.getRestaurants();
       const allProfiles = await storage.listProfiles(2000);
       const events = await buildAnalyticsEvents();
@@ -1679,7 +1741,7 @@ export async function registerRoutes(
 
   app.get("/api/admin/config", async (req, res) => {
     try {
-      if (!requireAdminSession(req, res)) return;
+      if (!requirePermission("manage_config")(req, res)) return;
       const existing = await storage.getAdminConfig("main");
       if (existing?.value) {
         res.json(existing.value);
@@ -1694,7 +1756,7 @@ export async function registerRoutes(
 
   app.put("/api/admin/config", async (req, res) => {
     try {
-      if (!requireAdminSession(req, res)) return;
+      if (!requirePermission("manage_config")(req, res)) return;
       const payload = z.object({
         features: z.record(z.boolean()).optional().default({}),
         vibes: z.record(z.boolean()).optional().default({}),
@@ -1746,7 +1808,7 @@ export async function registerRoutes(
 
   app.get("/api/admin/config/api-keys", async (req, res) => {
     try {
-      if (!requireAdminSession(req, res)) return;
+      if (!requirePermission("manage_config")(req, res)) return;
       const statuses = ALLOWED_SERVICE_IDS.reduce<Record<string, { configured: boolean; source: "db" | "env" | "none" }>>((acc, id) => {
         acc[id] = { configured: getSource(id) !== "none", source: getSource(id) };
         return acc;
@@ -1759,7 +1821,7 @@ export async function registerRoutes(
 
   app.post("/api/admin/config/api-keys", async (req, res) => {
     try {
-      if (!requireAdminSession(req, res)) return;
+      if (!requirePermission("manage_config")(req, res)) return;
       const { serviceId, key } = z.object({
         serviceId: z.enum(ALLOWED_SERVICE_IDS),
         key: z.string().min(1),
@@ -1784,7 +1846,7 @@ export async function registerRoutes(
 
   app.post("/api/admin/config/api-keys/:serviceId/test", async (req, res) => {
     try {
-      if (!requireAdminSession(req, res)) return;
+      if (!requirePermission("manage_config")(req, res)) return;
       const { serviceId } = z.object({ serviceId: z.enum(ALLOWED_SERVICE_IDS) }).parse(req.params);
       const key = getKey(serviceId);
       if (!key) {
@@ -1862,6 +1924,335 @@ export async function registerRoutes(
         page,
         pageSize,
         totalPages,
+      });
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  async function getStoredOwners(): Promise<StoredOwner[]> {
+    const config = await storage.getAdminConfig(OWNERS_CONFIG_KEY);
+    const items = Array.isArray(config?.value?.items) ? (config?.value?.items as unknown[]) : [];
+    return items as StoredOwner[];
+  }
+
+  async function saveStoredOwners(items: StoredOwner[]) {
+    await storage.upsertAdminConfig(OWNERS_CONFIG_KEY, {
+      updatedAt: new Date().toISOString(),
+      items,
+    });
+  }
+
+  async function getStoredClaims(): Promise<StoredClaim[]> {
+    const config = await storage.getAdminConfig(CLAIMS_CONFIG_KEY);
+    const items = Array.isArray(config?.value?.items) ? (config?.value?.items as unknown[]) : [];
+    return items as StoredClaim[];
+  }
+
+  async function saveStoredClaims(items: StoredClaim[]) {
+    await storage.upsertAdminConfig(CLAIMS_CONFIG_KEY, {
+      updatedAt: new Date().toISOString(),
+      items,
+    });
+  }
+
+  app.get("/api/admin/owners", async (req, res) => {
+    try {
+      if (!requireAdminSession(req, res)) return;
+      const owners = await getStoredOwners();
+      res.json(owners);
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.get("/api/admin/claims", async (req, res) => {
+    try {
+      if (!requireAdminSession(req, res)) return;
+      const [claims, owners, restaurants] = await Promise.all([
+        getStoredClaims(),
+        getStoredOwners(),
+        storage.getRestaurants(),
+      ]);
+      const ownerById = new Map(owners.map((o) => [o.id, o]));
+      const restaurantById = new Map(restaurants.map((r) => [r.id, r]));
+      const enriched = claims
+        .slice()
+        .sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime())
+        .map((claim) => {
+          const owner = ownerById.get(claim.ownerId);
+          const restaurant = restaurantById.get(claim.restaurantId);
+          return {
+            ...claim,
+            restaurantName: restaurant?.name ?? `Restaurant #${claim.restaurantId}`,
+            ownerName: owner?.displayName ?? "Unknown owner",
+            ownerEmail: owner?.email ?? "",
+            ownerPhone: owner?.phone ?? "",
+            restaurantAddress: restaurant?.address ?? "",
+            restaurantCategory: restaurant?.category ?? "",
+            restaurantImageUrl: restaurant?.imageUrl ?? "",
+          };
+        });
+      res.json(enriched);
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.post("/api/admin/claims", async (req, res) => {
+    try {
+      if (!requireOwnerOrAdmin(req, res)) return;
+      const input = z.object({
+        restaurantId: z.number().int().positive(),
+        ownerId: z.number().int().positive(),
+        proofDocuments: z.array(z.string()).optional().default([]),
+        ownershipType: z.string().optional().default("single_location"),
+        notes: z.string().optional().default(""),
+      }).parse(req.body ?? {});
+
+      const [claims, owners] = await Promise.all([getStoredClaims(), getStoredOwners()]);
+      const ownerExists = owners.some((o) => o.id === input.ownerId);
+      if (!ownerExists) return res.status(400).json({ message: "Owner not found" });
+
+      const id = claims.reduce((max, item) => Math.max(max, item.id), 0) + 1;
+      const claim: StoredClaim = {
+        id,
+        restaurantId: input.restaurantId,
+        ownerId: input.ownerId,
+        ownershipType: input.ownershipType,
+        status: "pending",
+        submittedAt: new Date().toISOString(),
+        proofDocuments: input.proofDocuments,
+        reviewNotes: null,
+        verificationChecklist: [],
+        notes: input.notes,
+      };
+      await saveStoredClaims([claim, ...claims]);
+      res.status(201).json(claim);
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid payload" });
+      }
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.post("/api/admin/claims/bootstrap-test", async (req, res) => {
+    try {
+      if (!requireAdminSession(req, res)) return;
+      const input = z.object({
+        restaurantId: z.number().int().positive().optional(),
+      }).parse(req.body ?? {});
+
+      const restaurants = await storage.getRestaurants();
+      const targetRestaurant =
+        typeof input.restaurantId === "number"
+          ? restaurants.find((r) => r.id === input.restaurantId)
+          : restaurants[0];
+      if (!targetRestaurant) {
+        return res.status(400).json({ message: "No restaurants available for test claim bootstrap" });
+      }
+
+      const [owners, claims] = await Promise.all([getStoredOwners(), getStoredClaims()]);
+      const testEmail = "test-owner@example.com";
+      let owner = owners.find((o) => o.email.toLowerCase() === testEmail);
+      if (!owner) {
+        const nextOwnerId = owners.reduce((max, item) => Math.max(max, item.id), 0) + 1;
+        owner = {
+          id: nextOwnerId,
+          restaurantId: targetRestaurant.id,
+          displayName: "Test Owner",
+          email: testEmail,
+          phone: "+66-000-000-000",
+          isVerified: false,
+          paymentConnected: false,
+          paymentMethod: null,
+          subscriptionTier: "free",
+          subscriptionExpiry: null,
+          verificationStatus: "pending",
+        };
+        await saveStoredOwners([owner, ...owners]);
+      }
+
+      const existingClaim = claims.find(
+        (c) => c.ownerId === owner!.id && c.restaurantId === targetRestaurant.id && c.status === "pending",
+      );
+      if (existingClaim) {
+        return res.status(200).json({ owner, claim: existingClaim, reused: true });
+      }
+
+      const nextClaimId = claims.reduce((max, item) => Math.max(max, item.id), 0) + 1;
+      const claim: StoredClaim = {
+        id: nextClaimId,
+        restaurantId: targetRestaurant.id,
+        ownerId: owner.id,
+        ownershipType: "single_location",
+        status: "pending",
+        submittedAt: new Date().toISOString(),
+        reviewNotes: null,
+        notes: "Auto-generated test claim",
+        proofDocuments: ["https://example.com/test-proof.pdf"],
+        verificationChecklist: [
+          { id: "business_license", label: "Business license", checked: true },
+          { id: "id_match", label: "Owner ID matches profile", checked: false },
+        ],
+      };
+      await saveStoredClaims([claim, ...claims]);
+      res.status(201).json({ owner, claim, reused: false });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid payload" });
+      }
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.patch("/api/admin/claims/:id", async (req, res) => {
+    try {
+      if (!requireAdminSession(req, res)) return;
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id)) return res.status(400).json({ message: "Invalid claim id" });
+      const input = z.object({
+        status: z.enum(["pending", "approved", "rejected"]),
+        reviewNotes: z.string().optional(),
+        verificationChecklist: z.array(z.object({
+          id: z.string(),
+          label: z.string(),
+          checked: z.boolean(),
+        })).optional(),
+      }).parse(req.body ?? {});
+
+      const [claims, owners] = await Promise.all([getStoredClaims(), getStoredOwners()]);
+      const idx = claims.findIndex((c) => c.id === id);
+      if (idx < 0) return res.status(404).json({ message: "Claim not found" });
+
+      const updated: StoredClaim = {
+        ...claims[idx],
+        status: input.status,
+        reviewNotes: input.reviewNotes ?? claims[idx].reviewNotes ?? null,
+        verificationChecklist: input.verificationChecklist ?? claims[idx].verificationChecklist ?? [],
+      };
+      claims[idx] = updated;
+      await saveStoredClaims(claims);
+
+      if (updated.status === "approved") {
+        const ownerIndex = owners.findIndex((o) => o.id === updated.ownerId);
+        if (ownerIndex >= 0) {
+          owners[ownerIndex] = {
+            ...owners[ownerIndex],
+            restaurantId: updated.restaurantId,
+            isVerified: true,
+            verificationStatus: "approved",
+          };
+          await saveStoredOwners(owners);
+        }
+      }
+
+      res.json(updated);
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid payload" });
+      }
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.get("/api/admin/owner/search-restaurants", async (req, res) => {
+    try {
+      if (!requireOwnerOrAdmin(req, res)) return;
+      const q = String(req.query.q ?? "").trim().toLowerCase();
+      if (q.length < 2) return res.json([]);
+      const restaurants = await storage.getRestaurants();
+      const items = restaurants
+        .filter((r) => (
+          r.name.toLowerCase().includes(q) ||
+          r.category.toLowerCase().includes(q) ||
+          r.address.toLowerCase().includes(q)
+        ))
+        .slice(0, 20)
+        .map((r) => ({
+          id: r.id,
+          name: r.name,
+          category: r.category,
+          address: r.address,
+          imageUrl: r.imageUrl,
+          rating: r.rating,
+          priceLevel: r.priceLevel,
+        }));
+      res.json(items);
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.get("/api/admin/owner/dashboard", async (req, res) => {
+    try {
+      if (!requireOwnerOrAdmin(req, res)) return;
+      const ownerEmail = req.session?.ownerEmail ?? process.env.OWNER_EMAIL ?? "owner@example.com";
+      const [owners, claims, restaurants, campaigns, events] = await Promise.all([
+        getStoredOwners(),
+        getStoredClaims(),
+        storage.getRestaurants(),
+        storage.listCampaigns(),
+        storage.listEventLogs(2000),
+      ]);
+
+      let owner = owners.find((o) => o.email.toLowerCase() === ownerEmail.toLowerCase());
+      if (!owner) {
+        const nextId = owners.reduce((max, item) => Math.max(max, item.id), 0) + 1;
+        owner = {
+          id: nextId,
+          restaurantId: req.session?.ownerRestaurantId ?? 0,
+          displayName: process.env.OWNER_DISPLAY_NAME ?? "Restaurant Owner",
+          email: ownerEmail,
+          phone: null,
+          isVerified: false,
+          paymentConnected: false,
+          subscriptionTier: process.env.OWNER_SUBSCRIPTION_TIER ?? "free",
+          subscriptionExpiry: null,
+          verificationStatus: "pending",
+        };
+        await saveStoredOwners([owner, ...owners]);
+      }
+
+      const restaurant = owner.restaurantId ? restaurants.find((r) => r.id === owner?.restaurantId) ?? null : null;
+      const ownerClaims = claims.filter((c) => c.ownerId === owner?.id);
+      const ownerCampaigns = campaigns.filter((c) => (
+        owner?.restaurantId ? c.restaurantOwnerKey === `owner_${owner.restaurantId}` : false
+      ));
+      const relatedEvents = owner?.restaurantId ? events.filter((e) => e.itemId === owner?.restaurantId) : [];
+      const stats = {
+        views: relatedEvents.filter((e) => e.eventType === "view_card" || e.eventType === "view_detail").length,
+        likes: relatedEvents.filter((e) => e.eventType === "favorite").length,
+        saves: relatedEvents.filter((e) => e.eventType === "favorite").length,
+        deliveryTaps: relatedEvents.filter((e) => e.eventType === "order_click" || e.eventType === "booking_click").length,
+      };
+
+      res.json({
+        owner: {
+          id: owner.id,
+          email: owner.email,
+          displayName: owner.displayName,
+          phone: owner.phone ?? null,
+          restaurantId: owner.restaurantId || null,
+          isVerified: owner.isVerified ?? false,
+          verificationStatus: owner.verificationStatus ?? "pending",
+          subscriptionTier: owner.subscriptionTier ?? "free",
+          subscriptionExpiry: owner.subscriptionExpiry ?? null,
+        },
+        restaurant: restaurant ? {
+          id: restaurant.id,
+          name: restaurant.name,
+          category: restaurant.category,
+          address: restaurant.address,
+          imageUrl: restaurant.imageUrl,
+          rating: restaurant.rating,
+          priceLevel: restaurant.priceLevel,
+          ownerClaimStatus: ownerClaims[0]?.status ?? null,
+        } : null,
+        campaigns: ownerCampaigns,
+        claims: ownerClaims,
+        stats,
       });
     } catch {
       res.status(500).json({ message: "Internal server error" });
@@ -2338,7 +2729,7 @@ export async function registerRoutes(
 
   app.get("/api/admin/users", async (req, res) => {
     try {
-      if (!requireAdminSession(req, res)) return;
+      if (!requirePermission("manage_users")(req, res)) return;
       const limit = Math.min(Number(req.query.limit || 200), 500);
       const search = String(req.query.search || "").toLowerCase().trim();
       const profiles = await storage.listProfiles(limit);
@@ -2357,7 +2748,7 @@ export async function registerRoutes(
 
   app.get("/api/admin/users/:lineUserId", async (req, res) => {
     try {
-      if (!requireAdminSession(req, res)) return;
+      if (!requirePermission("manage_users")(req, res)) return;
       const profile = await storage.getProfile(req.params.lineUserId);
       if (!profile) return res.status(404).json({ message: "Profile not found" });
       res.json(profile);
@@ -2606,10 +2997,14 @@ export async function registerRoutes(
             avatarUrl: input.avatarUrl,
             joined: true,
           });
+          const allMembers = await storage.listGroupMembers(session.id);
+          broadcastGroupUpdate(code, { type: "member_joined", members: allMembers });
           return res.json(updated ?? existing);
         }
         if (!existing.joined) {
           const updated = await storage.updateGroupMember(existing.id, { joined: true });
+          const allMembers = await storage.listGroupMembers(session.id);
+          broadcastGroupUpdate(code, { type: "member_joined", members: allMembers });
           return res.json(updated ?? existing);
         }
         return res.json(existing);
@@ -2621,6 +3016,8 @@ export async function registerRoutes(
         avatarUrl: input.avatarUrl,
         joined: true,
       });
+      const allMembers = await storage.listGroupMembers(session.id);
+      broadcastGroupUpdate(code, { type: "member_joined", members: allMembers });
       res.status(201).json(created);
     } catch (err) {
       if (err instanceof z.ZodError) {
@@ -2677,7 +3074,23 @@ export async function registerRoutes(
       const locationTokens = selectedLocations.flatMap((loc) => locationTokensMap[loc.toLowerCase()] ?? []);
       const dietTokens = selectedDiet.flatMap((diet) => dietTokensMap[diet.toLowerCase()] ?? []);
 
-      const all = await storage.getRestaurants();
+      // ── Geo-aware fetch: same 3-level cache as solo mode ──────────────────
+      // If lat/lng are provided, run through placesService so the area is
+      // populated in the DB (L1 memory → L2 DB tile → L3 external API).
+      // This ensures group mode always has restaurant data for a new location,
+      // and never calls the external API twice for an already-known area.
+      let all: typeof import("@shared/schema").restaurants.$inferSelect[];
+      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        const placesResult = await placesService.query({ lat, lng, radius });
+        // Ensure every fetched place has a real DB row (no-op for known places)
+        await Promise.all(placesResult.data.map((p) => storage.findOrCreateFromPlace(p)));
+        // Now read from DB using the bounding box — avoids loading all restaurants into memory
+        all = await storage.findRestaurantsNear(lat, lng, radius);
+      } else {
+        // No location provided — fall back to full DB scan (settings-only filter)
+        all = await storage.getRestaurants();
+      }
+
       let filtered = all.filter((r) => budgetPredicate(Number(r.priceLevel || 2)));
 
       if (Number.isFinite(lat) && Number.isFinite(lng)) {
@@ -2875,27 +3288,9 @@ export async function registerRoutes(
         }
 
         if (created && event.userId) {
-          const current = await storage.getUserFeatureSnapshot(event.userId);
-          const cuisineAffinity = { ...(current?.cuisineAffinity ?? {}) };
-          const category = String(event.metadata?.category ?? "").trim();
-          if (category && (event.eventType === "swipe" || event.eventType === "favorite")) {
-            cuisineAffinity[category] = (cuisineAffinity[category] ?? 0) + 0.1;
-          }
-
-          const dislikedItemIds = [...(current?.dislikedItemIds ?? [])];
-          if (event.eventType === "dismiss" && event.itemId && !dislikedItemIds.includes(event.itemId)) {
-            dislikedItemIds.push(event.itemId);
-          }
-
-          await storage.upsertUserFeatureSnapshot(event.userId, {
-            cuisineAffinity,
-            preferredPriceLevel:
-              Number.isFinite(Number(event.metadata?.priceLevel))
-                ? Number(event.metadata?.priceLevel)
-                : current?.preferredPriceLevel ?? 2,
-            activeHours: Array.from(new Set([...(current?.activeHours ?? []), new Date(event.timestamp).getHours()])),
-            dislikedItemIds,
-          });
+          // Async: enqueue for the feature-update job (runs every 60s).
+          // This removes 2 blocking DB round-trips from the hot event-ingestion path.
+          enqueueFeatureUpdate(event.userId);
         }
 
         if (created && event.itemId) {
@@ -3117,11 +3512,112 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/admin/analytics/quality-trend", async (req, res) => {
+    try {
+      if (!requireAnalyticsAccess(req, res)) return;
+      const config = await storage.getAdminConfig("analytics_quality_reports");
+      const reports = Array.isArray(config?.value?.items) ? config.value.items : [];
+      const lastAlerts = Array.isArray(config?.value?.latestAlerts) ? config.value.latestAlerts : [];
+      res.json({ reports, lastAlerts });
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.get("/api/admin/analytics/slo-status", async (req, res) => {
+    try {
+      if (!requireAnalyticsAccess(req, res)) return;
+
+      const config = await storage.getAdminConfig("analytics_quality_reports");
+      const reports = Array.isArray(config?.value?.items) ? config.value.items : [];
+      const latestReport = reports[0] as { ratesPct?: Record<string, number> } | undefined;
+
+      const qualityPassRatePct = latestReport?.ratesPct
+        ? Math.max(0, 100 - (latestReport.ratesPct.unknownEventType ?? 0) - (latestReport.ratesPct.missingTimestamp ?? 0))
+        : 100;
+
+      const userSnapshots = await storage.listUserFeatureSnapshots(500);
+      const now = Date.now();
+      const freshnessHours =
+        userSnapshots.length > 0
+          ? userSnapshots.reduce((sum, s) => sum + (now - new Date(s.updatedAt).getTime()) / 3_600_000, 0) / userSnapshots.length
+          : 0;
+
+      const slos = checkSLOs({
+        qualityPassRatePct,
+        featureFreshnessHoursAvg: freshnessHours,
+      });
+
+      const failing = slos.filter((s) => !s.passing);
+      if (failing.length > 0) {
+        await sendAlert({
+          source: "slo-check",
+          severity: "warn",
+          message: `SLO breach: ${failing.map((s) => s.name).join(", ")}`,
+          metadata: { slos: failing },
+        });
+      }
+
+      res.json({ slos, checkedAt: new Date().toISOString() });
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
   app.get("/api/admin/analytics/derived", async (req, res) => {
     try {
       if (!requireAnalyticsAccess(req, res)) return;
       const daysParam = Number(req.query.days ?? 30);
       const days = Number.isFinite(daysParam) ? Math.min(Math.max(daysParam, 1), 180) : 30;
+
+      // Try materialized rollups first (fast path)
+      const rollups = await storage.listDailyRollups(days);
+      if (rollups.length > 0) {
+        const totals = rollups.reduce(
+          (acc, r) => ({
+            events: acc.events + r.totalEvents,
+            users: Math.max(acc.users, r.uniqueUsers),
+            items: Math.max(acc.items, r.uniqueItems),
+          }),
+          { events: 0, users: 0, items: 0 },
+        );
+        const byTypeAgg: Record<string, number> = {};
+        for (const r of rollups) {
+          for (const [k, v] of Object.entries(r.byType ?? {})) {
+            byTypeAgg[k] = (byTypeAgg[k] ?? 0) + v;
+          }
+        }
+        const funnel = rollups.reduce(
+          (acc, r) => ({
+            views: acc.views + r.funnelViews,
+            swipes: acc.swipes + r.funnelSwipes,
+            favorites: acc.favorites + r.funnelFavorites,
+            orderIntent: acc.orderIntent + r.funnelOrders,
+          }),
+          { views: 0, swipes: 0, favorites: 0, orderIntent: 0 },
+        );
+        const dailyEvents = rollups
+          .map((r) => ({ day: r.date, count: r.totalEvents }))
+          .sort((a, b) => a.day.localeCompare(b.day));
+        const latestRollup = rollups[0];
+        return res.json({
+          windowDays: days,
+          source: "rollup",
+          updatedAt: latestRollup?.updatedAt,
+          totals,
+          funnel,
+          dailyEvents,
+          topUsers: [],
+          topItems: [],
+          retention: {
+            cohortSize: totals.users,
+            d1RatePct: latestRollup?.d1RetentionPct ?? 0,
+            d7RatePct: latestRollup?.d7RetentionPct ?? 0,
+          },
+        });
+      }
+
+      // Fallback: on-the-fly computation (no rollups yet)
       const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
       const logs = await storage.listEventLogs(10000, since);
 
@@ -3182,6 +3678,7 @@ export async function registerRoutes(
 
       res.json({
         windowDays: days,
+        source: "realtime",
         totals: {
           events: logs.length,
           users: userMap.size,
@@ -3257,7 +3754,7 @@ export async function registerRoutes(
 
   app.get("/api/admin/experiments/config", async (req, res) => {
     try {
-      if (!requireAdminSession(req, res)) return;
+      if (!requirePermission("manage_config")(req, res)) return;
       const config = await storage.getAdminConfig("experiments_config");
       const defaults: ExperimentConfig[] = [
         {
@@ -3280,7 +3777,7 @@ export async function registerRoutes(
 
   app.put("/api/admin/experiments/config", async (req, res) => {
     try {
-      if (!requireAdminSession(req, res)) return;
+      if (!requirePermission("manage_config")(req, res)) return;
       const input = z.object({
         experiments: z.array(z.object({
           experimentKey: z.string().min(1),
@@ -3380,10 +3877,15 @@ export async function registerRoutes(
         limit: z.coerce.number().int().positive().max(50).optional().default(20),
       }).parse(req.query ?? {});
 
+      // Check per-user cache first (TTL: 5 min, invalidated on feature-snapshot rebuild)
+      const cacheKey = `${input.userId}:${input.lat ?? ""}:${input.lng ?? ""}:${input.limit}`;
+      const cached = getRecCache(cacheKey);
+      if (cached) return res.json(cached);
+
       const latestConsent = await storage.getLatestConsent(input.userId, "behavior_tracking");
       const restaurants = await storage.getRestaurants("trending");
 
-      let source: "personalized" | "segment" | "trending" = "trending";
+      let source: "personalized" | "sparse_blend" | "segment" | "trending" = "trending";
       let items: Array<any> = [];
 
       if (latestConsent?.granted) {
@@ -3417,7 +3919,9 @@ export async function registerRoutes(
         }));
       }
 
-      res.json({ source, items });
+      const response = { source, items };
+      setRecCache(cacheKey, response);
+      res.json(response);
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid query" });
@@ -3429,19 +3933,69 @@ export async function registerRoutes(
   app.post("/api/privacy/export", async (req, res) => {
     try {
       const input = z.object({ userId: z.string().min(1) }).parse(req.body ?? {});
-      const events = await storage.listEventLogsByUser(input.userId);
-      const features = await storage.getUserFeatureSnapshot(input.userId);
-      const consent = await storage.getLatestConsent(input.userId, "behavior_tracking");
+      const [events, preferences, features, consent] = await Promise.all([
+        storage.listEventLogsByUser(input.userId),
+        storage.listUserPreferences(input.userId),
+        storage.getUserFeatureSnapshot(input.userId),
+        storage.getLatestConsent(input.userId, "behavior_tracking"),
+      ]);
       res.json({
         userId: input.userId,
+        exportedAt: new Date().toISOString(),
         events,
-        features: features ?? null,
-        consents: consent ? [consent] : [],
+        preferences,
+        featureSnapshot: features ?? null,
+        consentLog: consent ?? null,
       });
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid payload" });
       }
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.get("/api/campaigns/active", async (req, res) => {
+    try {
+      const allCampaigns = await storage.listCampaigns();
+      const today = new Date().toISOString().slice(0, 10);
+      const active = allCampaigns
+        .filter((c) => c.status === "active" && (!c.endDate || c.endDate >= today))
+        .map((c) => ({
+          id: String(c.id),
+          title: c.title,
+          dealType: c.dealType ?? "fixedAmount",
+          dealValue: c.dealValue ?? "",
+          endDate: c.endDate ?? "",
+          restaurantOwnerKey: c.restaurantOwnerKey,
+          restaurantName: c.restaurantOwnerKey.split("@")[0] ?? c.title,
+          restaurantImage: "",
+          description: "",
+          accentColor: "#1E293B",
+        }));
+      res.json(active);
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.get("/api/admin/analytics/kpi-trends", async (req, res) => {
+    try {
+      if (!requireAnalyticsAccess(req, res)) return;
+      const rollups = await storage.listDailyRollups(7);
+      const sorted = [...rollups].sort((a, b) => a.date.localeCompare(b.date));
+      const padTo7 = <T>(arr: T[], fill: T): T[] => {
+        const out = [...arr];
+        while (out.length < 7) out.unshift(fill);
+        return out.slice(-7);
+      };
+      res.json({
+        dates: padTo7(sorted.map((r) => r.date), ""),
+        eventCounts: padTo7(sorted.map((r) => r.totalEvents), 0),
+        userCounts: padTo7(sorted.map((r) => r.uniqueUsers), 0),
+        swipeCounts: padTo7(sorted.map((r) => r.funnelSwipes), 0),
+      });
+    } catch {
       res.status(500).json({ message: "Internal server error" });
     }
   });

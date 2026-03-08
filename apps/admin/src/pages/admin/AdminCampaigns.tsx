@@ -23,11 +23,17 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 
-const statusTabs = ["All", "Draft", "Active", "Paused", "Ended"] as const;
+const statusTabs = [
+  { label: "All", value: "all" },
+  { label: "Draft", value: "draft" },
+  { label: "Active", value: "active" },
+  { label: "Paused", value: "paused" },
+  { label: "Ended", value: "ended" },
+] as const;
 const pageSizes = [10, 25, 50] as const;
 
 type CampaignStatus = "draft" | "active" | "paused" | "ended";
-type CampaignQueryStatus = CampaignStatus | "All";
+type CampaignQueryStatus = CampaignStatus | "all";
 
 type CampaignListResponse = {
   items: Campaign[];
@@ -95,7 +101,7 @@ function formatNum(n: number): string {
 }
 
 export default function AdminCampaigns() {
-  const [activeTab, setActiveTab] = useState<CampaignQueryStatus>("All");
+  const [activeTab, setActiveTab] = useState<CampaignQueryStatus>("all");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState<number>(10);
@@ -111,7 +117,7 @@ export default function AdminCampaigns() {
 
   const campaignsUrl = useMemo(() => {
     const params = new URLSearchParams();
-    if (activeTab !== "All") params.set("status", activeTab.toLowerCase());
+    if (activeTab !== "all") params.set("status", activeTab);
     if (search.trim()) params.set("search", search.trim());
     params.set("page", String(page));
     params.set("pageSize", String(pageSize));
@@ -239,8 +245,8 @@ export default function AdminCampaigns() {
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="bg-gray-100 dark:bg-muted rounded-xl p-1 inline-flex gap-1 flex-wrap">
           {statusTabs.map((tab) => (
-            <button key={tab} onClick={() => setActiveTab(tab)} className={`px-4 py-1.5 text-sm font-medium rounded-lg transition-colors ${activeTab === tab ? "bg-white dark:bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`} data-testid={`tab-${tab.toLowerCase()}`}>
-              {tab}
+            <button key={tab.value} onClick={() => setActiveTab(tab.value)} className={`px-4 py-1.5 text-sm font-medium rounded-lg transition-colors ${activeTab === tab.value ? "bg-white dark:bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`} data-testid={`tab-${tab.value}`}>
+              {tab.label}
             </button>
           ))}
         </div>

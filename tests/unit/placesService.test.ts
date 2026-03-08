@@ -1,9 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import * as cache from "../../server/services/places/cache/cacheRepo";
-import * as overpass from "../../server/services/places/providers/overpass";
-import * as google from "../../server/services/places/providers/google";
-import { query } from "../../server/services/places/placesService";
-import type { NormalizedPlace } from "../../server/services/places/types";
+
+// Mock storage (and its transitive db.ts dep) before any imports that load placesService.
+// Returns empty/undefined so all tests fall through to the OSM/Google provider spies,
+// preserving existing test behaviour without needing a real DATABASE_URL.
+vi.mock("../../apps/api/storage", () => ({
+  storage: {
+    getPlacesTile: vi.fn().mockResolvedValue(undefined),
+    upsertPlacesTile: vi.fn().mockResolvedValue(undefined),
+    findRestaurantsNear: vi.fn().mockResolvedValue([]),
+  },
+}));
+
+import * as cache from "../../apps/api/services/places/cache/cacheRepo";
+import * as overpass from "../../apps/api/services/places/providers/overpass";
+import * as google from "../../apps/api/services/places/providers/google";
+import { query } from "../../apps/api/services/places/placesService";
+import type { NormalizedPlace } from "../../apps/api/services/places/types";
 
 const makePlace = (name: string, lat = 13.74, lng = 100.54): NormalizedPlace => ({
   id: `osm:node:${name}`,

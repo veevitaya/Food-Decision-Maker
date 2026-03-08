@@ -1,4 +1,4 @@
-import { pgTable, text, serial, integer, boolean, jsonb, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, boolean, jsonb, timestamp, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -39,9 +39,11 @@ export type InsertRestaurant = typeof restaurants.$inferInsert;
 export const userPreferences = pgTable("user_preferences", {
   id: serial("id").primaryKey(),
   userId: text("user_id").notNull(),
-  restaurantId: integer("restaurant_id").notNull(),
+  restaurantId: integer("restaurant_id").notNull().references(() => restaurants.id, { onDelete: "cascade" }),
   preference: text("preference").notNull(),
-});
+}, (t) => ({
+  userIdIdx: index("user_preferences_user_id_idx").on(t.userId),
+}));
 export const insertUserPreferenceSchema = createInsertSchema(userPreferences).omit({ id: true });
 export type UserPreference = typeof userPreferences.$inferSelect;
 export type InsertUserPreference = z.infer<typeof insertUserPreferenceSchema>;
@@ -80,12 +82,14 @@ export const groupSessions = pgTable("group_sessions", {
 
 export const groupMembers = pgTable("group_members", {
   id: serial("id").primaryKey(),
-  sessionId: integer("session_id").notNull(),
+  sessionId: integer("session_id").notNull().references(() => groupSessions.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   avatarUrl: text("avatar_url"),
   joined: boolean("joined").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (t) => ({
+  sessionIdIdx: index("group_members_session_id_idx").on(t.sessionId),
+}));
 
 export const insertGroupSessionSchema = createInsertSchema(groupSessions).omit({ id: true, createdAt: true });
 export type GroupSession = typeof groupSessions.$inferSelect;
@@ -109,6 +113,20 @@ export const insertPlacesRequestLogSchema = createInsertSchema(placesRequestLogs
 export type PlacesRequestLog = typeof placesRequestLogs.$inferSelect;
 export type InsertPlacesRequestLog = z.infer<typeof insertPlacesRequestLogSchema>;
 
+/**
+ * Geo tile cache tracker.
+ * Records which grid tiles have had their restaurant data fetched from external APIs.
+ * Key format: "tile:{lat2dp}:{lng2dp}:{radiusM}:{query}"
+ * Allows the places service to skip API calls for already-fetched areas, surviving server restarts.
+ */
+export const placesTiles = pgTable("places_tiles", {
+  tileKey: text("tile_key").primaryKey(),
+  lastFetchedAt: timestamp("last_fetched_at").defaultNow().notNull(),
+  resultCount: integer("result_count").notNull().default(0),
+  source: text("source").notNull().default("osm"),
+});
+export type PlacesTile = typeof placesTiles.$inferSelect;
+
 export const campaigns = pgTable("campaigns", {
   id: serial("id").primaryKey(),
   title: text("title").notNull(),
@@ -125,7 +143,10 @@ export const campaigns = pgTable("campaigns", {
   totalBudget: integer("total_budget").notNull().default(0),
   spent: integer("spent").notNull().default(0),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (t) => ({
+  statusIdx: index("campaigns_status_idx").on(t.status),
+  ownerKeyIdx: index("campaigns_owner_key_idx").on(t.restaurantOwnerKey),
+}));
 
 export const insertCampaignSchema = createInsertSchema(campaigns).omit({ id: true, createdAt: true });
 export type Campaign = typeof campaigns.$inferSelect;
@@ -169,7 +190,10 @@ export const eventLogs = pgTable("event_logs", {
   itemId: integer("item_id"),
   metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (t) => ({
+  userIdIdx: index("event_logs_user_id_idx").on(t.userId),
+  createdAtIdx: index("event_logs_created_at_idx").on(t.createdAt),
+}));
 
 export const insertEventLogSchema = createInsertSchema(eventLogs).omit({ id: true, createdAt: true });
 export type EventLog = typeof eventLogs.$inferSelect;
@@ -192,7 +216,7 @@ export type InsertUserFeatureSnapshot = z.infer<typeof insertUserFeatureSnapshot
 
 export const itemFeatureSnapshots = pgTable("item_feature_snapshots", {
   id: serial("id").primaryKey(),
-  itemId: integer("item_id").notNull().unique(),
+  itemId: integer("item_id").notNull().unique().references(() => restaurants.id, { onDelete: "cascade" }),
   itemType: text("item_type").notNull().default("restaurant"),
   ctr: integer("ctr").notNull().default(0),
   likeRate: integer("like_rate").notNull().default(0),
@@ -212,11 +236,32 @@ export const consentLogs = pgTable("consent_logs", {
   granted: boolean("granted").notNull().default(false),
   version: text("version").notNull().default("v1"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (t) => ({
+  userIdIdx: index("consent_logs_user_id_idx").on(t.userId),
+}));
 
 export const insertConsentLogSchema = createInsertSchema(consentLogs).omit({ id: true, createdAt: true });
 export type ConsentLog = typeof consentLogs.$inferSelect;
 export type InsertConsentLog = z.infer<typeof insertConsentLogSchema>;
+
+export const analyticsDailyRollups = pgTable("analytics_daily_rollups", {
+  date: text("date").primaryKey(),
+  totalEvents: integer("total_events").notNull().default(0),
+  uniqueUsers: integer("unique_users").notNull().default(0),
+  uniqueItems: integer("unique_items").notNull().default(0),
+  byType: jsonb("by_type").$type<Record<string, number>>().default({}),
+  funnelViews: integer("funnel_views").notNull().default(0),
+  funnelSwipes: integer("funnel_swipes").notNull().default(0),
+  funnelFavorites: integer("funnel_favorites").notNull().default(0),
+  funnelOrders: integer("funnel_orders").notNull().default(0),
+  d1RetentionPct: integer("d1_retention_pct").notNull().default(0),
+  d7RetentionPct: integer("d7_retention_pct").notNull().default(0),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const insertAnalyticsDailyRollupSchema = createInsertSchema(analyticsDailyRollups).omit({ updatedAt: true });
+export type AnalyticsDailyRollup = typeof analyticsDailyRollups.$inferSelect;
+export type InsertAnalyticsDailyRollup = z.infer<typeof insertAnalyticsDailyRollupSchema>;
 
 // UI compatibility types for admin modules
 export type AnalyticsEvent = {

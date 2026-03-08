@@ -45,7 +45,7 @@ const restaurantListItemSchema = z.object({
   })).optional(),
 });
 
-const analyticsEventSchema = z.object({
+export const analyticsEventSchema = z.object({
   eventId: z.string().min(8),
   eventVersion: z.string().min(1).default("v1"),
   idempotencyKey: z.string().min(8),

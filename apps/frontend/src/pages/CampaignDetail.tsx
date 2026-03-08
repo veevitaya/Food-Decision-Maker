@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useLocation, useRoute } from "wouter";
+import { useQuery } from "@tanstack/react-query";
 import { BottomNav } from "@/components/BottomNav";
 import { ArrowLeft, Clock, MapPin, ChevronRight, X, Copy, Check, Shield } from "lucide-react";
 import { MOCK_HOME_CAMPAIGNS, MOCK_RESTAURANT_CAMPAIGNS, getDealLabel } from "@/components/CampaignBanner";
 
-function getAllCampaigns() {
+function getAllMockCampaigns() {
   const all = [...MOCK_HOME_CAMPAIGNS];
   const restaurantIds = Object.keys(MOCK_RESTAURANT_CAMPAIGNS).map(Number);
   for (const rid of restaurantIds) {
@@ -328,8 +329,18 @@ export default function CampaignDetail() {
   const campaignId = params?.id;
   const [showRedemption, setShowRedemption] = useState(false);
 
-  const allCampaigns = useMemo(() => getAllCampaigns(), []);
-  const campaign = allCampaigns.find(c => c.id === campaignId);
+  const { data: apiCampaigns } = useQuery({
+    queryKey: ["/api/campaigns/active"],
+    queryFn: async () => {
+      const res = await fetch("/api/campaigns/active");
+      if (!res.ok) return [];
+      return res.json() as Promise<Array<{ id: string; title: string; dealType: string; dealValue: string; endDate: string; restaurantName: string; restaurantImage: string; description: string; accentColor: string; restaurantId?: number }>>;
+    },
+  });
+  const allMockCampaigns = useMemo(() => getAllMockCampaigns(), []);
+  const campaign = (apiCampaigns && apiCampaigns.length > 0)
+    ? (apiCampaigns.find((c) => c.id === campaignId) ?? allMockCampaigns.find((c) => c.id === campaignId))
+    : allMockCampaigns.find((c) => c.id === campaignId);
 
   if (!campaign) {
     return (

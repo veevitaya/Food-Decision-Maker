@@ -2,9 +2,12 @@ import type { NormalizedPlace, PlacesQuery, PlacesResult } from "./types.js";
 import * as cache from "./cache/cacheRepo.js";
 import { queryOverpass } from "./providers/overpass.js";
 import { queryGoogle } from "./providers/google.js";
+import { storage } from "../../storage.js";
+import type { Restaurant } from "@shared/schema";
 
 // Read at call-time so env vars can be changed in tests
 const getProviderFallback = () => process.env.PROVIDER_FALLBACK ?? "osm-error-only";
+
 
 /** Haversine distance in metres between two coordinates */
 function distanceM(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -58,30 +61,77 @@ function merge(osmPlaces: NormalizedPlace[], googlePlaces: NormalizedPlace[]): N
   return merged;
 }
 
+/** Convert a DB restaurant row to a NormalizedPlace for the cache layer. */
+function restaurantToPlace(r: Restaurant, userLat: number, userLng: number): NormalizedPlace {
+  const rLat = Number(r.lat);
+  const rLng = Number(r.lng);
+  return {
+    id: String(r.id),
+    name: r.name,
+    lat: rLat,
+    lng: rLng,
+    address: r.address ?? "",
+    category: r.category ?? "restaurant",
+    rating: r.rating ?? undefined,
+    priceLevel: r.priceLevel ?? undefined,
+    photos: r.imageUrl ? [r.imageUrl] : [],
+    phone: r.phone ?? undefined,
+    source: "cache",
+    distanceMeters: distanceM(userLat, userLng, rLat, rLng),
+  };
+}
+
 export async function query(params: PlacesQuery): Promise<PlacesResult> {
   const { lat, lng, radius = 2000, query: q = "restaurant", forceRefresh, sourcePreference } = params;
   const cacheKey = cache.buildKey(lat, lng, radius, q);
 
-  // 1. Cache hit — return immediately
+  // ── L1: In-memory cache ───────────────────────────────────────────────────
   if (!forceRefresh && cache.isFreshAndSufficient(cacheKey)) {
     const entry = cache.get(cacheKey)!;
     return { data: entry.data, source: "cache", fromCache: true, isFallback: false };
   }
 
-  // 2. Stale-while-refresh — return stale data, refresh in background
+  // Stale-while-refresh — return stale data immediately, refresh in background
   const staleEntry = cache.get(cacheKey);
   if (!forceRefresh && staleEntry && !cache.isFreshAndSufficient(cacheKey)) {
-    // kick off background refresh (non-blocking)
     refreshInBackground(params, cacheKey);
     return { data: staleEntry.data, source: "cache", fromCache: true, isFallback: false };
   }
 
-  // 3. Full fetch
+  // ── L2: DB tile cache ─────────────────────────────────────────────────────
+  // Check if this ~1km grid tile has already been fetched from external APIs.
+  // This survives server restarts and prevents duplicate API calls for nearby locations.
+  if (!forceRefresh) {
+    try {
+      const tileKey = cache.buildTileKey(lat, lng, radius, q);
+      // A tile that exists is always valid — once fetched, DB data is the source of truth forever.
+      // Use forceRefresh: true to explicitly re-fetch an area from the external APIs.
+      const tile = await storage.getPlacesTile(tileKey);
+
+      if (tile) {
+        const dbRestaurants = await storage.findRestaurantsNear(lat, lng, radius);
+        if (dbRestaurants.length >= cache.getMinResults()) {
+          const places = dbRestaurants
+            .map((r) => restaurantToPlace(r, lat, lng))
+            .sort((a, b) => (a.distanceMeters ?? 0) - (b.distanceMeters ?? 0));
+
+          // Warm L1 so the next request within this server lifecycle is instant
+          cache.set(cacheKey, places);
+          return { data: places, source: "cache", fromCache: true, isFallback: false };
+        }
+      }
+    } catch (err) {
+      // DB unavailable — fall through to external API (graceful degradation)
+      console.warn("[placesService] L2 tile check failed, falling through to API:", err);
+    }
+  }
+
+  // ── L3: External API fetch ────────────────────────────────────────────────
   return fetchAndCache(params, cacheKey);
 }
 
 async function fetchAndCache(params: PlacesQuery, cacheKey: string): Promise<PlacesResult> {
-  const { lat, lng, radius = 2000, sourcePreference } = params;
+  const { lat, lng, radius = 2000, query: q = "restaurant", sourcePreference } = params;
 
   let osmPlaces: NormalizedPlace[] = [];
   let googlePlaces: NormalizedPlace[] = [];
@@ -133,7 +183,14 @@ async function fetchAndCache(params: PlacesQuery, cacheKey: string): Promise<Pla
   // Sort by distance
   combined.sort((a, b) => (a.distanceMeters ?? 0) - (b.distanceMeters ?? 0));
 
+  // Write to L1 memory cache
   cache.set(cacheKey, combined);
+
+  // Write to L2 DB tile tracker (async, non-blocking — don't delay the response)
+  const tileKey = cache.buildTileKey(lat, lng, radius, q);
+  storage.upsertPlacesTile(tileKey, combined.length, source).catch((err) => {
+    console.warn("[placesService] Failed to write places tile:", err);
+  });
 
   return { data: combined, source, fromCache: false, isFallback };
 }

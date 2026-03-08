@@ -1,5 +1,6 @@
 import { storage } from "../storage";
 import { sendAlert } from "../lib/alerting";
+import { withJobLock } from "../lib/jobLock";
 
 type QualityIssueTotals = {
   totalEvents: number;
@@ -108,10 +109,32 @@ export async function generateAnalyticsQualityReport(windowDays = 1): Promise<Qu
   };
 }
 
+function detectAnomalies(current: QualityReport, previous: QualityReport): string[] {
+  const anomalies: string[] = [];
+  const fields = Object.keys(current.ratesPct) as (keyof typeof current.ratesPct)[];
+  for (const field of fields) {
+    const cur = current.ratesPct[field] ?? 0;
+    const prev = previous.ratesPct[field] ?? 0;
+    if (prev > 0 && cur > prev * 2 && cur > 1.0) {
+      anomalies.push(`spike_detected_${field}`);
+    }
+  }
+  return anomalies;
+}
+
 export async function persistAnalyticsQualityReport(windowDays = 1): Promise<QualityReport> {
   const report = await generateAnalyticsQualityReport(windowDays);
   const existing = await storage.getAdminConfig(REPORT_KEY);
   const currentItems = Array.isArray(existing?.value?.items) ? (existing?.value?.items as QualityReport[]) : [];
+
+  // Anomaly detection: compare against the most recent previous report
+  if (currentItems.length > 0) {
+    const anomalies = detectAnomalies(report, currentItems[0]);
+    for (const anomaly of anomalies) {
+      if (!report.alerts.includes(anomaly)) report.alerts.push(anomaly);
+    }
+  }
+
   const items = [report, ...currentItems].slice(0, 30);
   await storage.upsertAdminConfig(REPORT_KEY, {
     updatedAt: report.ts,
@@ -145,16 +168,18 @@ export function startAnalyticsQualityJob() {
   const intervalMs = 24 * 60 * 60 * 1000;
 
   const run = async () => {
-    try {
-      await persistAnalyticsQualityReport(1);
-    } catch (error) {
-      await sendAlert({
-        source: "analytics-quality",
-        severity: "critical",
-        message: "Quality job failed",
-        metadata: { error: String(error) },
-      });
-    }
+    await withJobLock("analytics-quality-job", async () => {
+      try {
+        await persistAnalyticsQualityReport(1);
+      } catch (error) {
+        await sendAlert({
+          source: "analytics-quality",
+          severity: "critical",
+          message: "Quality job failed",
+          metadata: { error: String(error) },
+        });
+      }
+    });
   };
 
   void run();
