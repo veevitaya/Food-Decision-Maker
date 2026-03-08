@@ -1265,7 +1265,39 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/campaigns", async (req, res) => {
+  const campaignCreateSchema = z.object({
+    title: z.string().min(1),
+    status: z.enum(["draft", "active", "paused", "ended"]).optional().default("draft"),
+    dealType: z.string().nullable().optional().default(null),
+    dealValue: z.string().nullable().optional().default(null),
+    restaurantOwnerKey: z.string().min(1),
+    startDate: z.string().nullable().optional().default(null),
+    endDate: z.string().nullable().optional().default(null),
+    targetGroups: z.array(z.string()).optional().default([]),
+    impressions: z.number().int().min(0).optional().default(0),
+    clicks: z.number().int().min(0).optional().default(0),
+    dailyBudget: z.number().int().min(0).optional().default(0),
+    totalBudget: z.number().int().min(0).optional().default(0),
+    spent: z.number().int().min(0).optional().default(0),
+  });
+
+  const campaignUpdateSchema = z.object({
+    title: z.string().min(1).optional(),
+    status: z.enum(["draft", "active", "paused", "ended"]).optional(),
+    dealType: z.string().nullable().optional(),
+    dealValue: z.string().nullable().optional(),
+    restaurantOwnerKey: z.string().min(1).optional(),
+    startDate: z.string().nullable().optional(),
+    endDate: z.string().nullable().optional(),
+    targetGroups: z.array(z.string()).optional(),
+    impressions: z.number().int().min(0).optional(),
+    clicks: z.number().int().min(0).optional(),
+    dailyBudget: z.number().int().min(0).optional(),
+    totalBudget: z.number().int().min(0).optional(),
+    spent: z.number().int().min(0).optional(),
+  });
+
+  async function listCampaignsHandler(req: Request, res: Response) {
     try {
       if (!requireAdminSession(req, res)) return;
       await ensureDefaultCampaigns();
@@ -1274,32 +1306,68 @@ export async function registerRoutes(
     } catch {
       res.status(500).json({ message: "Internal server error" });
     }
-  });
+  }
 
-  app.patch("/api/campaigns/:id", async (req, res) => {
+  async function getCampaignHandler(req: Request, res: Response) {
+    try {
+      if (!requireAdminSession(req, res)) return;
+      await ensureDefaultCampaigns();
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id)) return res.status(400).json({ message: "Invalid campaign id" });
+      const campaigns = await storage.listCampaigns();
+      const campaign = campaigns.find((item) => item.id === id);
+      if (!campaign) return res.status(404).json({ message: "Campaign not found" });
+      res.json(campaign);
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+
+  async function createCampaignHandler(req: Request, res: Response) {
+    try {
+      if (!requireAdminSession(req, res)) return;
+      const input = campaignCreateSchema.parse(req.body ?? {});
+      const created = await storage.createCampaign(input);
+      void appendSecurityAudit({
+        ts: new Date().toISOString(),
+        level: "info",
+        source: "campaigns",
+        message: "campaign_created",
+        metadata: {
+          campaignId: created.id,
+          createdBy: req.session?.username ?? "unknown",
+          ip: req.ip,
+        },
+      });
+      res.status(201).json(created);
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid payload" });
+      }
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+
+  async function updateCampaignHandler(req: Request, res: Response) {
     try {
       if (!requireAdminSession(req, res)) return;
       const id = Number(req.params.id);
       if (!Number.isFinite(id)) return res.status(400).json({ message: "Invalid campaign id" });
-
-      const updates = z.object({
-        title: z.string().min(1).optional(),
-        status: z.enum(["draft", "active", "paused", "ended"]).optional(),
-        dealType: z.string().nullable().optional(),
-        dealValue: z.string().nullable().optional(),
-        restaurantOwnerKey: z.string().min(1).optional(),
-        startDate: z.string().nullable().optional(),
-        endDate: z.string().nullable().optional(),
-        targetGroups: z.array(z.string()).optional(),
-        impressions: z.number().int().min(0).optional(),
-        clicks: z.number().int().min(0).optional(),
-        dailyBudget: z.number().int().min(0).optional(),
-        totalBudget: z.number().int().min(0).optional(),
-        spent: z.number().int().min(0).optional(),
-      }).parse(req.body ?? {});
-
+      const updates = campaignUpdateSchema.parse(req.body ?? {});
       const updated = await storage.updateCampaign(id, updates);
       if (!updated) return res.status(404).json({ message: "Campaign not found" });
+      void appendSecurityAudit({
+        ts: new Date().toISOString(),
+        level: "info",
+        source: "campaigns",
+        message: "campaign_updated",
+        metadata: {
+          campaignId: id,
+          updatedBy: req.session?.username ?? "unknown",
+          updatedFields: Object.keys(updates),
+          ip: req.ip,
+        },
+      });
       res.json(updated);
     } catch (err) {
       if (err instanceof z.ZodError) {
@@ -1307,20 +1375,72 @@ export async function registerRoutes(
       }
       res.status(500).json({ message: "Internal server error" });
     }
-  });
+  }
 
-  app.delete("/api/campaigns/:id", async (req, res) => {
+  async function setCampaignStatusHandler(req: Request, res: Response, status: "active" | "ended") {
+    try {
+      if (!requireAdminSession(req, res)) return;
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id)) return res.status(400).json({ message: "Invalid campaign id" });
+      const updated = await storage.updateCampaign(id, { status });
+      if (!updated) return res.status(404).json({ message: "Campaign not found" });
+      void appendSecurityAudit({
+        ts: new Date().toISOString(),
+        level: "info",
+        source: "campaigns",
+        message: status === "active" ? "campaign_published" : "campaign_archived",
+        metadata: {
+          campaignId: id,
+          updatedBy: req.session?.username ?? "unknown",
+          ip: req.ip,
+        },
+      });
+      res.json(updated);
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid payload" });
+      }
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+
+  async function deleteCampaignHandler(req: Request, res: Response) {
     try {
       if (!requireAdminSession(req, res)) return;
       const id = Number(req.params.id);
       if (!Number.isFinite(id)) return res.status(400).json({ message: "Invalid campaign id" });
       const ok = await storage.deleteCampaign(id);
       if (!ok) return res.status(404).json({ message: "Campaign not found" });
+      void appendSecurityAudit({
+        ts: new Date().toISOString(),
+        level: "warn",
+        source: "campaigns",
+        message: "campaign_deleted",
+        metadata: {
+          campaignId: id,
+          deletedBy: req.session?.username ?? "unknown",
+          ip: req.ip,
+        },
+      });
       res.status(204).send();
     } catch {
       res.status(500).json({ message: "Internal server error" });
     }
-  });
+  }
+
+  // Canonical admin campaign routes
+  app.get("/api/admin/campaigns", listCampaignsHandler);
+  app.get("/api/admin/campaigns/:id", getCampaignHandler);
+  app.post("/api/admin/campaigns", createCampaignHandler);
+  app.patch("/api/admin/campaigns/:id", updateCampaignHandler);
+  app.post("/api/admin/campaigns/:id/publish", async (req, res) => setCampaignStatusHandler(req, res, "active"));
+  app.post("/api/admin/campaigns/:id/archive", async (req, res) => setCampaignStatusHandler(req, res, "ended"));
+  app.delete("/api/admin/campaigns/:id", deleteCampaignHandler);
+
+  // Backward-compatible aliases used by existing UI/profile pages
+  app.get("/api/campaigns", listCampaignsHandler);
+  app.patch("/api/campaigns/:id", updateCampaignHandler);
+  app.delete("/api/campaigns/:id", deleteCampaignHandler);
 
   app.get("/api/banners", async (req, res) => {
     try {
