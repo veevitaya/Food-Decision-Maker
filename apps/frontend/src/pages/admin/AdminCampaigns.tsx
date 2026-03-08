@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type { Campaign } from "@shared/schema";
 import {
@@ -24,8 +24,24 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 
 const statusTabs = ["All", "Draft", "Active", "Paused", "Ended"] as const;
+const pageSizes = [10, 25, 50] as const;
 
 type CampaignStatus = "draft" | "active" | "paused" | "ended";
+type CampaignQueryStatus = CampaignStatus | "All";
+
+type CampaignListResponse = {
+  items: Campaign[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  summary: {
+    impressions: number;
+    clicks: number;
+    ctrPct: number;
+    spent: number;
+  };
+};
 
 function statusPill(status: string | null) {
   switch (status) {
@@ -79,17 +95,33 @@ function formatNum(n: number): string {
 }
 
 export default function AdminCampaigns() {
-  const [activeTab, setActiveTab] = useState<string>("All");
+  const [activeTab, setActiveTab] = useState<CampaignQueryStatus>("All");
   const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number>(10);
+
   const [showCreate, setShowCreate] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [newOwnerKey, setNewOwnerKey] = useState("owner_default");
   const [newDailyBudget, setNewDailyBudget] = useState("1000");
 
-  const queryKey = ["/api/admin/campaigns"];
-  const { data: campaigns = [], isLoading } = useQuery<Campaign[]>({ queryKey });
+  useEffect(() => {
+    setPage(1);
+  }, [activeTab, search, pageSize]);
 
-  const invalidate = () => queryClient.invalidateQueries({ queryKey });
+  const campaignsUrl = useMemo(() => {
+    const params = new URLSearchParams();
+    if (activeTab !== "All") params.set("status", activeTab.toLowerCase());
+    if (search.trim()) params.set("search", search.trim());
+    params.set("page", String(page));
+    params.set("pageSize", String(pageSize));
+    return `/api/admin/campaigns?${params.toString()}`;
+  }, [activeTab, search, page, pageSize]);
+
+  const { data, isLoading } = useQuery<CampaignListResponse>({ queryKey: [campaignsUrl] });
+  const campaigns = data?.items ?? [];
+
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["/api/admin/campaigns"] });
 
   const createMutation = useMutation({
     mutationFn: async () => {
@@ -142,35 +174,32 @@ export default function AdminCampaigns() {
     onSuccess: invalidate,
   });
 
-  const filtered = useMemo(() => campaigns.filter((c) => {
-    const matchesTab = activeTab === "All" || c.status === activeTab.toLowerCase();
-    const title = c.title || "";
-    const owner = c.restaurantOwnerKey || "";
-    const matchesSearch = !search || title.toLowerCase().includes(search.toLowerCase()) || owner.toLowerCase().includes(search.toLowerCase());
-    return matchesTab && matchesSearch;
-  }), [campaigns, activeTab, search]);
-
   const kpis = useMemo(() => {
-    const impressions = campaigns.reduce((sum, c) => sum + (c.impressions ?? 0), 0);
-    const clicks = campaigns.reduce((sum, c) => sum + (c.clicks ?? 0), 0);
-    const spent = campaigns.reduce((sum, c) => sum + (c.spent ?? 0), 0);
-    const ctr = impressions > 0 ? ((clicks / impressions) * 100).toFixed(1) : "0.0";
+    const impressions = data?.summary.impressions ?? 0;
+    const clicks = data?.summary.clicks ?? 0;
+    const ctrPct = data?.summary.ctrPct ?? 0;
+    const spent = data?.summary.spent ?? 0;
     return [
       { label: "Total Impressions", value: formatNum(impressions), icon: Eye, iconColor: "text-purple-500" },
       { label: "Total Clicks", value: formatNum(clicks), icon: MousePointerClick, iconColor: "text-teal-500" },
-      { label: "Avg CTR", value: `${ctr}%`, icon: TrendingUp, iconColor: "text-blue-500" },
+      { label: "Avg CTR", value: `${ctrPct.toFixed(1)}%`, icon: TrendingUp, iconColor: "text-blue-500" },
       { label: "Spend", value: `THB ${formatNum(spent)}`, icon: DollarSign, iconColor: "text-emerald-500" },
     ];
-  }, [campaigns]);
+  }, [data]);
 
   const isBusy = updateMutation.isPending || publishMutation.isPending || archiveMutation.isPending || deleteMutation.isPending || createMutation.isPending;
+  const total = data?.total ?? 0;
+  const totalPages = data?.totalPages ?? 1;
+  const currentPage = data?.page ?? page;
+  const rangeStart = total === 0 ? 0 : (currentPage - 1) * pageSize + 1;
+  const rangeEnd = total === 0 ? 0 : Math.min(currentPage * pageSize, total);
 
   return (
     <div data-testid="admin-campaigns-page" className="space-y-6">
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div className="flex items-center gap-3 flex-wrap">
           <h2 className="text-xl font-semibold text-foreground" data-testid="text-campaigns-title">Ad Platform Manager</h2>
-          <span className="bg-foreground text-white text-xs font-medium rounded-full px-3 py-0.5">{campaigns.length}</span>
+          <span className="bg-foreground text-white text-xs font-medium rounded-full px-3 py-0.5">{total}</span>
         </div>
         <div className="flex items-center gap-2">
           <div className="relative">
@@ -207,23 +236,34 @@ export default function AdminCampaigns() {
         ))}
       </div>
 
-      <div className="bg-gray-100 dark:bg-muted rounded-xl p-1 inline-flex gap-1 flex-wrap">
-        {statusTabs.map((tab) => (
-          <button key={tab} onClick={() => setActiveTab(tab)} className={`px-4 py-1.5 text-sm font-medium rounded-lg transition-colors ${activeTab === tab ? "bg-white dark:bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`} data-testid={`tab-${tab.toLowerCase()}`}>
-            {tab}
-          </button>
-        ))}
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="bg-gray-100 dark:bg-muted rounded-xl p-1 inline-flex gap-1 flex-wrap">
+          {statusTabs.map((tab) => (
+            <button key={tab} onClick={() => setActiveTab(tab)} className={`px-4 py-1.5 text-sm font-medium rounded-lg transition-colors ${activeTab === tab ? "bg-white dark:bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`} data-testid={`tab-${tab.toLowerCase()}`}>
+              {tab}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span>Rows</span>
+          {pageSizes.map((size) => (
+            <button key={size} onClick={() => setPageSize(size)} className={`px-2 py-1 rounded-md ${pageSize === size ? "bg-foreground text-white" : "bg-gray-100 dark:bg-muted"}`} data-testid={`button-page-size-${size}`}>
+              {size}
+            </button>
+          ))}
+        </div>
       </div>
 
       {isLoading ? (
         <div className="space-y-4">{[1, 2, 3].map((i) => <Skeleton key={i} className="h-32 w-full rounded-2xl" />)}</div>
-      ) : filtered.length === 0 ? (
+      ) : campaigns.length === 0 ? (
         <div className="bg-white dark:bg-card rounded-2xl border border-gray-100 dark:border-border p-8 text-center">
           <p className="text-muted-foreground" data-testid="text-no-campaigns">No campaigns found</p>
         </div>
       ) : (
         <div className="space-y-4">
-          {filtered.map((campaign) => {
+          {campaigns.map((campaign) => {
             const adType = getAdType(campaign.dealType);
             const placement = getPlacement(campaign.dealType);
             const impressions = campaign.impressions ?? 0;
@@ -289,6 +329,15 @@ export default function AdminCampaigns() {
           })}
         </div>
       )}
+
+      <div className="flex items-center justify-between text-sm text-muted-foreground">
+        <span data-testid="text-pagination-range">Showing {rangeStart}-{rangeEnd} of {total}</span>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" disabled={currentPage <= 1 || isLoading} onClick={() => setPage((p) => Math.max(1, p - 1))} data-testid="button-page-prev">Previous</Button>
+          <span data-testid="text-pagination-page">Page {currentPage} / {totalPages}</span>
+          <Button variant="outline" size="sm" disabled={currentPage >= totalPages || isLoading} onClick={() => setPage((p) => Math.min(totalPages, p + 1))} data-testid="button-page-next">Next</Button>
+        </div>
+      </div>
     </div>
   );
 }
