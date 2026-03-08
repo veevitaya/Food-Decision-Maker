@@ -1301,6 +1301,57 @@ export async function registerRoutes(
     try {
       if (!requireAdminSession(req, res)) return;
       await ensureDefaultCampaigns();
+      const query = z.object({
+        status: z.enum(["draft", "active", "paused", "ended"]).optional(),
+        search: z.string().optional(),
+        page: z.coerce.number().int().min(1).optional().default(1),
+        pageSize: z.coerce.number().int().min(1).max(100).optional().default(10),
+      }).parse(req.query ?? {});
+
+      const allCampaigns = await storage.listCampaigns();
+      const normalizedSearch = (query.search ?? "").trim().toLowerCase();
+      const filtered = allCampaigns.filter((campaign) => {
+        if (query.status && campaign.status !== query.status) return false;
+        if (!normalizedSearch) return true;
+        return (
+          campaign.title.toLowerCase().includes(normalizedSearch) ||
+          campaign.restaurantOwnerKey.toLowerCase().includes(normalizedSearch)
+        );
+      });
+
+      const total = filtered.length;
+      const totalPages = Math.max(1, Math.ceil(total / query.pageSize));
+      const page = Math.min(query.page, totalPages);
+      const start = (page - 1) * query.pageSize;
+      const items = filtered.slice(start, start + query.pageSize);
+
+      const impressions = filtered.reduce((sum, item) => sum + (item.impressions ?? 0), 0);
+      const clicks = filtered.reduce((sum, item) => sum + (item.clicks ?? 0), 0);
+      const spent = filtered.reduce((sum, item) => sum + (item.spent ?? 0), 0);
+      const ctrPct = impressions > 0 ? Number(((clicks / impressions) * 100).toFixed(2)) : 0;
+
+      res.json({
+        items,
+        total,
+        page,
+        pageSize: query.pageSize,
+        totalPages,
+        summary: {
+          impressions,
+          clicks,
+          ctrPct,
+          spent,
+        },
+      });
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  }
+
+  async function listCampaignsLegacyHandler(req: Request, res: Response) {
+    try {
+      if (!requireAdminSession(req, res)) return;
+      await ensureDefaultCampaigns();
       const campaigns = await storage.listCampaigns();
       res.json(campaigns);
     } catch {
@@ -1438,7 +1489,7 @@ export async function registerRoutes(
   app.delete("/api/admin/campaigns/:id", deleteCampaignHandler);
 
   // Backward-compatible aliases used by existing UI/profile pages
-  app.get("/api/campaigns", listCampaignsHandler);
+  app.get("/api/campaigns", listCampaignsLegacyHandler);
   app.patch("/api/campaigns/:id", updateCampaignHandler);
   app.delete("/api/campaigns/:id", deleteCampaignHandler);
 
