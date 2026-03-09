@@ -1,10 +1,12 @@
 import { build as esbuild } from "esbuild";
-import { build as viteBuild } from "vite";
 import { rm, readFile } from "fs/promises";
 import path from "path";
+import { fileURLToPath } from "url";
 
-// server deps to bundle to reduce openat(2) syscalls
-// which helps cold start times
+// Resolve paths relative to this script file, not cwd
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+// Server deps to bundle (reduces cold start syscalls)
 const allowlist = [
   "@google/generative-ai",
   "axios",
@@ -33,21 +35,11 @@ const allowlist = [
   "zod-validation-error",
 ];
 
-async function buildAll() {
-  await rm("dist", { recursive: true, force: true });
+async function buildApi() {
+  await rm(path.join(ROOT, "dist/index.cjs"), { force: true });
 
-  console.log("building frontend...");
-  await viteBuild({
-    configFile: path.resolve("apps/frontend/vite.config.ts"),
-  });
-
-  console.log("building admin...");
-  await viteBuild({
-    configFile: path.resolve("apps/admin/vite.config.ts"),
-  });
-
-  console.log("building server...");
-  const pkg = JSON.parse(await readFile("package.json", "utf-8"));
+  console.log("building api...");
+  const pkg = JSON.parse(await readFile(path.join(ROOT, "package.json"), "utf-8"));
   const allDeps = [
     ...Object.keys(pkg.dependencies || {}),
     ...Object.keys(pkg.devDependencies || {}),
@@ -55,21 +47,29 @@ async function buildAll() {
   const externals = allDeps.filter((dep) => !allowlist.includes(dep));
 
   await esbuild({
-    entryPoints: ["apps/api/index.ts"],
+    entryPoints: [path.join(ROOT, "apps/api/index.ts")],
     platform: "node",
     bundle: true,
     format: "cjs",
-    outfile: "dist/api/index.cjs",
+    outfile: path.join(ROOT, "dist/index.cjs"),
+    // Shim import.meta.url for CJS. Point to the original source location
+    // (apps/api/) so relative paths like "../../migrations" resolve correctly.
+    banner: {
+      js: `const __importMetaUrl = require("url").pathToFileURL(require("path").resolve(__dirname, "../apps/api/index.js")).href;`,
+    },
     define: {
       "process.env.NODE_ENV": '"production"',
+      "import.meta.url": "__importMetaUrl",
     },
     minify: true,
     external: externals,
     logLevel: "info",
   });
+
+  console.log("api build complete → dist/index.cjs");
 }
 
-buildAll().catch((err) => {
+buildApi().catch((err) => {
   console.error(err);
   process.exit(1);
 });

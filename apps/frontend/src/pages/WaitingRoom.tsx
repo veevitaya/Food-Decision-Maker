@@ -3,17 +3,18 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useLocation } from "wouter";
 import { BottomNav } from "@/components/BottomNav";
 import mascotImg from "@assets/toast_mascot_nobg.png";
-import { shareMessage, sendGroupInvite } from "@/lib/liff";
+import { shareMessage, sendGroupInvite, liffUrl } from "@/lib/liff";
 import { useLineProfile } from "@/lib/useLineProfile";
 import { apiRequest } from "@/lib/queryClient";
 
 interface SessionMember {
   id: number;
-  sessionCode: string;
-  lineUserId: string;
-  displayName: string;
-  pictureUrl: string | null;
-  joinedAt: string;
+  sessionId: number;
+  lineUserId?: string | null;
+  name: string;
+  avatarUrl: string | null;
+  joined: boolean;
+  createdAt: string;
 }
 
 export default function WaitingRoom() {
@@ -30,35 +31,25 @@ export default function WaitingRoom() {
     if (!profile || !sessionId) return;
 
     try {
-      const createRes = await fetch("/api/group/sessions", {
+      const joinRes = await fetch(`/api/group/sessions/${sessionId}/join`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          sessionCode: sessionId,
-          hostLineUserId: profile.userId,
-          hostDisplayName: profile.displayName,
-          hostPictureUrl: profile.pictureUrl || "",
+          lineUserId: profile.userId,
+          name: profile.displayName,
+          avatarUrl: profile.pictureUrl || undefined,
         }),
       });
 
-      if (createRes.ok) {
+      if (joinRes.ok || joinRes.status === 201) {
         setSessionCreated(true);
-      } else if (createRes.status === 409) {
-        const joinRes = await fetch(`/api/group/sessions/${sessionId}/join`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            lineUserId: profile.userId,
-            displayName: profile.displayName,
-            pictureUrl: profile.pictureUrl || "",
-          }),
-        });
-        if (joinRes.ok) {
-          setSessionCreated(true);
-        }
+      } else if (joinRes.status === 404) {
+        setError("Session not found. The invite link may have expired.");
+      } else {
+        setError("Failed to connect to session");
       }
     } catch (err) {
-      console.error("Session create/join failed:", err);
+      console.error("Session join failed:", err);
       setError("Failed to connect to session");
     }
   }, [profile, sessionId]);
@@ -96,8 +87,8 @@ export default function WaitingRoom() {
 
   const handleNudgeMember = async (memberName: string) => {
     setNudgedMembers((prev) => new Set(prev).add(memberName));
-    const appUrl = window.location.origin;
-    const text = `Hey ${memberName}! We're waiting for you on Toast. Join our food session!\n\n${appUrl}/group/waiting?session=${sessionId}`;
+    const joinUrl = liffUrl("/group/waiting", { session: sessionId });
+    const text = `Hey ${memberName}! We're waiting for you on Toast. Join our food session!\n\n${joinUrl}`;
     await shareMessage(text);
   };
 
@@ -179,7 +170,7 @@ export default function WaitingRoom() {
         <div className="flex gap-1">
           {members.map((m) => (
             <div
-              key={m.lineUserId}
+              key={m.id}
               className="w-2 h-2 rounded-full bg-[hsl(160,60%,45%)] transition-all duration-500"
             />
           ))}
@@ -193,23 +184,23 @@ export default function WaitingRoom() {
       <div className="flex flex-wrap justify-center gap-6 mb-8 max-w-sm">
         {members.map((m, idx) => (
           <motion.div
-            key={m.lineUserId}
+            key={m.id}
             initial={{ scale: 0, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             transition={{ delay: 0.3 + idx * 0.08, type: "spring", damping: 18, stiffness: 200 }}
             className="flex flex-col items-center gap-2"
-            data-testid={`member-${m.lineUserId}`}
+            data-testid={`member-${m.id}`}
           >
             <div className="relative">
               <div
                 className="w-[72px] h-[72px] rounded-full overflow-hidden border-[3px] border-[hsl(160,60%,45%)] transition-all duration-500"
                 style={{ boxShadow: "0 6px 20px -4px rgba(0,200,100,0.15)" }}
               >
-                {m.pictureUrl ? (
-                  <img src={m.pictureUrl} alt={m.displayName} className="w-full h-full object-cover" />
+                {m.avatarUrl ? (
+                  <img src={m.avatarUrl} alt={m.name} className="w-full h-full object-cover" />
                 ) : (
                   <div className="w-full h-full bg-gradient-to-br from-amber-100 to-orange-100 flex items-center justify-center">
-                    <span className="text-xl font-bold text-amber-600">{m.displayName.charAt(0)}</span>
+                    <span className="text-xl font-bold text-amber-600">{m.name.charAt(0)}</span>
                   </div>
                 )}
               </div>
@@ -222,7 +213,7 @@ export default function WaitingRoom() {
                 <span className="text-white text-[10px] font-bold">✓</span>
               </motion.div>
             </div>
-            <span className="text-sm font-bold">{m.lineUserId === profile?.userId ? "You" : m.displayName}</span>
+            <span className="text-sm font-bold">{m.lineUserId === profile?.userId ? "You" : m.name}</span>
             <span className="text-[11px] font-semibold text-[hsl(160,60%,45%)]">Ready</span>
           </motion.div>
         ))}

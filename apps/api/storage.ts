@@ -77,6 +77,7 @@ export interface IStorage {
   getGroupSessionByCode(code: string): Promise<GroupSession | undefined>;
   createGroupMember(data: InsertGroupMember): Promise<GroupMember>;
   updateGroupMember(id: number, updates: Partial<InsertGroupMember>): Promise<GroupMember | undefined>;
+  findGroupMemberByLineUserId(sessionId: number, lineUserId: string): Promise<GroupMember | undefined>;
   findGroupMemberByName(sessionId: number, name: string): Promise<GroupMember | undefined>;
   listGroupMembers(sessionId: number): Promise<GroupMember[]>;
   createPlacesRequestLog(data: InsertPlacesRequestLog): Promise<PlacesRequestLog>;
@@ -261,6 +262,15 @@ export class DatabaseStorage implements IStorage {
     return session;
   }
 
+  async updateGroupSessionStatus(code: string, status: string): Promise<GroupSession | undefined> {
+    const [updated] = await db
+      .update(groupSessions)
+      .set({ status })
+      .where(eq(groupSessions.code, code))
+      .returning();
+    return updated;
+  }
+
   async createGroupMember(data: InsertGroupMember): Promise<GroupMember> {
     const [created] = await db.insert(groupMembers).values(data).returning();
     return created;
@@ -269,6 +279,11 @@ export class DatabaseStorage implements IStorage {
   async updateGroupMember(id: number, updates: Partial<InsertGroupMember>): Promise<GroupMember | undefined> {
     const [updated] = await db.update(groupMembers).set(updates).where(eq(groupMembers.id, id)).returning();
     return updated;
+  }
+
+  async findGroupMemberByLineUserId(sessionId: number, lineUserId: string): Promise<GroupMember | undefined> {
+    const members = await db.select().from(groupMembers).where(eq(groupMembers.sessionId, sessionId));
+    return members.find((m) => (m.lineUserId ?? "").toLowerCase() === lineUserId.toLowerCase());
   }
 
   async findGroupMemberByName(sessionId: number, name: string): Promise<GroupMember | undefined> {
@@ -326,7 +341,17 @@ export class DatabaseStorage implements IStorage {
   async findOrCreateFromPlace(place: NormalizedPlace): Promise<number> {
     // Try to find by name (case-insensitive) first, then check proximity in JS
     const candidates = await db
-      .select({ id: restaurants.id, lat: restaurants.lat, lng: restaurants.lng })
+      .select({
+        id: restaurants.id,
+        lat: restaurants.lat,
+        lng: restaurants.lng,
+        imageUrl: restaurants.imageUrl,
+        rating: restaurants.rating,
+        address: restaurants.address,
+        priceLevel: restaurants.priceLevel,
+        phone: restaurants.phone,
+        category: restaurants.category,
+      })
       .from(restaurants)
       .where(ilike(restaurants.name, place.name))
       .limit(10);
@@ -336,6 +361,21 @@ export class DatabaseStorage implements IStorage {
       const dLat = Number(c.lat) - place.lat;
       const dLng = Number(c.lng) - place.lng;
       if (Math.sqrt(dLat * dLat + dLng * dLng) < 0.001) {
+        const updates: Partial<InsertRestaurant> = {};
+
+        if (!c.imageUrl && place.photos?.[0]) updates.imageUrl = place.photos[0];
+        if ((!c.rating || c.rating === "N/A") && place.rating) updates.rating = place.rating;
+        if ((!c.address || c.address === "N/A") && place.address) updates.address = place.address;
+        if (!c.priceLevel && place.priceLevel) updates.priceLevel = place.priceLevel;
+        if (!c.phone && place.phone) updates.phone = place.phone;
+        if ((!c.category || c.category === "restaurant") && place.category) {
+          updates.category = place.category;
+          updates.description = place.category;
+        }
+
+        if (Object.keys(updates).length > 0) {
+          await db.update(restaurants).set(updates).where(eq(restaurants.id, c.id));
+        }
         return c.id;
       }
     }

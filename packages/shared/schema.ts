@@ -83,12 +83,14 @@ export const groupSessions = pgTable("group_sessions", {
 export const groupMembers = pgTable("group_members", {
   id: serial("id").primaryKey(),
   sessionId: integer("session_id").notNull().references(() => groupSessions.id, { onDelete: "cascade" }),
+  lineUserId: text("line_user_id"),
   name: text("name").notNull(),
   avatarUrl: text("avatar_url"),
   joined: boolean("joined").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (t) => ({
   sessionIdIdx: index("group_members_session_id_idx").on(t.sessionId),
+  lineUserIdIdx: index("group_members_line_user_id_idx").on(t.lineUserId),
 }));
 
 export const insertGroupSessionSchema = createInsertSchema(groupSessions).omit({ id: true, createdAt: true });

@@ -38,6 +38,7 @@ import AdminRecommendations from "@/pages/admin/AdminRecommendations";
 import AdminExperiments from "@/pages/admin/AdminExperiments";
 import AdminOperations from "@/pages/admin/AdminOperations";
 import AdminSecurityAudit from "@/pages/admin/AdminSecurityAudit";
+import AdminCustomerAnalytics from "@/pages/admin/AdminCustomerAnalytics";
 
 const pageVariants = {
   initial: { opacity: 0, y: 8 },
@@ -74,7 +75,7 @@ function Router() {
     <AnimatePresence mode="wait">
       <Switch location={location} key={location}>
         <Route path="/">
-          <AnimatedPage><Home /></AnimatedPage>
+          <Redirect to="/admin" />
         </Route>
         <Route path="/solo/quiz">
           <AnimatedPage><SoloQuiz /></AnimatedPage>
@@ -147,6 +148,9 @@ function Router() {
         </Route>
         <Route path="/admin/config">
           <AdminLayout><AdminConfig /></AdminLayout>
+        </Route>
+        <Route path="/admin/customers">
+          <AdminLayout><AdminCustomerAnalytics /></AdminLayout>
         </Route>
         <Route path="/admin/restaurants/import/google">
           <AdminRestaurantImport />

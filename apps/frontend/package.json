@@ -4,8 +4,9 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --port 3000",
+    "dev": "vite --port 5000",
     "build": "vite build",
+    "start": "vite preview",
     "check": "tsc -p tsconfig.json --noEmit"
   }
 }

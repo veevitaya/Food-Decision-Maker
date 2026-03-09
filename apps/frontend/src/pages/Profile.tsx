@@ -726,124 +726,6 @@ function ProfileToggle({ isOwnerMode, onToggle }: { isOwnerMode: boolean; onTogg
   );
 }
 
-function generateMockInsights() {
-  const now = new Date();
-  const hour = now.getHours();
-
-  const baseViews = 1247;
-  const baseSwipes = 834;
-  const baseTaps = 312;
-  const baseOrders = 89;
-  const baseMaps = 156;
-  const baseDetailViews = 423;
-
-  const viewsTrend = 12.3;
-  const swipesTrend = 8.7;
-  const tapsTrend = -2.1;
-  const ordersTrend = 15.4;
-
-  const hourlyData = Array.from({ length: 24 }, (_, i) => {
-    let base = 10;
-    if (i >= 7 && i <= 9) base = 35;
-    if (i >= 11 && i <= 13) base = 80;
-    if (i >= 14 && i <= 16) base = 25;
-    if (i >= 17 && i <= 20) base = 65;
-    if (i >= 21 && i <= 23) base = 40;
-    return { hour: i, value: base + Math.floor(Math.random() * 15) };
-  });
-
-  const dayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  const weeklyData = dayLabels.map((day, i) => ({
-    day,
-    views: [45, 78, 82, 95, 88, 120, 110][i] + Math.floor(Math.random() * 20),
-    orders: [8, 12, 14, 16, 13, 22, 19][i] + Math.floor(Math.random() * 5),
-  }));
-
-  const topMenuItems = [
-    { name: "Pad Thai", swipes: 234, likes: 189, conversionRate: 80.8 },
-    { name: "Tom Yum Soup", swipes: 198, likes: 156, conversionRate: 78.8 },
-    { name: "Green Curry", swipes: 176, likes: 132, conversionRate: 75.0 },
-    { name: "Mango Sticky Rice", swipes: 145, likes: 128, conversionRate: 88.3 },
-    { name: "Som Tum", swipes: 112, likes: 78, conversionRate: 69.6 },
-  ];
-
-  const peakHours = [
-    { time: "12:00 - 13:00", label: "Lunch peak", activity: 95 },
-    { time: "18:00 - 19:00", label: "Dinner rush", activity: 88 },
-    { time: "20:00 - 21:00", label: "Late dinner", activity: 72 },
-    { time: "11:00 - 12:00", label: "Pre-lunch", activity: 65 },
-  ];
-
-  const userActions = [
-    { action: "Swiped right (liked)", count: baseSwipes, icon: TrendingUp, color: "text-green-500" },
-    { action: "Viewed details", count: baseDetailViews, icon: Eye, color: "text-blue-500" },
-    { action: "Opened map directions", count: baseMaps, icon: MapPin, color: "text-orange-500" },
-    { action: "Tapped 'Order on Grab'", count: baseOrders, icon: ExternalLink, color: "text-emerald-500" },
-    { action: "Saved to favorites", count: baseTaps, icon: Star, color: "text-yellow-500" },
-  ];
-
-  const audienceDemographics = [
-    { label: "18-24", percentage: 22, color: "bg-blue-400" },
-    { label: "25-34", percentage: 38, color: "bg-green-500" },
-    { label: "35-44", percentage: 24, color: "bg-amber-500" },
-    { label: "45-54", percentage: 11, color: "bg-purple-500" },
-    { label: "55+", percentage: 5, color: "bg-pink-400" },
-  ];
-
-  const engagementFunnel = [
-    { stage: "Impressions", count: baseViews, percentage: 100 },
-    { stage: "Swipe Views", count: baseSwipes, percentage: Math.round((baseSwipes / baseViews) * 100) },
-    { stage: "Detail Views", count: baseDetailViews, percentage: Math.round((baseDetailViews / baseViews) * 100) },
-    { stage: "Saves", count: baseTaps, percentage: Math.round((baseTaps / baseViews) * 100) },
-    { stage: "Delivery Taps", count: baseOrders, percentage: Math.round((baseOrders / baseViews) * 100) },
-  ];
-
-  const revenueEstimate = {
-    estimatedRevenue: Math.round(baseOrders * 245),
-    avgOrderValue: 245,
-    projectedMonthly: Math.round(baseOrders * 245 * 4.3),
-    revenueGrowth: 18.5,
-  };
-
-  const competitorBenchmark = {
-    yourRank: 12,
-    totalInCategory: 87,
-    avgCategorySwipes: 612,
-    yourSwipes: baseSwipes,
-    percentile: 86,
-  };
-
-  const repeatVisitors = {
-    firstTime: 66,
-    returning: 34,
-    avgVisitsPerUser: 2.3,
-    loyaltyScore: 72,
-  };
-
-  return {
-    overview: {
-      impressions: { value: baseViews, trend: viewsTrend, label: "Impressions" },
-      swipes: { value: baseSwipes, trend: swipesTrend, label: "Swipe Views" },
-      saves: { value: baseTaps, trend: tapsTrend, label: "Saves" },
-      deliveryTaps: { value: baseOrders, trend: ordersTrend, label: "Delivery Taps" },
-    },
-    hourlyData,
-    weeklyData,
-    topMenuItems,
-    peakHours,
-    userActions,
-    audienceDemographics,
-    engagementFunnel,
-    revenueEstimate,
-    competitorBenchmark,
-    repeatVisitors,
-    conversionRate: ((baseOrders / baseViews) * 100).toFixed(1),
-    avgTimeOnPage: "1m 42s",
-    returnVisitors: "34%",
-    currentPeakHour: hour >= 11 && hour <= 13 ? "Lunch" : hour >= 17 && hour <= 21 ? "Dinner" : hour >= 7 && hour <= 10 ? "Breakfast" : "Off-peak",
-    bestDay: "Friday",
-  };
-}
 
 function MiniBarChart({ data, maxVal, color = "bg-foreground" }: { data: number[]; maxVal: number; color?: string }) {
   return (
@@ -887,20 +769,9 @@ function OwnerDashboard() {
     targetGroups: [],
   });
 
-  const FALLBACK_SEGMENTS: UserSegment[] = [
-    { id: "power_users", name: "Power Users", description: "Highly active users", estimatedCount: 245 },
-    { id: "new_users", name: "New Users", description: "Joined in the last 30 days", estimatedCount: 512 },
-    { id: "thai_food_lovers", name: "Thai Food Lovers", description: "Frequently swipe right on Thai restaurants", estimatedCount: 389 },
-    { id: "budget_diners", name: "Budget Diners", description: "Prefer budget-friendly options", estimatedCount: 623 },
-    { id: "high_spenders", name: "High Spenders", description: "Prefer upscale dining", estimatedCount: 178 },
-    { id: "weekend_browsers", name: "Weekend Browsers", description: "Most active on weekends", estimatedCount: 445 },
-    { id: "lunch_crowd", name: "Lunch Crowd", description: "Active during lunch hours", estimatedCount: 367 },
-  ];
-
-  const { data: segmentsData } = useQuery<UserSegment[]>({
+  const { data: segments = [] } = useQuery<UserSegment[]>({
     queryKey: ["/api/analytics/user-segments"],
   });
-  const segments = segmentsData || FALLBACK_SEGMENTS;
 
   const ownerKey = useMemo(() => {
     try {
@@ -913,7 +784,11 @@ function OwnerDashboard() {
     return "owner_" + Date.now();
   }, []);
 
-  const insights = useMemo(() => generateMockInsights(), []);
+  const { data: insights, isLoading: insightsLoading, isError: insightsError, error: insightsErrorObj } = useQuery<any>({
+    queryKey: ["/api/owner/insights"],
+  });
+
+  console.log("[OwnerDashboard] insights state", { insightsLoading, insightsError, insightsErrorObj, insights });
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -973,9 +848,21 @@ function OwnerDashboard() {
     },
   ];
 
+  if (insightsLoading) return <div className="flex items-center justify-center py-20"><div className="w-6 h-6 rounded-full border-2 border-gray-300 border-t-foreground animate-spin" /></div>;
+  if (insightsError || !insights) {
+    console.error("[OwnerDashboard] failed to load insights", insightsErrorObj);
+    return (
+      <div className="flex flex-col items-center justify-center py-16 px-4 gap-3">
+        <p className="text-sm font-semibold text-red-500">Failed to load analytics</p>
+        <pre className="text-[10px] text-muted-foreground bg-gray-50 rounded-xl p-3 max-w-full overflow-x-auto whitespace-pre-wrap break-all">
+          {insightsErrorObj ? String(insightsErrorObj) : "insights is undefined"}
+        </pre>
+      </div>
+    );
+  }
   const overviewStats = Object.values(insights.overview);
-  const hourlyValues = insights.hourlyData.map(d => d.value);
-  const maxHourly = Math.max(...hourlyValues);
+  const hourlyValues = insights.hourlyData.map((d: any) => d.value);
+  const maxHourly = Math.max(...hourlyValues, 1);
 
   return (
     <div>
@@ -1290,7 +1177,7 @@ function OwnerDashboard() {
               <p className="text-[9px] text-muted-foreground mt-0.5">Conversion</p>
             </div>
             <div className="text-center py-3 border-r border-gray-100 dark:border-border">
-              <p className="text-lg font-bold tracking-tight">{insights.avgTimeOnPage}</p>
+              <p className="text-lg font-bold tracking-tight">{insights.avgTimeOnPage ?? "—"}</p>
               <p className="text-[9px] text-muted-foreground mt-0.5">Avg. Time</p>
             </div>
             <div className="text-center py-3">
@@ -1407,29 +1294,31 @@ function OwnerDashboard() {
         </div>
       </div>
 
-      <div className="mb-4">
-        <div className="bg-white dark:bg-card rounded-2xl border border-gray-100 dark:border-border p-4">
-          <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">Audience Demographics</p>
-          <div className="flex items-center gap-1 h-5 rounded-full overflow-hidden mb-3">
-            {insights.audienceDemographics.map((demo) => (
-              <div
-                key={demo.label}
-                className={`h-full ${demo.color} transition-all`}
-                style={{ width: `${demo.percentage}%` }}
-              />
-            ))}
-          </div>
-          <div className="flex flex-wrap gap-x-4 gap-y-1.5">
-            {insights.audienceDemographics.map((demo) => (
-              <div key={demo.label} className="flex items-center gap-1.5" data-testid={`demo-${demo.label}`}>
-                <div className={`w-2 h-2 rounded-full ${demo.color}`} />
-                <span className="text-[11px] text-muted-foreground font-medium">{demo.label}</span>
-                <span className="text-[11px] font-bold tabular-nums">{demo.percentage}%</span>
-              </div>
-            ))}
+      {insights.audienceDemographics?.length > 0 && (
+        <div className="mb-4">
+          <div className="bg-white dark:bg-card rounded-2xl border border-gray-100 dark:border-border p-4">
+            <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">Audience Demographics</p>
+            <div className="flex items-center gap-1 h-5 rounded-full overflow-hidden mb-3">
+              {insights.audienceDemographics.map((demo: any) => (
+                <div
+                  key={demo.label}
+                  className={`h-full ${demo.color} transition-all`}
+                  style={{ width: `${demo.percentage}%` }}
+                />
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+              {insights.audienceDemographics.map((demo: any) => (
+                <div key={demo.label} className="flex items-center gap-1.5" data-testid={`demo-${demo.label}`}>
+                  <div className={`w-2 h-2 rounded-full ${demo.color}`} />
+                  <span className="text-[11px] text-muted-foreground font-medium">{demo.label}</span>
+                  <span className="text-[11px] font-bold tabular-nums">{demo.percentage}%</span>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       <div className="mb-4">
         <div className="grid grid-cols-2 gap-2.5">

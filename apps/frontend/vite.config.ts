@@ -12,10 +12,17 @@ export default defineConfig({
     },
   },
   server: {
-    port: 3000,
+    port: 5000,
+    host: "0.0.0.0",
+    allowedHosts: ["toast.fastforwardssl.com"],
     proxy: {
-      "/api": "http://localhost:3002",
+      "/api": "http://localhost:5002",
     },
+  },
+  preview: {
+    port: 5000,
+    host: "0.0.0.0",
+    allowedHosts: ["toast.fastforwardssl.com"],
   },
   envDir: path.resolve(import.meta.dirname, "../../"),
 });

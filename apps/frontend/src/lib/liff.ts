@@ -122,15 +122,23 @@ export async function shareMessage(text: string): Promise<ShareResult> {
   }
 }
 
+/** Build a shareable LIFF deep-link. Falls back to origin URL when LIFF_ID is not configured. */
+export function liffUrl(path: string, params?: Record<string, string>): string {
+  const base = LIFF_ID
+    ? `https://liff.line.me/${LIFF_ID}${path}`
+    : `${window.location.origin}${path}`;
+  if (!params || Object.keys(params).length === 0) return base;
+  return `${base}?${new URLSearchParams(params).toString()}`;
+}
+
 export async function sendInvite(mode: string): Promise<ShareResult> {
-  const appUrl = window.location.origin;
-  const message = `Join me on Toast!\n\nLet's decide what to eat together. I'm swiping on ${mode} mode right now!\n\n${appUrl}/swipe?mode=${mode}`;
+  const joinUrl = liffUrl("/swipe", { mode });
+  const message = `Join me on Toast!\n\nLet's decide what to eat together. I'm swiping on ${mode} mode right now!\n\nTap to join:\n${joinUrl}`;
   return shareMessage(message);
 }
 
 export async function sendGroupInvite(sessionId: string): Promise<ShareResult> {
-  const appUrl = window.location.origin;
-  const joinUrl = `${appUrl}/group/waiting?session=${sessionId}`;
+  const joinUrl = liffUrl("/group/waiting", { session: sessionId });
   const message = `Toast Group Session!\n\nJoin our food swiping session and let's find the perfect meal together!\n\nTap to join:\n${joinUrl}`;
   return shareMessage(message);
 }

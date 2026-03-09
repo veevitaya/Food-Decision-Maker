@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
+import { useDrag } from "@use-gesture/react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useLocation } from "wouter";
 import {
@@ -212,8 +213,17 @@ export default function Home() {
   const { recordVibe } = useVibeFrequency();
   const { data: suggestions = [], isLoading: suggestionsLoading } = useSuggestions();
   const { data: nearbyRestaurants = [], isLoading: nearbyLoading } = useRestaurants("new");
-  const { data: allRestaurants = [] } = useRestaurants();
+  const { data: allRestaurants = [], isLoading: mapLoading } = useRestaurants();
   const { profile: userProfile } = useLineProfile();
+
+  const bindDrag = useDrag(
+    ({ movement: [, my], velocity: [, vy], last }) => {
+      if (!last) return;
+      if (my > 60 || vy > 0.5) setDrawerOpen(false);
+      else if (my < -60 || vy < -0.5) setDrawerOpen(true);
+    },
+    { axis: "y", filterTaps: true, pointer: { touch: true } }
+  );
 
   const [personalizedRecs, setPersonalizedRecs] = useState<PersonalizedRec[]>([]);
   const [recsLoading, setRecsLoading] = useState(true);
@@ -599,38 +609,46 @@ export default function Home() {
               className="px-4 pb-2"
             >
               <div className="flex gap-2 overflow-x-auto hide-scrollbar pb-1" data-testid="map-category-chips">
-                <button
-                  onClick={() => { setSelectedCategory(null); trackFilterChange("map_category", "all"); }}
-                  className={`flex-shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-full text-xs font-semibold transition-all ${
-                    selectedCategory === null
-                      ? "bg-foreground text-white shadow-md"
-                      : "bg-white/90 backdrop-blur-sm text-foreground border border-gray-200/60"
-                  }`}
-                  style={selectedCategory === null ? {} : { boxShadow: "0 2px 8px rgba(0,0,0,0.06)" }}
-                  data-testid="chip-category-all"
-                >
-                  All
-                </button>
-                {MAP_CATEGORIES.map(cat => (
-                  <button
-                    key={cat.label}
-                    onClick={() => {
-                      const next = selectedCategory === cat.label ? null : cat.label;
-                      setSelectedCategory(next);
-                      trackFilterChange("map_category", next ?? "all");
-                    }}
-                    className={`flex-shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-full text-xs font-semibold transition-all ${
-                      selectedCategory === cat.label
-                        ? "bg-foreground text-white shadow-md"
-                        : "bg-white/90 backdrop-blur-sm text-foreground border border-gray-200/60"
-                    }`}
-                    style={selectedCategory === cat.label ? {} : { boxShadow: "0 2px 8px rgba(0,0,0,0.06)" }}
-                    data-testid={`chip-category-${cat.label.toLowerCase().replace(/\s+/g, "-")}`}
-                  >
-                    <FoodIconFromEmoji emoji={cat.emoji} size={18} />
-                    {cat.label}
-                  </button>
-                ))}
+                {mapLoading ? (
+                  [0, 1, 2, 3].map((i) => (
+                    <div key={i} className="flex-shrink-0 h-8 w-16 rounded-full bg-white/70 animate-pulse" />
+                  ))
+                ) : (
+                  <>
+                    <button
+                      onClick={() => { setSelectedCategory(null); trackFilterChange("map_category", "all"); }}
+                      className={`flex-shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-full text-xs font-semibold transition-all ${
+                        selectedCategory === null
+                          ? "bg-foreground text-white shadow-md"
+                          : "bg-white/90 backdrop-blur-sm text-foreground border border-gray-200/60"
+                      }`}
+                      style={selectedCategory === null ? {} : { boxShadow: "0 2px 8px rgba(0,0,0,0.06)" }}
+                      data-testid="chip-category-all"
+                    >
+                      All
+                    </button>
+                    {MAP_CATEGORIES.map(cat => (
+                      <button
+                        key={cat.label}
+                        onClick={() => {
+                          const next = selectedCategory === cat.label ? null : cat.label;
+                          setSelectedCategory(next);
+                          trackFilterChange("map_category", next ?? "all");
+                        }}
+                        className={`flex-shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-full text-xs font-semibold transition-all ${
+                          selectedCategory === cat.label
+                            ? "bg-foreground text-white shadow-md"
+                            : "bg-white/90 backdrop-blur-sm text-foreground border border-gray-200/60"
+                        }`}
+                        style={selectedCategory === cat.label ? {} : { boxShadow: "0 2px 8px rgba(0,0,0,0.06)" }}
+                        data-testid={`chip-category-${cat.label.toLowerCase().replace(/\s+/g, "-")}`}
+                      >
+                        <FoodIconFromEmoji emoji={cat.emoji} size={18} />
+                        {cat.label}
+                      </button>
+                    ))}
+                  </>
+                )}
               </div>
             </motion.div>
           )}
@@ -652,33 +670,49 @@ export default function Home() {
               ref={scrollContainerRef}
               className="flex gap-3 overflow-x-auto hide-scrollbar pb-2 snap-x snap-mandatory px-4"
             >
-              {filteredMapCards.map((pin) => (
-                <motion.button
-                  key={pin.id}
-                  whileTap={{ scale: 0.96 }}
-                  onClick={() => navigate(`/restaurant/${pin.id}`)}
-                  className="flex-shrink-0 w-[260px] snap-start bg-white rounded-2xl overflow-hidden border border-gray-100"
-                  style={{ boxShadow: "0 6px 24px -4px rgba(0,0,0,0.12), 0 2px 6px rgba(0,0,0,0.04)" }}
-                  data-testid={`map-card-${pin.id}`}
-                >
-                  <div className="relative h-[110px] w-full">
-                    <img src={pin.imageUrl} alt={pin.name} className="w-full h-full object-cover" />
-                    <div className="absolute top-2 left-2 bg-white/90 backdrop-blur-sm rounded-full px-2 py-0.5 text-[10px] font-bold text-foreground flex items-center gap-1">
-                      <FoodIconFromEmoji emoji={pin.emoji} size={14} /> {pin.category}
-                    </div>
-                    <div className="absolute top-2 right-2 bg-white/90 backdrop-blur-sm rounded-full px-2 py-0.5 text-[10px] font-bold text-foreground">
-                      {pin.price}
+              {mapLoading ? (
+                [0, 1, 2].map((i) => (
+                  <div
+                    key={i}
+                    className="flex-shrink-0 w-[260px] snap-start bg-white rounded-2xl overflow-hidden border border-gray-100 animate-pulse"
+                    style={{ boxShadow: "0 6px 24px -4px rgba(0,0,0,0.12), 0 2px 6px rgba(0,0,0,0.04)" }}
+                  >
+                    <div className="h-[110px] w-full bg-gray-200" />
+                    <div className="px-3.5 py-2.5">
+                      <div className="h-3.5 bg-gray-100 rounded w-3/4 mb-2" />
+                      <div className="h-2.5 bg-gray-50 rounded w-1/2" />
                     </div>
                   </div>
-                  <div className="px-3.5 py-2.5">
-                    <div className="flex items-center justify-between">
-                      <p className="text-sm font-bold text-foreground truncate">{pin.name}</p>
-                      <span className="text-xs font-semibold text-muted-foreground ml-2 flex-shrink-0">{pin.rating}</span>
+                ))
+              ) : (
+                filteredMapCards.map((pin) => (
+                  <motion.button
+                    key={pin.id}
+                    whileTap={{ scale: 0.96 }}
+                    onClick={() => navigate(`/restaurant/${pin.id}`)}
+                    className="flex-shrink-0 w-[260px] snap-start bg-white rounded-2xl overflow-hidden border border-gray-100"
+                    style={{ boxShadow: "0 6px 24px -4px rgba(0,0,0,0.12), 0 2px 6px rgba(0,0,0,0.04)" }}
+                    data-testid={`map-card-${pin.id}`}
+                  >
+                    <div className="relative h-[110px] w-full">
+                      <img src={pin.imageUrl} alt={pin.name} className="w-full h-full object-cover" />
+                      <div className="absolute top-2 left-2 bg-white/90 backdrop-blur-sm rounded-full px-2 py-0.5 text-[10px] font-bold text-foreground flex items-center gap-1">
+                        <FoodIconFromEmoji emoji={pin.emoji} size={14} /> {pin.category}
+                      </div>
+                      <div className="absolute top-2 right-2 bg-white/90 backdrop-blur-sm rounded-full px-2 py-0.5 text-[10px] font-bold text-foreground">
+                        {pin.price}
+                      </div>
                     </div>
-                    <p className="text-[11px] text-muted-foreground mt-0.5 truncate">{pin.description}</p>
-                  </div>
-                </motion.button>
-              ))}
+                    <div className="px-3.5 py-2.5">
+                      <div className="flex items-center justify-between">
+                        <p className="text-sm font-bold text-foreground truncate">{pin.name}</p>
+                        <span className="text-xs font-semibold text-muted-foreground ml-2 flex-shrink-0">{pin.rating}</span>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground mt-0.5 truncate">{pin.description}</p>
+                    </div>
+                  </motion.button>
+                ))
+              )}
             </div>
           </motion.div>
         )}
@@ -696,7 +730,8 @@ export default function Home() {
         }}
       >
         <div
-          className="w-full flex-shrink-0 cursor-grab active:cursor-grabbing"
+          {...bindDrag()}
+          className="w-full flex-shrink-0 touch-none cursor-grab active:cursor-grabbing"
           onClick={() => setDrawerOpen(prev => !prev)}
         >
           <div className="pt-3 pb-2 flex justify-center">

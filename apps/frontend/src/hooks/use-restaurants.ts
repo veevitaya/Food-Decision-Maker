@@ -10,8 +10,9 @@ export function useRestaurants(mode?: string) {
       // Build query string if mode is provided
       const params = new URLSearchParams();
       if (mode) params.append("mode", mode);
-      
-      const url = params.toString() ? `${api.restaurants.list.path}?${params.toString()}` : api.restaurants.list.path;
+      params.append("limit", "30");
+
+      const url = `${api.restaurants.list.path}?${params.toString()}`;
       
       const res = await fetch(url, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch restaurants");

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useSyncExternalStore } from "react";
 import { initLiff, getProfile, isLoggedIn, login, logout, isLiffAvailable, isInLiff } from "@/lib/liff";
 import type { LineProfile } from "@/lib/liff";
+import { grantBehaviorConsent } from "@/lib/eventTracker";
 
 const STORAGE_KEY = "toast_line_profile";
 
@@ -13,7 +14,11 @@ function notify() {
 
 try {
   const stored = localStorage.getItem(STORAGE_KEY);
-  if (stored) cachedProfile = JSON.parse(stored);
+  if (stored) {
+    cachedProfile = JSON.parse(stored);
+    // Backfill consent for returning users who were already logged in before this was introduced
+    if (cachedProfile?.userId) grantBehaviorConsent();
+  }
 } catch {}
 
 function setProfile(profile: LineProfile | null) {
@@ -42,7 +47,10 @@ export function useLineProfile() {
       if (ready && isLoggedIn()) {
         setLoading(true);
         getProfile().then((p) => {
-          if (p) setProfile(p);
+          if (p) {
+            setProfile(p);
+            grantBehaviorConsent();
+          }
           setLoading(false);
         });
       }

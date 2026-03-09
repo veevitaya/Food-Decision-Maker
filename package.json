@@ -10,6 +10,8 @@
     "dev:admin": "pnpm --filter @toast/admin dev",
     "dev:api": "pnpm --filter @toast/api dev",
     "build": "pnpm -r --filter @toast/frontend --filter @toast/admin --filter @toast/api build",
+    "build:prod": "NODE_ENV=production pnpm -r --filter @toast/frontend --filter @toast/admin --filter @toast/api build",
+    "start": "pnpm -r --parallel --filter @toast/frontend --filter @toast/admin --filter @toast/api start",
     "check": "pnpm -r --filter @toast/frontend --filter @toast/admin --filter @toast/api check",
     "db:push": "drizzle-kit push",
     "db:generate": "drizzle-kit generate",

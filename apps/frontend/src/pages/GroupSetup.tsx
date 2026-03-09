@@ -93,6 +93,7 @@ export default function GroupSetup() {
   const [hourPickerOpen, setHourPickerOpen] = useState(false);
   const [inviteStatus, setInviteStatus] = useState<"idle" | "sending" | "sent">("idle");
   const [pendingSessionId, setPendingSessionId] = useState<string | null>(null);
+  const [sessionError, setSessionError] = useState<string | null>(null);
   const dateScrollRef = useRef<HTMLDivElement>(null);
   const hourPickerRef = useRef<HTMLDivElement>(null);
   const upcomingDays = getNext14Days();
@@ -114,41 +115,57 @@ export default function GroupSetup() {
 
   const getOrCreateSessionId = async () => {
     if (pendingSessionId) return pendingSessionId;
-    const sessionId = Math.random().toString(36).substring(2, 10);
-    setPendingSessionId(sessionId);
-    if (profile) {
-      try {
-        await fetch("/api/group/sessions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            sessionCode: sessionId,
-            hostLineUserId: profile.userId,
-            hostDisplayName: profile.displayName,
-            hostPictureUrl: profile.pictureUrl || "",
-          }),
-        });
-      } catch {}
+    try {
+      const res = await fetch("/api/group/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          creatorName: profile?.displayName ?? "You",
+          creatorAvatarUrl: profile?.pictureUrl || undefined,
+          creatorLineUserId: profile?.userId || undefined,
+          locations: selectedLocations,
+          budget: selectedBudget,
+          diet: selectedRestrictions,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const code: string = data.session?.code ?? "";
+        if (code) {
+          setPendingSessionId(code);
+          return code;
+        }
+      }
+      const errorText = await res.text();
+      throw new Error(errorText || `Failed to create session (${res.status})`);
+    } catch (err) {
+      console.error("Failed to create group session:", err);
+      throw err;
     }
-    return sessionId;
   };
 
   const handleInvite = async () => {
+    setSessionError(null);
     setInviteStatus("sending");
-    const sessionId = await getOrCreateSessionId();
+    try {
+      const sessionId = await getOrCreateSessionId();
 
-    const result = await sendGroupInvite(sessionId);
+      const result = await sendGroupInvite(sessionId);
 
-    if (result.method === "line-app" && /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
+      if (result.method === "line-app" && /iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
+        setInviteStatus("sent");
+        setTimeout(() => {
+          navigate(`/group/waiting?session=${sessionId}`);
+        }, 500);
+        return;
+      }
+
       setInviteStatus("sent");
-      setTimeout(() => {
-        navigate(`/group/waiting?session=${sessionId}`);
-      }, 500);
-      return;
+      navigate(`/group/waiting?session=${sessionId}`);
+    } catch {
+      setInviteStatus("idle");
+      setSessionError("Failed to create session. If the backend was just changed, run the database sync and try again.");
     }
-
-    setInviteStatus("sent");
-    navigate(`/group/waiting?session=${sessionId}`);
   };
 
   const completedSteps = [
@@ -186,6 +203,13 @@ export default function GroupSetup() {
       </div>
 
       <div className="flex-1 overflow-y-auto pb-6 hide-scrollbar">
+        {sessionError && (
+          <div className="px-5 pt-4">
+            <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600" data-testid="text-session-error">
+              {sessionError}
+            </div>
+          </div>
+        )}
 
         <div className="pt-4 pb-3">
           <motion.div

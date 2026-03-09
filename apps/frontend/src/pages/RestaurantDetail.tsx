@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useLocation, useRoute } from "wouter";
 import { useQuery } from "@tanstack/react-query";
@@ -155,6 +155,10 @@ export default function RestaurantDetail() {
   const [showDeliveryDrawer, setShowDeliveryDrawer] = useState(false);
   const { isSaved, getBucket } = useSavedRestaurants();
   const { isEnabled } = useFeatureFlags();
+  const goBack = useCallback(() => {
+    if (window.history.length > 1) window.history.back();
+    else navigate("/");
+  }, [navigate]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const saveButtonRef = useRef<HTMLButtonElement>(null);
   const touchStartX = useRef(0);
@@ -192,7 +196,7 @@ export default function RestaurantDetail() {
         <span className="text-4xl">😕</span>
         <p className="text-muted-foreground">Restaurant not found</p>
         <button
-          onClick={() => window.history.back()}
+          onClick={goBack}
           className="px-6 py-3 rounded-full bg-foreground text-white font-bold text-sm active:scale-[0.95] transition-transform duration-200"
         >
           Go back
@@ -202,9 +206,18 @@ export default function RestaurantDetail() {
   }
 
   const customPhotos = RESTAURANT_PHOTOS[restaurant.id];
+  const extraApiPhotos = restaurant.photos?.filter((photo) => photo && photo !== restaurant.imageUrl) ?? [];
   const allPhotos = customPhotos
     ? [customPhotos[0], ...customPhotos.slice(1)]
-    : [restaurant.imageUrl, ...MOCK_PHOTOS];
+    : [restaurant.imageUrl, ...extraApiPhotos, ...MOCK_PHOTOS].filter(Boolean);
+  const openingHours = restaurant.openingHours?.length ? restaurant.openingHours : MOCK_HOURS;
+  const reviews = restaurant.reviews?.length
+    ? restaurant.reviews.map((review) => ({
+        ...review,
+        avatar: review.author.charAt(0).toUpperCase() || "•",
+      }))
+    : MOCK_REVIEWS;
+  const phone = restaurant.phone || "+66 2-XXX-XXXX";
 
   const DELIVERY_APPS = [
     { id: "grab", name: "Grab", emoji: "🟢", color: "#00B14F", deepLink: (name: string) => `grab://food/search?q=${encodeURIComponent(name)}`, fallback: (name: string) => `https://food.grab.com/th/en/restaurants?search=${encodeURIComponent(name)}` },
@@ -236,7 +249,7 @@ export default function RestaurantDetail() {
   };
 
   const today = new Date().toLocaleDateString("en-US", { weekday: "long" });
-  const todayHours = MOCK_HOURS.find((h) => h.day === today);
+  const todayHours = openingHours.find((h) => h.day === today);
 
   return (
     <div className="w-full min-h-[100dvh] bg-white pb-40" data-testid="restaurant-detail-page">
@@ -268,7 +281,7 @@ export default function RestaurantDetail() {
         <div className="absolute inset-0 bg-gradient-to-t from-black/20 via-transparent to-black/10 pointer-events-none" />
 
         <button
-          onClick={() => window.history.back()}
+          onClick={goBack}
           className="absolute top-4 left-4 w-9 h-9 bg-white/90 backdrop-blur-sm rounded-full flex items-center justify-center z-10 active:scale-[0.90] transition-transform duration-150"
           style={{ boxShadow: "0 2px 8px rgba(0,0,0,0.12)" }}
           data-testid="button-back-hero"
@@ -336,7 +349,7 @@ export default function RestaurantDetail() {
         <p className="text-muted-foreground text-sm mb-3">{restaurant.category}</p>
 
         <div className="flex items-center gap-4 mb-5 text-sm text-muted-foreground">
-          <span>📍 {restaurant.address}, Bangkok</span>
+          <span>📍 {restaurant.address}</span>
           <span>{"฿".repeat(restaurant.priceLevel)}</span>
         </div>
 
@@ -400,7 +413,7 @@ export default function RestaurantDetail() {
                 className="overflow-hidden"
               >
                 <div className="py-2 space-y-2">
-                  {MOCK_HOURS.map((h) => (
+                  {openingHours.map((h) => (
                     <div key={h.day} className={`flex justify-between text-sm px-9 ${h.day === today ? "font-bold text-foreground" : "text-muted-foreground"}`}>
                       <span>{h.day}</span>
                       <span>{h.hours}</span>
@@ -416,14 +429,14 @@ export default function RestaurantDetail() {
           <span className="text-lg">📞</span>
           <div>
             <p className="font-bold text-sm">Phone</p>
-            <p className="text-sm text-muted-foreground">+66 2-XXX-XXXX</p>
+            <p className="text-sm text-muted-foreground">{phone}</p>
           </div>
         </div>
 
         <div className="border-t border-gray-100/80 pt-5 mb-6">
           <h2 className="font-bold text-lg mb-4">Reviews</h2>
           <div className="space-y-5">
-            {MOCK_REVIEWS.map((review, idx) => (
+            {reviews.map((review, idx) => (
               <div
                 key={idx}
                 className="flex gap-3"

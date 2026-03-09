@@ -17,6 +17,9 @@ import {
   Settings2,
   Store,
   ShieldCheck,
+  UserSearch,
+  MapPin,
+  CalendarDays,
 } from "lucide-react";
 import toastLogo from "@assets/toast_logo_nobg.png";
 
@@ -41,9 +44,12 @@ const adminNavItems: { label: string; icon: typeof LayoutDashboard; href: string
   { label: "Campaigns", icon: Megaphone, href: "/admin/campaigns", activeColor: "text-yellow-600" },
   { label: "Banners", icon: ImageIcon, href: "/admin/banners", activeColor: "text-pink-600" },
   { label: "Analytics", icon: BarChart3, href: "/admin/analytics", activeColor: "text-teal-600" },
+  { label: "Customers", icon: UserSearch, href: "/admin/customers", activeColor: "text-violet-600" },
   { label: "Recommendations", icon: Brain, href: "/admin/recommendations", activeColor: "text-indigo-600" },
   { label: "Experiments", icon: FlaskConical, href: "/admin/experiments", activeColor: "text-fuchsia-600" },
   { label: "Operations", icon: Gauge, href: "/admin/operations", activeColor: "text-cyan-600" },
+  { label: "Sessions", icon: CalendarDays, href: "/admin/sessions", activeColor: "text-sky-600" },
+  { label: "Places", icon: MapPin, href: "/admin/places", activeColor: "text-lime-600" },
   { label: "Security Audit", icon: Shield, href: "/admin/security-audit", activeColor: "text-rose-600" },
   { label: "App Config", icon: Settings2, href: "/admin/config", activeColor: "text-slate-600" },
 ];

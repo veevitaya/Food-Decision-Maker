@@ -22,11 +22,12 @@ interface MenuItem {
 
 interface SessionMember {
   id: number;
-  sessionCode: string;
-  lineUserId: string;
-  displayName: string;
-  pictureUrl: string | null;
-  joinedAt: string;
+  sessionId: number;
+  lineUserId?: string | null;
+  name: string;
+  avatarUrl: string | null;
+  joined: boolean;
+  createdAt: string;
 }
 
 interface MatchInfo {
@@ -237,11 +238,11 @@ function SwipeCardGroup({ item, active, behind, onSwipe, onTap, showHint = false
           <div className="flex items-center gap-2">
             <div className="flex -space-x-1.5">
               {members.map((m) => (
-                m.pictureUrl ? (
-                  <img key={m.lineUserId} src={m.pictureUrl} alt={m.displayName} className="w-5 h-5 rounded-full border-[1.5px] border-white object-cover" />
+                m.avatarUrl ? (
+                  <img key={m.id} src={m.avatarUrl} alt={m.name} className="w-5 h-5 rounded-full border-[1.5px] border-white object-cover" />
                 ) : (
-                  <div key={m.lineUserId} className="w-5 h-5 rounded-full border-[1.5px] border-white bg-gradient-to-br from-amber-100 to-orange-100 flex items-center justify-center">
-                    <span className="text-[8px] font-bold text-amber-600">{m.displayName.charAt(0)}</span>
+                  <div key={m.id} className="w-5 h-5 rounded-full border-[1.5px] border-white bg-gradient-to-br from-amber-100 to-orange-100 flex items-center justify-center">
+                    <span className="text-[8px] font-bold text-amber-600">{m.name.charAt(0)}</span>
                   </div>
                 )
               ))}
@@ -288,9 +289,40 @@ export default function GroupSwipe() {
   const [sessionEnded, setSessionEnded] = useState(false);
 
   useEffect(() => {
+    if (!sessionCode) return;
     const loadRestaurants = async () => {
       try {
-        const res = await fetch("/api/restaurants");
+        // Get user location with hard 3s fallback to Bangkok centre
+        const BANGKOK = { lat: 13.7563, lng: 100.5018 };
+        const getCoords = (): Promise<{ lat: number; lng: number }> => {
+          const hardTimeout = new Promise<typeof BANGKOK>((resolve) =>
+            setTimeout(() => resolve(BANGKOK), 3000),
+          );
+          const geo = new Promise<typeof BANGKOK>((resolve) => {
+            if (!navigator.geolocation) { resolve(BANGKOK); return; }
+            try {
+              navigator.geolocation.getCurrentPosition(
+                (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+                () => resolve(BANGKOK),
+                { timeout: 2500 },
+              );
+            } catch (err) {
+              console.warn("Geolocation threw synchronously, falling back to default coords:", err);
+              resolve(BANGKOK);
+            }
+          });
+          return Promise.race([geo, hardTimeout]).catch((err) => {
+            console.warn("Failed to resolve geolocation, falling back to default coords:", err);
+            return BANGKOK;
+          });
+        };
+
+        const { lat, lng } = await getCoords();
+        // Use the session deck endpoint — triggers Places API fetch when DB is empty,
+        // then caches results in DB so subsequent calls are instant.
+        const res = await fetch(
+          `/api/group/sessions/${sessionCode}/deck?lat=${lat}&lng=${lng}&radius=5000`,
+        );
         if (res.ok) {
           const data = await res.json();
           const items: MenuItem[] = data.map((r: any) => ({
@@ -305,8 +337,7 @@ export default function GroupSwipe() {
             imageUrl: r.imageUrl || "",
             isNew: r.isNew || false,
           }));
-          const shuffled = items.sort(() => Math.random() - 0.5);
-          setMenuItems(shuffled);
+          setMenuItems(items.sort(() => Math.random() - 0.5));
         }
       } catch (err) {
         console.error("Failed to load restaurants:", err);
@@ -315,7 +346,7 @@ export default function GroupSwipe() {
       }
     };
     loadRestaurants();
-  }, []);
+  }, [sessionCode]);
 
   useEffect(() => {
     if (!sessionCode) return;
@@ -375,7 +406,7 @@ export default function GroupSwipe() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          lineUserId: profile.userId,
+          voterName: profile.displayName,
           menuItemId,
           direction,
         }),
@@ -453,14 +484,14 @@ export default function GroupSwipe() {
       const votersForItem = new Set<string>();
       for (const s of positiveSwipes) {
         if (s.menuItemId === menuItemId) {
-          votersForItem.add(s.lineUserId);
+          votersForItem.add(s.voterName);
         }
       }
 
       if (votersForItem.size > 1 && votersForItem.size < data.members.length) {
         const voterNames = data.members
-          .filter((m: SessionMember) => votersForItem.has(m.lineUserId) && m.lineUserId !== profile?.userId)
-          .map((m: SessionMember) => m.displayName);
+          .filter((m: SessionMember) => votersForItem.has(m.name) && m.name !== profile?.displayName)
+          .map((m: SessionMember) => m.name);
 
         if (voterNames.length > 0) {
           setNotifiedPartials(prev => new Set(prev).add(menuItemId));
@@ -482,7 +513,7 @@ export default function GroupSwipe() {
   };
 
   const handleTap = (item: MenuItem) => {
-    navigate(`/restaurants?category=${encodeURIComponent(item.name)}`);
+    navigate(`/restaurant/${item.id}`);
   };
 
   const handleEndSession = async () => {
@@ -524,15 +555,15 @@ export default function GroupSwipe() {
           </p>
           <div className="flex items-center gap-2 mt-3">
             {members.map((m) => (
-              <div key={m.lineUserId} className="flex items-center gap-1.5 bg-gray-50 rounded-full px-3 py-1.5">
-                {m.pictureUrl ? (
-                  <img src={m.pictureUrl} alt={m.displayName} className="w-5 h-5 rounded-full object-cover" />
+              <div key={m.id} className="flex items-center gap-1.5 bg-gray-50 rounded-full px-3 py-1.5">
+                {m.avatarUrl ? (
+                  <img src={m.avatarUrl} alt={m.name} className="w-5 h-5 rounded-full object-cover" />
                 ) : (
                   <div className="w-5 h-5 rounded-full bg-gradient-to-br from-amber-100 to-orange-100 flex items-center justify-center">
-                    <span className="text-[8px] font-bold text-amber-600">{m.displayName.charAt(0)}</span>
+                    <span className="text-[8px] font-bold text-amber-600">{m.name.charAt(0)}</span>
                   </div>
                 )}
-                <span className="text-xs font-semibold">{m.lineUserId === profile?.userId ? "You" : m.displayName}</span>
+                <span className="text-xs font-semibold">{m.lineUserId === profile?.userId ? "You" : m.name}</span>
               </div>
             ))}
           </div>
@@ -639,22 +670,22 @@ export default function GroupSwipe() {
         >
           {members.map((m, i) => (
             <motion.div
-              key={m.lineUserId}
+              key={m.id}
               initial={{ scale: 0, y: 8 }}
               animate={{ scale: 1, y: 0 }}
               transition={{ delay: 0.5 + i * 0.08, type: "spring", damping: 18, stiffness: 250 }}
               className="flex items-center gap-2 bg-green-50/80 rounded-full px-4 py-2 border border-green-200/50"
               style={{ boxShadow: "0 2px 10px rgba(0,200,100,0.08)" }}
             >
-              {m.pictureUrl ? (
-                <img src={m.pictureUrl} alt={m.displayName} className="w-6 h-6 rounded-full object-cover" />
+              {m.avatarUrl ? (
+                <img src={m.avatarUrl} alt={m.name} className="w-6 h-6 rounded-full object-cover" />
               ) : (
                 <div className="w-6 h-6 rounded-full bg-gradient-to-br from-amber-100 to-orange-100 flex items-center justify-center">
-                  <span className="text-[9px] font-bold text-amber-600">{m.displayName.charAt(0)}</span>
+                  <span className="text-[9px] font-bold text-amber-600">{m.name.charAt(0)}</span>
                 </div>
               )}
               <span className="text-[hsl(160,60%,40%)] text-[11px] font-bold">✓</span>
-              <span className="text-xs font-bold">{m.lineUserId === profile?.userId ? "You" : m.displayName}</span>
+              <span className="text-xs font-bold">{m.lineUserId === profile?.userId ? "You" : m.name}</span>
             </motion.div>
           ))}
         </motion.div>
@@ -723,18 +754,18 @@ export default function GroupSwipe() {
           <div>
             <h1 className="font-bold text-[22px] tracking-tight" data-testid="text-group-title">Group Swipe</h1>
             <p className="text-[11px] text-muted-foreground mt-0.5">
-              {members.map(m => m.lineUserId === profile?.userId ? "You" : m.displayName).join(", ")}
+              {members.map(m => m.lineUserId === profile?.userId ? "You" : m.name).join(", ")}
             </p>
           </div>
         </div>
         <div className="flex items-center gap-2">
           <div className="flex items-center -space-x-1.5">
             {members.map((m) => (
-              m.pictureUrl ? (
-                <img key={m.lineUserId} src={m.pictureUrl} alt={m.displayName} className="w-7 h-7 rounded-full border-[2px] border-white object-cover" style={{ boxShadow: "0 2px 8px rgba(0,0,0,0.08)" }} />
+              m.avatarUrl ? (
+                <img key={m.id} src={m.avatarUrl} alt={m.name} className="w-7 h-7 rounded-full border-[2px] border-white object-cover" style={{ boxShadow: "0 2px 8px rgba(0,0,0,0.08)" }} />
               ) : (
-                <div key={m.lineUserId} className="w-7 h-7 rounded-full border-[2px] border-white bg-gradient-to-br from-amber-100 to-orange-100 flex items-center justify-center" style={{ boxShadow: "0 2px 8px rgba(0,0,0,0.08)" }}>
-                  <span className="text-[10px] font-bold text-amber-600">{m.displayName.charAt(0)}</span>
+                <div key={m.id} className="w-7 h-7 rounded-full border-[2px] border-white bg-gradient-to-br from-amber-100 to-orange-100 flex items-center justify-center" style={{ boxShadow: "0 2px 8px rgba(0,0,0,0.08)" }}>
+                  <span className="text-[10px] font-bold text-amber-600">{m.name.charAt(0)}</span>
                 </div>
               )
             ))}

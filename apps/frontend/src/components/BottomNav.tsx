@@ -40,8 +40,10 @@ export function BottomNav({ showBack = true, onBack, hidden = false }: BottomNav
   const handleBack = () => {
     if (onBack) {
       onBack();
-    } else {
+    } else if (window.history.length > 1) {
       window.history.back();
+    } else {
+      navigate("/");
     }
   };
 
