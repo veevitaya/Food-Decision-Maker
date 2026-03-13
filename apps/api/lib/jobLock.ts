@@ -29,22 +29,37 @@ export async function withJobLock(jobName: string, fn: () => Promise<void>): Pro
     throw new Error(`[jobLock] Unknown job name: "${jobName}". Register it in JOB_LOCK_IDS.`);
   }
 
-  const client = await pool.connect();
+  let client: Awaited<ReturnType<typeof pool.connect>> | null = null;
+  let lockAcquired = false;
   try {
+    client = await pool.connect();
     const result = await client.query<{ acquired: boolean }>(
       "SELECT pg_try_advisory_lock($1) AS acquired",
       [lockId],
     );
 
-    if (!result.rows[0]?.acquired) {
+    lockAcquired = !!result.rows[0]?.acquired;
+    if (!lockAcquired) {
       // Another instance is already running this job — skip
       return;
     }
 
     await fn();
+  } catch (error) {
+    // Background jobs should never bring down the API process.
+    console.error(`[jobLock] ${jobName} skipped: ${String(error)}`);
   } finally {
-    // Release the advisory lock before returning the connection to the pool
-    await client.query("SELECT pg_advisory_unlock($1)", [lockId]);
+    if (!client) return;
+
+    if (lockAcquired) {
+      // Release the advisory lock before returning the connection to the pool.
+      try {
+        await client.query("SELECT pg_advisory_unlock($1)", [lockId]);
+      } catch (unlockError) {
+        console.error(`[jobLock] ${jobName} unlock failed: ${String(unlockError)}`);
+      }
+    }
+
     client.release();
   }
 }

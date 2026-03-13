@@ -126,10 +126,10 @@ function getMockPerformance(bannerId: number) {
 }
 
 const formatBadgeColors: Record<string, { bg: string; text: string }> = {
-  display_banner: { bg: "bg-gray-100 dark:bg-muted", text: "text-indigo-600 dark:text-indigo-400" },
-  swipe_card: { bg: "bg-gray-100 dark:bg-muted", text: "text-cyan-600 dark:text-cyan-400" },
-  interstitial: { bg: "bg-gray-100 dark:bg-muted", text: "text-violet-600 dark:text-violet-400" },
-  native_feed: { bg: "bg-gray-100 dark:bg-muted", text: "text-muted-foreground" },
+  display_banner: { bg: "bg-gray-100", text: "text-indigo-600" },
+  swipe_card: { bg: "bg-gray-100", text: "text-cyan-600" },
+  interstitial: { bg: "bg-gray-100", text: "text-violet-600" },
+  native_feed: { bg: "bg-gray-100", text: "text-muted-foreground" },
 };
 
 const formatLabels: Record<string, string> = {
@@ -226,7 +226,7 @@ export default function AdminBanners() {
         <div className="flex items-center gap-3">
           <Layers className="w-5 h-5 text-blue-500" />
           <div>
-            <h2 className="text-xl font-semibold text-foreground" data-testid="text-banners-title">
+            <h2 className="text-xl font-semibold text-gray-800" data-testid="text-banners-title">
               Ad Creative Manager
             </h2>
             <p className="text-sm text-muted-foreground">{banners.length} total creatives</p>
@@ -237,7 +237,7 @@ export default function AdminBanners() {
             resetForm();
             setShowForm(true);
           }}
-          className="inline-flex items-center gap-1.5 bg-foreground hover:bg-foreground/90 text-white rounded-xl px-5 py-2.5 text-sm font-medium transition-colors"
+          className="inline-flex items-center gap-1.5 bg-[#FFCC02] hover:bg-[#FFCC02]/90 text-gray-900 rounded-xl px-5 py-2.5 text-sm font-medium transition-colors"
           data-testid="button-create-banner"
         >
           <Plus className="w-4 h-4" />
@@ -246,9 +246,9 @@ export default function AdminBanners() {
       </div>
 
       {showForm && (
-        <div className="bg-white dark:bg-card rounded-2xl border border-gray-100 dark:border-border p-6 space-y-6" data-testid="banner-form-panel">
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-6" data-testid="banner-form-panel">
           <div className="flex items-center justify-between gap-4">
-            <h3 className="text-[15px] font-semibold text-foreground">
+            <h3 className="text-[15px] font-semibold text-gray-800">
               {editingId !== null ? "Edit Creative" : "New Creative"}
             </h3>
             <Button
@@ -263,42 +263,42 @@ export default function AdminBanners() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <Label className="text-foreground text-sm font-medium">Title</Label>
+              <Label className="text-gray-800 text-sm font-medium">Title</Label>
               <Input
                 value={form.title}
                 onChange={(e) => setForm({ ...form, title: e.target.value })}
                 placeholder="Banner title"
-                className="rounded-xl border-gray-200 dark:border-border focus-visible:ring-foreground/20"
+                className="rounded-xl border-gray-100 focus-visible:ring-[#FFCC02]/30"
                 data-testid="input-banner-title"
               />
             </div>
             <div className="space-y-1.5">
-              <Label className="text-foreground text-sm font-medium">Image URL</Label>
+              <Label className="text-gray-800 text-sm font-medium">Image URL</Label>
               <Input
                 value={form.imageUrl}
                 onChange={(e) => setForm({ ...form, imageUrl: e.target.value })}
                 placeholder="https://..."
-                className="rounded-xl border-gray-200 dark:border-border focus-visible:ring-foreground/20"
+                className="rounded-xl border-gray-100 focus-visible:ring-[#FFCC02]/30"
                 data-testid="input-banner-image"
               />
             </div>
             <div className="space-y-1.5">
-              <Label className="text-foreground text-sm font-medium">Link URL</Label>
+              <Label className="text-gray-800 text-sm font-medium">Link URL</Label>
               <Input
                 value={form.linkUrl}
                 onChange={(e) => setForm({ ...form, linkUrl: e.target.value })}
                 placeholder="https://..."
-                className="rounded-xl border-gray-200 dark:border-border focus-visible:ring-foreground/20"
+                className="rounded-xl border-gray-100 focus-visible:ring-[#FFCC02]/30"
                 data-testid="input-banner-link"
               />
             </div>
             <div className="space-y-1.5">
-              <Label className="text-foreground text-sm font-medium">Position</Label>
+              <Label className="text-gray-800 text-sm font-medium">Position</Label>
               <Select
                 value={form.position}
                 onValueChange={(val) => setForm({ ...form, position: val })}
               >
-                <SelectTrigger className="rounded-xl border-gray-200 dark:border-border" data-testid="select-banner-position">
+                <SelectTrigger className="rounded-xl border-gray-100" data-testid="select-banner-position">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -311,12 +311,12 @@ export default function AdminBanners() {
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label className="text-foreground text-sm font-medium">Ad Format</Label>
+              <Label className="text-gray-800 text-sm font-medium">Ad Format</Label>
               <Select
                 value={form.adFormat}
                 onValueChange={(val) => setForm({ ...form, adFormat: val })}
               >
-                <SelectTrigger className="rounded-xl border-gray-200 dark:border-border" data-testid="select-ad-format">
+                <SelectTrigger className="rounded-xl border-gray-100" data-testid="select-ad-format">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -329,12 +329,12 @@ export default function AdminBanners() {
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label className="text-foreground text-sm font-medium">CTA Type</Label>
+              <Label className="text-gray-800 text-sm font-medium">CTA Type</Label>
               <Select
                 value={form.ctaType}
                 onValueChange={(val) => setForm({ ...form, ctaType: val })}
               >
-                <SelectTrigger className="rounded-xl border-gray-200 dark:border-border" data-testid="select-cta-type">
+                <SelectTrigger className="rounded-xl border-gray-100" data-testid="select-cta-type">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -347,31 +347,31 @@ export default function AdminBanners() {
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label className="text-foreground text-sm font-medium">Start Date</Label>
+              <Label className="text-gray-800 text-sm font-medium">Start Date</Label>
               <Input
                 type="date"
                 value={form.startDate}
                 onChange={(e) => setForm({ ...form, startDate: e.target.value })}
-                className="rounded-xl border-gray-200 dark:border-border focus-visible:ring-foreground/20"
+                className="rounded-xl border-gray-100 focus-visible:ring-[#FFCC02]/30"
                 data-testid="input-banner-start"
               />
             </div>
             <div className="space-y-1.5">
-              <Label className="text-foreground text-sm font-medium">End Date</Label>
+              <Label className="text-gray-800 text-sm font-medium">End Date</Label>
               <Input
                 type="date"
                 value={form.endDate}
                 onChange={(e) => setForm({ ...form, endDate: e.target.value })}
-                className="rounded-xl border-gray-200 dark:border-border focus-visible:ring-foreground/20"
+                className="rounded-xl border-gray-100 focus-visible:ring-[#FFCC02]/30"
                 data-testid="input-banner-end"
               />
             </div>
           </div>
 
-          <div className="border-t border-gray-100 dark:border-border pt-5">
+          <div className="border-t border-gray-100 pt-5">
             <div className="flex items-center gap-2 mb-4">
               <Target className="w-4 h-4 text-muted-foreground" />
-              <h4 className="text-sm font-semibold text-foreground">Targeting</h4>
+              <h4 className="text-sm font-semibold text-gray-800">Targeting</h4>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="space-y-1.5">
@@ -380,7 +380,7 @@ export default function AdminBanners() {
                   value={form.ageRange}
                   onValueChange={(val) => setForm({ ...form, ageRange: val })}
                 >
-                  <SelectTrigger className="rounded-xl border-gray-200 dark:border-border" data-testid="select-age-range">
+                  <SelectTrigger className="rounded-xl border-gray-100" data-testid="select-age-range">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -402,8 +402,8 @@ export default function AdminBanners() {
                       onClick={() => setForm({ ...form, genderTargeting: toggleArrayItem(form.genderTargeting, g) })}
                       className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
                         form.genderTargeting.includes(g)
-                          ? "bg-foreground text-white"
-                          : "bg-gray-100 dark:bg-muted text-muted-foreground"
+                          ? "bg-[#FFCC02] text-gray-900"
+                          : "bg-gray-100 text-muted-foreground"
                       }`}
                       data-testid={`button-gender-${g.toLowerCase()}`}
                     >
@@ -422,8 +422,8 @@ export default function AdminBanners() {
                       onClick={() => setForm({ ...form, userTypeTargeting: toggleArrayItem(form.userTypeTargeting, u) })}
                       className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
                         form.userTypeTargeting.includes(u)
-                          ? "bg-foreground text-white"
-                          : "bg-gray-100 dark:bg-muted text-muted-foreground"
+                          ? "bg-[#FFCC02] text-gray-900"
+                          : "bg-gray-100 text-muted-foreground"
                       }`}
                       data-testid={`button-usertype-${u.toLowerCase().replace(/\s+/g, "-")}`}
                     >
@@ -435,10 +435,10 @@ export default function AdminBanners() {
             </div>
           </div>
 
-          <div className="border-t border-gray-100 dark:border-border pt-5">
+          <div className="border-t border-gray-100 pt-5">
             <div className="flex items-center gap-2 mb-4">
               <Calendar className="w-4 h-4 text-muted-foreground" />
-              <h4 className="text-sm font-semibold text-foreground">Scheduling</h4>
+              <h4 className="text-sm font-semibold text-gray-800">Scheduling</h4>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-1.5">
@@ -448,7 +448,7 @@ export default function AdminBanners() {
                   value={form.frequencyCap}
                   onChange={(e) => setForm({ ...form, frequencyCap: e.target.value })}
                   placeholder="3"
-                  className="rounded-xl border-gray-200 dark:border-border focus-visible:ring-foreground/20"
+                  className="rounded-xl border-gray-100 focus-visible:ring-[#FFCC02]/30"
                   data-testid="input-frequency-cap"
                 />
               </div>
@@ -462,8 +462,8 @@ export default function AdminBanners() {
                       onClick={() => setForm({ ...form, scheduleDays: toggleArrayItem(form.scheduleDays, d) })}
                       className={`w-9 h-9 rounded-full text-xs font-medium transition-colors ${
                         form.scheduleDays.includes(d)
-                          ? "bg-foreground text-white"
-                          : "bg-gray-100 dark:bg-muted text-muted-foreground"
+                          ? "bg-[#FFCC02] text-gray-900"
+                          : "bg-gray-100 text-muted-foreground"
                       }`}
                       data-testid={`button-day-${d.toLowerCase()}`}
                     >
@@ -475,10 +475,10 @@ export default function AdminBanners() {
             </div>
           </div>
 
-          <div className="border-t border-gray-100 dark:border-border pt-5">
+          <div className="border-t border-gray-100 pt-5">
             <div className="flex items-center gap-2 mb-4">
               <DollarSign className="w-4 h-4 text-green-500" />
-              <h4 className="text-sm font-semibold text-foreground">Budget</h4>
+              <h4 className="text-sm font-semibold text-gray-800">Budget</h4>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="space-y-1.5">
@@ -488,7 +488,7 @@ export default function AdminBanners() {
                   value={form.dailyBudget}
                   onChange={(e) => setForm({ ...form, dailyBudget: e.target.value })}
                   placeholder="500"
-                  className="rounded-xl border-gray-200 dark:border-border focus-visible:ring-foreground/20"
+                  className="rounded-xl border-gray-100 focus-visible:ring-[#FFCC02]/30"
                   data-testid="input-daily-budget"
                 />
               </div>
@@ -499,7 +499,7 @@ export default function AdminBanners() {
                   value={form.totalBudget}
                   onChange={(e) => setForm({ ...form, totalBudget: e.target.value })}
                   placeholder="15000"
-                  className="rounded-xl border-gray-200 dark:border-border focus-visible:ring-foreground/20"
+                  className="rounded-xl border-gray-100 focus-visible:ring-[#FFCC02]/30"
                   data-testid="input-total-budget"
                 />
               </div>
@@ -509,7 +509,7 @@ export default function AdminBanners() {
                   value={form.bidType}
                   onValueChange={(val) => setForm({ ...form, bidType: val })}
                 >
-                  <SelectTrigger className="rounded-xl border-gray-200 dark:border-border" data-testid="select-bid-type">
+                  <SelectTrigger className="rounded-xl border-gray-100" data-testid="select-bid-type">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -524,10 +524,10 @@ export default function AdminBanners() {
             </div>
           </div>
 
-          <div className="border-t border-gray-100 dark:border-border pt-5">
+          <div className="border-t border-gray-100 pt-5">
             <div className="flex items-center gap-2 mb-4">
               <Zap className="w-4 h-4 text-[#FFCC02]" />
-              <h4 className="text-sm font-semibold text-foreground">A/B Testing</h4>
+              <h4 className="text-sm font-semibold text-gray-800">A/B Testing</h4>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-1.5">
@@ -536,7 +536,7 @@ export default function AdminBanners() {
                   value={form.variantName}
                   onChange={(e) => setForm({ ...form, variantName: e.target.value })}
                   placeholder="e.g. Hero Image v2"
-                  className="rounded-xl border-gray-200 dark:border-border focus-visible:ring-foreground/20"
+                  className="rounded-xl border-gray-100 focus-visible:ring-[#FFCC02]/30"
                   data-testid="input-variant-name"
                 />
               </div>
@@ -548,8 +548,8 @@ export default function AdminBanners() {
                     onClick={() => setForm({ ...form, abVariant: "A" })}
                     className={`px-5 py-2 rounded-full text-sm font-semibold transition-colors ${
                       form.abVariant === "A"
-                        ? "bg-foreground text-white"
-                        : "bg-gray-100 dark:bg-muted text-muted-foreground"
+                        ? "bg-[#FFCC02] text-gray-900"
+                        : "bg-gray-100 text-muted-foreground"
                     }`}
                     data-testid="button-variant-a"
                   >
@@ -560,8 +560,8 @@ export default function AdminBanners() {
                     onClick={() => setForm({ ...form, abVariant: "B" })}
                     className={`px-5 py-2 rounded-full text-sm font-semibold transition-colors ${
                       form.abVariant === "B"
-                        ? "bg-foreground text-white"
-                        : "bg-gray-100 dark:bg-muted text-muted-foreground"
+                        ? "bg-[#FFCC02] text-gray-900"
+                        : "bg-gray-100 text-muted-foreground"
                     }`}
                     data-testid="button-variant-b"
                   >
@@ -572,7 +572,7 @@ export default function AdminBanners() {
             </div>
           </div>
 
-          <div className="flex items-center gap-3 border-t border-gray-100 dark:border-border pt-5">
+          <div className="flex items-center gap-3 border-t border-gray-100 pt-5">
             <Switch
               checked={form.isActive}
               onCheckedChange={(val) => setForm({ ...form, isActive: val })}
@@ -584,7 +584,7 @@ export default function AdminBanners() {
           <button
             onClick={handleSubmit}
             disabled={isPending || !form.title || !form.imageUrl}
-            className="inline-flex items-center bg-foreground hover:bg-foreground/90 text-white rounded-xl px-6 py-2.5 text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="inline-flex items-center bg-[#FFCC02] hover:bg-[#FFCC02]/90 text-gray-900 rounded-xl px-6 py-2.5 text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             data-testid="button-save-banner"
           >
             {isPending ? "Saving..." : editingId !== null ? "Update" : "Create"}
@@ -599,7 +599,7 @@ export default function AdminBanners() {
           ))}
         </div>
       ) : banners.length === 0 ? (
-        <div className="bg-white dark:bg-card rounded-2xl border border-gray-100 dark:border-border p-8 text-center">
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-8 text-center">
           <Layers className="w-8 h-8 text-muted-foreground mx-auto mb-3" />
           <p className="text-muted-foreground" data-testid="text-no-banners">
             No creatives yet
@@ -619,11 +619,11 @@ export default function AdminBanners() {
             return (
               <div
                 key={banner.id}
-                className="bg-white dark:bg-card rounded-2xl border border-gray-100 dark:border-border overflow-visible"
+                className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-visible"
                 data-testid={`card-banner-${banner.id}`}
               >
                 {banner.imageUrl && (
-                  <div className="aspect-video rounded-t-2xl overflow-hidden bg-gray-50 dark:bg-muted relative">
+                  <div className="aspect-video rounded-t-2xl overflow-hidden bg-gray-50 relative">
                     <img
                       src={banner.imageUrl}
                       alt={banner.title}
@@ -639,7 +639,7 @@ export default function AdminBanners() {
                       </span>
                       {mock.variant === "B" && (
                         <span
-                          className="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold bg-gray-100 dark:bg-muted text-muted-foreground"
+                          className="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold bg-gray-100 text-muted-foreground"
                           data-testid={`badge-variant-${banner.id}`}
                         >
                           A/B
@@ -665,8 +665,8 @@ export default function AdminBanners() {
                     <span
                       className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ${
                         banner.isActive
-                          ? "bg-foreground text-white"
-                          : "bg-gray-100 dark:bg-muted text-muted-foreground"
+                          ? "bg-[#00B14F]/10 text-[#00B14F]"
+                          : "bg-gray-100 text-gray-500"
                       }`}
                       data-testid={`badge-banner-status-${banner.id}`}
                     >
@@ -675,21 +675,21 @@ export default function AdminBanners() {
                   </div>
 
                   <div className="grid grid-cols-4 gap-2 text-center" data-testid={`stats-row-${banner.id}`}>
-                    <div className="bg-gray-50 dark:bg-muted rounded-xl py-2 px-1">
+                    <div className="bg-gray-50 rounded-xl py-2 px-1">
                       <Eye className="w-3.5 h-3.5 text-muted-foreground mx-auto mb-0.5" />
                       <p className="text-xs font-semibold text-foreground">
                         {mock.impressions.toLocaleString()}
                       </p>
                       <p className="text-[10px] text-muted-foreground">Views</p>
                     </div>
-                    <div className="bg-gray-50 dark:bg-muted rounded-xl py-2 px-1">
+                    <div className="bg-gray-50 rounded-xl py-2 px-1">
                       <MousePointer className="w-3.5 h-3.5 text-muted-foreground mx-auto mb-0.5" />
                       <p className="text-xs font-semibold text-foreground">
                         {mock.clicks.toLocaleString()}
                       </p>
                       <p className="text-[10px] text-muted-foreground">Clicks</p>
                     </div>
-                    <div className="bg-gray-50 dark:bg-muted rounded-xl py-2 px-1">
+                    <div className="bg-gray-50 rounded-xl py-2 px-1">
                       <ShoppingCart className="w-3.5 h-3.5 text-muted-foreground mx-auto mb-0.5" />
                       <p className="text-xs font-semibold text-foreground">
                         {mock.conversions}
@@ -718,7 +718,7 @@ export default function AdminBanners() {
                       <span>Budget: {mock.spent.toLocaleString()} / {mock.totalBudget.toLocaleString()} THB</span>
                       <span className="font-medium">{spentPct}%</span>
                     </div>
-                    <div className="w-full h-1.5 bg-gray-100 dark:bg-muted rounded-full overflow-hidden">
+                    <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
                       <div
                         className="h-full rounded-full transition-all"
                         style={{
@@ -732,18 +732,18 @@ export default function AdminBanners() {
                   </div>
 
                   <div className="flex items-center gap-1.5 flex-wrap" data-testid={`targeting-pills-${banner.id}`}>
-                    <span className="inline-flex items-center rounded-full bg-gray-100 dark:bg-muted text-foreground px-2.5 py-0.5 text-[10px] font-medium">
+                    <span className="inline-flex items-center rounded-full bg-gray-100 text-foreground px-2.5 py-0.5 text-[10px] font-medium">
                       Age {mock.targeting.age}
                     </span>
-                    <span className="inline-flex items-center rounded-full bg-gray-100 dark:bg-muted text-foreground px-2.5 py-0.5 text-[10px] font-medium">
+                    <span className="inline-flex items-center rounded-full bg-gray-100 text-foreground px-2.5 py-0.5 text-[10px] font-medium">
                       {mock.targeting.gender}
                     </span>
-                    <span className="inline-flex items-center rounded-full bg-gray-100 dark:bg-muted text-foreground px-2.5 py-0.5 text-[10px] font-medium">
+                    <span className="inline-flex items-center rounded-full bg-gray-100 text-foreground px-2.5 py-0.5 text-[10px] font-medium">
                       {mock.targeting.userType}
                     </span>
                   </div>
 
-                  <div className="flex items-center gap-1 flex-wrap border-t border-gray-100 dark:border-border pt-3">
+                  <div className="flex items-center gap-1 flex-wrap border-t border-gray-100 pt-3">
                     <Button
                       size="sm"
                       variant="ghost"

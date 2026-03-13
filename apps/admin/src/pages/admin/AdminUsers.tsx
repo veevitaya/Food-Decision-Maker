@@ -39,16 +39,16 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { AdminUser, AdminRole } from "@shared/schema";
+import type { AdminUser } from "@shared/schema";
 import { ADMIN_ROLES, ADMIN_PERMISSIONS, ROLE_DEFAULT_PERMISSIONS } from "@shared/schema";
 
 type AdminUserSafe = Omit<AdminUser, "passwordHash">;
 
 const ROLE_COLORS: Record<string, string> = {
-  superadmin: "bg-amber-100 dark:bg-amber-500/15 text-amber-700 dark:text-amber-400",
-  admin: "bg-blue-100 dark:bg-blue-500/15 text-blue-700 dark:text-blue-400",
-  moderator: "bg-violet-100 dark:bg-violet-500/15 text-violet-700 dark:text-violet-400",
-  viewer: "bg-gray-100 dark:bg-gray-500/15 text-gray-600 dark:text-gray-400",
+  superadmin: "bg-[#FFCC02]/15 text-[#FFCC02]",
+  admin: "bg-[#6C2BD9]/10 text-[#6C2BD9]",
+  moderator: "bg-[#00B14F]/10 text-[#00B14F]",
+  viewer: "bg-gray-100 text-gray-500",
 };
 
 const ROLE_ICONS: Record<string, typeof Shield> = {
@@ -141,11 +141,10 @@ export default function AdminUsers() {
   };
 
   const handleRoleChange = (role: string) => {
-    const typedRole = role as AdminRole;
     setFormData({
       ...formData,
-      role: typedRole,
-      permissions: [...(ROLE_DEFAULT_PERMISSIONS[typedRole] || [])],
+      role,
+      permissions: [...((ROLE_DEFAULT_PERMISSIONS as Record<string, string[]>)[role] || [])],
     });
   };
 
@@ -191,7 +190,7 @@ export default function AdminUsers() {
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div className="flex items-center gap-3 flex-wrap">
           <Users className="w-5 h-5 text-foreground" />
-          <span className="text-[15px] font-semibold text-foreground">Admin Users</span>
+          <span className="text-[15px] font-semibold text-gray-800">Admin Users</span>
           <Badge variant="secondary" data-testid="text-admin-count">
             {adminUsers.length} total
           </Badge>
@@ -217,14 +216,14 @@ export default function AdminUsers() {
                 </div>
                 <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider capitalize">{role}</span>
               </div>
-              <div className="text-2xl font-bold tracking-tight text-foreground">{count}</div>
+              <div className="text-2xl font-bold tracking-tight text-gray-800">{count}</div>
             </Card>
           );
         })}
       </div>
 
       <Card className="p-0 overflow-hidden" data-testid="section-admin-users-table">
-        <div className="flex items-center gap-3 p-4 border-b border-border flex-wrap">
+        <div className="flex items-center gap-3 p-4 border-b border-gray-100 flex-wrap">
           <div className="relative flex-1 min-w-[200px]">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input
@@ -240,7 +239,7 @@ export default function AdminUsers() {
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-border bg-muted/50">
+              <tr className="border-b border-gray-100 bg-gray-50">
                 <th className="text-left py-3 px-4 text-xs uppercase tracking-wider text-muted-foreground font-medium">Username</th>
                 <th className="text-left py-3 px-4 text-xs uppercase tracking-wider text-muted-foreground font-medium">Role</th>
                 <th className="text-left py-3 px-4 text-xs uppercase tracking-wider text-muted-foreground font-medium">Permissions</th>
@@ -252,9 +251,9 @@ export default function AdminUsers() {
             <tbody>
               {isLoading ? (
                 Array.from({ length: 3 }).map((_, i) => (
-                  <tr key={i} className="border-b border-border">
+                  <tr key={i} className="border-b border-gray-100">
                     <td colSpan={6} className="py-4 px-4">
-                      <div className="h-5 bg-muted rounded animate-pulse" />
+                      <div className="h-5 bg-gray-100 rounded animate-pulse" />
                     </td>
                   </tr>
                 ))
@@ -270,7 +269,7 @@ export default function AdminUsers() {
                   return (
                     <tr
                       key={user.id}
-                      className="border-b border-border"
+                      className="border-b border-gray-100"
                       data-testid={`row-admin-${user.id}`}
                     >
                       <td className="py-3 px-4">
@@ -310,7 +309,7 @@ export default function AdminUsers() {
                       <td className="py-3 px-4 text-center">
                         <Badge
                           variant={user.isActive ? "default" : "secondary"}
-                          className={user.isActive ? "bg-emerald-100 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-400" : ""}
+                          className={user.isActive ? "bg-[#00B14F]/10 text-[#00B14F]" : ""}
                           data-testid={`badge-status-${user.id}`}
                         >
                           {user.isActive ? (

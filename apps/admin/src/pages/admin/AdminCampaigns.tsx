@@ -1,58 +1,36 @@
-import { useEffect, useMemo, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
-import type { Campaign } from "@shared/schema";
-import {
-  Calendar,
-  CheckCircle,
-  DollarSign,
-  Eye,
-  MapPin,
-  MousePointerClick,
-  Pause,
-  Play,
-  Plus,
-  Search,
-  StopCircle,
-  Target,
-  Trash2,
-  TrendingUp,
-  User,
-} from "lucide-react";
+import { useState } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useToast } from "@/hooks/use-toast";
+import type { Campaign } from "@shared/schema";
+import {
+  Play,
+  Pause,
+  StopCircle,
+  Trash2,
+  CheckCircle,
+  Search,
+  Calendar,
+  User,
+  Eye,
+  MousePointerClick,
+  TrendingUp,
+  DollarSign,
+  MapPin,
+  Target,
+  Plus,
+  X,
+} from "lucide-react";
 
-const statusTabs = [
-  { label: "All", value: "all" },
-  { label: "Draft", value: "draft" },
-  { label: "Active", value: "active" },
-  { label: "Paused", value: "paused" },
-  { label: "Ended", value: "ended" },
-] as const;
-const pageSizes = [10, 25, 50] as const;
-
-type CampaignStatus = "draft" | "active" | "paused" | "ended";
-type CampaignQueryStatus = CampaignStatus | "all";
-
-type CampaignListResponse = {
-  items: Campaign[];
-  total: number;
-  page: number;
-  pageSize: number;
-  totalPages: number;
-  summary: {
-    impressions: number;
-    clicks: number;
-    ctrPct: number;
-    spent: number;
-  };
-};
+const statusTabs = ["All", "Draft", "Active", "Paused", "Ended"] as const;
 
 function statusPill(status: string | null) {
   switch (status) {
     case "active":
-      return "bg-foreground text-white";
+      return "bg-[#00B14F]/10 text-[#00B14F]";
     case "draft":
       return "bg-gray-100 text-muted-foreground";
     case "paused":
@@ -67,15 +45,15 @@ function statusPill(status: string | null) {
 function getAdType(dealType: string | null): { label: string; className: string } {
   switch (dealType) {
     case "discount":
-      return { label: "Swipe Card", className: "bg-gray-100 dark:bg-muted text-indigo-600 dark:text-indigo-400" };
+      return { label: "Swipe Card", className: "bg-gray-100 text-indigo-600" };
     case "bundle":
-      return { label: "Banner", className: "bg-gray-100 dark:bg-muted text-cyan-600 dark:text-cyan-400" };
+      return { label: "Banner", className: "bg-gray-100 text-cyan-600" };
     case "freeItem":
-      return { label: "Sponsored", className: "bg-gray-100 dark:bg-muted text-violet-600 dark:text-violet-400" };
+      return { label: "Sponsored", className: "bg-gray-100 text-violet-600" };
     case "specialMenu":
-      return { label: "Push", className: "bg-gray-100 dark:bg-muted text-orange-600 dark:text-orange-400" };
+      return { label: "Push", className: "bg-gray-100 text-orange-600" };
     default:
-      return { label: "Swipe Card", className: "bg-gray-100 dark:bg-muted text-indigo-600 dark:text-indigo-400" };
+      return { label: "Swipe Card", className: "bg-gray-100 text-indigo-600" };
   }
 }
 
@@ -94,147 +72,299 @@ function getPlacement(dealType: string | null): string {
   }
 }
 
+function getMockMetrics(id: number) {
+  const seed = ((id * 7 + 13) % 100) / 100;
+  const impressions = Math.floor(8000 + seed * 52000);
+  const clicks = Math.floor(impressions * (0.03 + seed * 0.05));
+  const ctr = ((clicks / impressions) * 100).toFixed(1);
+  const dailyBudget = Math.floor(500 + seed * 4500);
+  const totalBudget = dailyBudget * 30;
+  const spent = Math.floor(totalBudget * (0.2 + seed * 0.6));
+  const remaining = totalBudget - spent;
+  const spentPct = Math.min(100, Math.round((spent / totalBudget) * 100));
+  return { impressions, clicks, ctr, dailyBudget, totalBudget, spent, remaining, spentPct };
+}
+
 function formatNum(n: number): string {
-  if (n >= 1000000) return `${(n / 1000000).toFixed(1).replace(/\.0$/, "")}M`;
-  if (n >= 1000) return `${(n / 1000).toFixed(1).replace(/\.0$/, "")}K`;
+  if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "K";
   return n.toString();
 }
 
+const kpiCards = [
+  { label: "Total Impressions", value: "248K", icon: Eye, iconColor: "text-[#3B82F6]", iconBg: "bg-[#3B82F6]/10" },
+  { label: "Total Clicks", value: "12.4K", icon: MousePointerClick, iconColor: "text-teal-500", iconBg: "bg-teal-50" },
+  { label: "Avg CTR", value: "5.0%", icon: TrendingUp, iconColor: "text-[#3B82F6]", iconBg: "bg-[#3B82F6]/10" },
+  { label: "Revenue Generated", value: "฿847K", icon: DollarSign, iconColor: "text-emerald-500", iconBg: "bg-emerald-50" },
+];
+
+const dealTypeOptions = [
+  { value: "discount", label: "Discount" },
+  { value: "bundle", label: "Bundle" },
+  { value: "freeItem", label: "Free Item" },
+  { value: "happyHour", label: "Happy Hour" },
+  { value: "specialMenu", label: "Special Menu" },
+];
+
+const statusOptions = [
+  { value: "draft", label: "Draft" },
+  { value: "active", label: "Active" },
+  { value: "paused", label: "Paused" },
+];
+
+const targetGroupOptions = ["students", "families", "couples", "tourists", "office_workers", "foodies"];
+
+const emptyForm = {
+  title: "",
+  restaurantOwnerKey: "",
+  dealType: "discount",
+  dealValue: "",
+  startDate: "",
+  endDate: "",
+  targetGroups: [] as string[],
+  status: "active",
+};
+
 export default function AdminCampaigns() {
-  const [activeTab, setActiveTab] = useState<CampaignQueryStatus>("all");
+  const [activeTab, setActiveTab] = useState<string>("All");
   const [search, setSearch] = useState("");
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState<number>(10);
-
   const [showCreate, setShowCreate] = useState(false);
-  const [newTitle, setNewTitle] = useState("");
-  const [newOwnerKey, setNewOwnerKey] = useState("owner_default");
-  const [newDailyBudget, setNewDailyBudget] = useState("1000");
+  const [form, setForm] = useState({ ...emptyForm });
+  const { toast } = useToast();
 
-  useEffect(() => {
-    setPage(1);
-  }, [activeTab, search, pageSize]);
-
-  const campaignsUrl = useMemo(() => {
-    const params = new URLSearchParams();
-    if (activeTab !== "all") params.set("status", activeTab);
-    if (search.trim()) params.set("search", search.trim());
-    params.set("page", String(page));
-    params.set("pageSize", String(pageSize));
-    return `/api/admin/campaigns?${params.toString()}`;
-  }, [activeTab, search, page, pageSize]);
-
-  const { data, isLoading } = useQuery<CampaignListResponse>({ queryKey: [campaignsUrl] });
-  const campaigns = data?.items ?? [];
-
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["/api/admin/campaigns"] });
+  const { data: campaigns = [], isLoading } = useQuery<Campaign[]>({
+    queryKey: ["/api/campaigns"],
+  });
 
   const createMutation = useMutation({
-    mutationFn: async () => {
-      await apiRequest("POST", "/api/admin/campaigns", {
-        title: newTitle.trim(),
-        restaurantOwnerKey: newOwnerKey.trim(),
-        status: "draft",
-        dailyBudget: Math.max(0, Number(newDailyBudget) || 0),
-        totalBudget: Math.max(0, (Number(newDailyBudget) || 0) * 30),
-        spent: 0,
-        impressions: 0,
-        clicks: 0,
-        targetGroups: [],
-      });
-    },
+    mutationFn: (data: typeof emptyForm) =>
+      apiRequest("POST", "/api/campaigns", data),
     onSuccess: () => {
-      setNewTitle("");
-      setNewOwnerKey("owner_default");
-      setNewDailyBudget("1000");
+      queryClient.invalidateQueries({ queryKey: ["/api/campaigns"] });
       setShowCreate(false);
-      invalidate();
+      setForm({ ...emptyForm });
+      toast({ title: "Campaign created", description: "The new campaign has been created successfully." });
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to create campaign.", variant: "destructive" });
     },
   });
 
   const updateMutation = useMutation({
-    mutationFn: async (args: { id: number; updates: Partial<Campaign> }) => {
-      await apiRequest("PATCH", `/api/admin/campaigns/${args.id}`, args.updates);
+    mutationFn: (args: { id: number; updates: Partial<Campaign> }) =>
+      apiRequest("PATCH", `/api/campaigns/${args.id}`, args.updates),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/campaigns"] });
     },
-    onSuccess: invalidate,
-  });
-
-  const publishMutation = useMutation({
-    mutationFn: async (id: number) => {
-      await apiRequest("POST", `/api/admin/campaigns/${id}/publish`);
-    },
-    onSuccess: invalidate,
-  });
-
-  const archiveMutation = useMutation({
-    mutationFn: async (id: number) => {
-      await apiRequest("POST", `/api/admin/campaigns/${id}/archive`);
-    },
-    onSuccess: invalidate,
   });
 
   const deleteMutation = useMutation({
-    mutationFn: async (id: number) => {
-      await apiRequest("DELETE", `/api/admin/campaigns/${id}`);
+    mutationFn: (id: number) => apiRequest("DELETE", `/api/campaigns/${id}`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/campaigns"] });
     },
-    onSuccess: invalidate,
   });
 
-  const kpis = useMemo(() => {
-    const impressions = data?.summary.impressions ?? 0;
-    const clicks = data?.summary.clicks ?? 0;
-    const ctrPct = data?.summary.ctrPct ?? 0;
-    const spent = data?.summary.spent ?? 0;
-    return [
-      { label: "Total Impressions", value: formatNum(impressions), icon: Eye, iconColor: "text-purple-500" },
-      { label: "Total Clicks", value: formatNum(clicks), icon: MousePointerClick, iconColor: "text-teal-500" },
-      { label: "Avg CTR", value: `${ctrPct.toFixed(1)}%`, icon: TrendingUp, iconColor: "text-blue-500" },
-      { label: "Spend", value: `THB ${formatNum(spent)}`, icon: DollarSign, iconColor: "text-emerald-500" },
-    ];
-  }, [data]);
-
-  const isBusy = updateMutation.isPending || publishMutation.isPending || archiveMutation.isPending || deleteMutation.isPending || createMutation.isPending;
-  const total = data?.total ?? 0;
-  const totalPages = data?.totalPages ?? 1;
-  const currentPage = data?.page ?? page;
-  const rangeStart = total === 0 ? 0 : (currentPage - 1) * pageSize + 1;
-  const rangeEnd = total === 0 ? 0 : Math.min(currentPage * pageSize, total);
+  const filtered = campaigns.filter((c) => {
+    const matchesTab =
+      activeTab === "All" || c.status === activeTab.toLowerCase();
+    const matchesSearch =
+      !search ||
+      c.title.toLowerCase().includes(search.toLowerCase()) ||
+      c.restaurantOwnerKey.toLowerCase().includes(search.toLowerCase());
+    return matchesTab && matchesSearch;
+  });
 
   return (
     <div data-testid="admin-campaigns-page" className="space-y-6">
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div className="flex items-center gap-3 flex-wrap">
-          <h2 className="text-xl font-semibold text-foreground" data-testid="text-campaigns-title">Ad Platform Manager</h2>
-          <span className="bg-foreground text-white text-xs font-medium rounded-full px-3 py-0.5">{total}</span>
+          <h2 className="text-xl font-semibold text-gray-800" data-testid="text-campaigns-title">
+            Ad Platform Manager
+          </h2>
+          <span className="bg-[#FFCC02] text-gray-900 text-xs font-medium rounded-full px-3 py-0.5">
+            {campaigns.length}
+          </span>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3 flex-wrap">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <Input placeholder="Search campaigns..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9 w-64 rounded-xl border-gray-200 dark:border-border" data-testid="input-search-campaigns" />
+            <Input
+              placeholder="Search campaigns..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="pl-9 w-64 rounded-xl border-gray-100 focus:ring-[#FFCC02]/30 focus:border-[#FFCC02]"
+              data-testid="input-search-campaigns"
+            />
           </div>
-          <Button onClick={() => setShowCreate((v) => !v)} data-testid="button-toggle-create-campaign">
+          <Button
+            onClick={() => setShowCreate(!showCreate)}
+            className="bg-[#3B82F6] hover:bg-[#3B82F6]/90 text-white rounded-xl"
+            data-testid="button-create-campaign"
+          >
             <Plus className="w-4 h-4 mr-1" />
-            New
+            Create Campaign
           </Button>
         </div>
       </div>
 
       {showCreate && (
-        <div className="bg-white dark:bg-card rounded-2xl border border-gray-100 dark:border-border p-4 grid grid-cols-1 md:grid-cols-4 gap-3">
-          <Input value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder="Campaign title" data-testid="input-create-campaign-title" />
-          <Input value={newOwnerKey} onChange={(e) => setNewOwnerKey(e.target.value)} placeholder="Owner key" data-testid="input-create-campaign-owner" />
-          <Input value={newDailyBudget} onChange={(e) => setNewDailyBudget(e.target.value)} type="number" min={0} placeholder="Daily budget" data-testid="input-create-campaign-budget" />
-          <Button disabled={!newTitle.trim() || !newOwnerKey.trim() || createMutation.isPending} onClick={() => createMutation.mutate()} data-testid="button-create-campaign">Create Draft</Button>
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-4" data-testid="form-create-campaign">
+          <div className="flex items-center justify-between gap-4">
+            <h3 className="text-lg font-semibold text-gray-800">Create New Campaign</h3>
+            <Button
+              size="icon"
+              variant="ghost"
+              onClick={() => { setShowCreate(false); setForm({ ...emptyForm }); }}
+              data-testid="button-close-create-form"
+            >
+              <X className="w-4 h-4" />
+            </Button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-gray-700">Title</label>
+              <Input
+                value={form.title}
+                onChange={(e) => setForm({ ...form, title: e.target.value })}
+                placeholder="Campaign title"
+                className="rounded-xl border-gray-200"
+                data-testid="input-create-title"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-gray-700">Restaurant Owner Key</label>
+              <Input
+                value={form.restaurantOwnerKey}
+                onChange={(e) => setForm({ ...form, restaurantOwnerKey: e.target.value })}
+                placeholder="e.g. owner_email@example.com"
+                className="rounded-xl border-gray-200"
+                data-testid="input-create-owner-key"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-gray-700">Deal Type</label>
+              <select
+                value={form.dealType}
+                onChange={(e) => setForm({ ...form, dealType: e.target.value })}
+                className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm"
+                data-testid="select-create-deal-type"
+              >
+                {dealTypeOptions.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-gray-700">Deal Value</label>
+              <Input
+                value={form.dealValue}
+                onChange={(e) => setForm({ ...form, dealValue: e.target.value })}
+                placeholder="e.g. 20% off, Buy 1 Get 1"
+                className="rounded-xl border-gray-200"
+                data-testid="input-create-deal-value"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-gray-700">Start Date</label>
+              <Input
+                type="date"
+                value={form.startDate}
+                onChange={(e) => setForm({ ...form, startDate: e.target.value })}
+                className="rounded-xl border-gray-200"
+                data-testid="input-create-start-date"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-gray-700">End Date</label>
+              <Input
+                type="date"
+                value={form.endDate}
+                onChange={(e) => setForm({ ...form, endDate: e.target.value })}
+                className="rounded-xl border-gray-200"
+                data-testid="input-create-end-date"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-gray-700">Status</label>
+              <select
+                value={form.status}
+                onChange={(e) => setForm({ ...form, status: e.target.value })}
+                className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm"
+                data-testid="select-create-status"
+              >
+                {statusOptions.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-gray-700">Target Groups</label>
+              <div className="flex gap-2 flex-wrap">
+                {targetGroupOptions.map((group) => (
+                  <button
+                    key={group}
+                    type="button"
+                    onClick={() => {
+                      const next = form.targetGroups.includes(group)
+                        ? form.targetGroups.filter((g) => g !== group)
+                        : [...form.targetGroups, group];
+                      setForm({ ...form, targetGroups: next });
+                    }}
+                    className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                      form.targetGroups.includes(group)
+                        ? "bg-[#3B82F6] text-white"
+                        : "bg-gray-100 text-gray-600"
+                    }`}
+                    data-testid={`toggle-target-${group}`}
+                  >
+                    {group.replace("_", " ")}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-end gap-3 pt-2">
+            <Button
+              variant="outline"
+              onClick={() => { setShowCreate(false); setForm({ ...emptyForm }); }}
+              className="rounded-xl"
+              data-testid="button-cancel-create"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                if (!form.title || !form.restaurantOwnerKey) {
+                  toast({ title: "Validation Error", description: "Title and Restaurant Owner Key are required.", variant: "destructive" });
+                  return;
+                }
+                createMutation.mutate(form);
+              }}
+              disabled={createMutation.isPending}
+              className="bg-[#3B82F6] hover:bg-[#3B82F6]/90 text-white rounded-xl"
+              data-testid="button-submit-create"
+            >
+              {createMutation.isPending ? "Creating..." : "Create Campaign"}
+            </Button>
+          </div>
         </div>
       )}
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4" data-testid="section-campaign-kpis">
-        {kpis.map((kpi) => (
-          <div key={kpi.label} className="bg-white dark:bg-card rounded-2xl border border-gray-100 dark:border-border p-6" data-testid={`kpi-${kpi.label.toLowerCase().replace(/\s+/g, "-")}`}>
+        {kpiCards.map((kpi) => (
+          <div
+            key={kpi.label}
+            className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6"
+            data-testid={`kpi-${kpi.label.toLowerCase().replace(/\s+/g, "-")}`}
+          >
             <div className="flex items-center gap-3">
-              <kpi.icon className={`w-5 h-5 ${kpi.iconColor}`} />
+              <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${kpi.iconBg}`}>
+                  <kpi.icon className={`w-5 h-5 ${kpi.iconColor}`} />
+                </div>
               <div>
-                <p className="text-2xl font-bold text-foreground">{kpi.value}</p>
+                <p className="text-2xl font-bold text-gray-800">{kpi.value}</p>
                 <p className="text-xs text-muted-foreground">{kpi.label}</p>
               </div>
             </div>
@@ -242,52 +372,75 @@ export default function AdminCampaigns() {
         ))}
       </div>
 
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="bg-gray-100 dark:bg-muted rounded-xl p-1 inline-flex gap-1 flex-wrap">
-          {statusTabs.map((tab) => (
-            <button key={tab.value} onClick={() => setActiveTab(tab.value)} className={`px-4 py-1.5 text-sm font-medium rounded-lg transition-colors ${activeTab === tab.value ? "bg-white dark:bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`} data-testid={`tab-${tab.value}`}>
-              {tab.label}
-            </button>
-          ))}
-        </div>
-
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span>Rows</span>
-          {pageSizes.map((size) => (
-            <button key={size} onClick={() => setPageSize(size)} className={`px-2 py-1 rounded-md ${pageSize === size ? "bg-foreground text-white" : "bg-gray-100 dark:bg-muted"}`} data-testid={`button-page-size-${size}`}>
-              {size}
-            </button>
-          ))}
-        </div>
+      <div className="bg-gray-100 rounded-xl p-1 inline-flex gap-1 flex-wrap">
+        {statusTabs.map((tab) => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            className={`px-4 py-1.5 text-sm font-medium rounded-lg transition-colors ${
+              activeTab === tab
+                ? "bg-white text-gray-800 shadow-sm"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+            data-testid={`tab-${tab.toLowerCase()}`}
+          >
+            {tab}
+          </button>
+        ))}
       </div>
 
       {isLoading ? (
-        <div className="space-y-4">{[1, 2, 3].map((i) => <Skeleton key={i} className="h-32 w-full rounded-2xl" />)}</div>
-      ) : campaigns.length === 0 ? (
-        <div className="bg-white dark:bg-card rounded-2xl border border-gray-100 dark:border-border p-8 text-center">
-          <p className="text-muted-foreground" data-testid="text-no-campaigns">No campaigns found</p>
+        <div className="space-y-4">
+          {[1, 2, 3].map((i) => (
+            <Skeleton key={i} className="h-32 w-full rounded-2xl" />
+          ))}
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-8 text-center">
+          <p className="text-muted-foreground" data-testid="text-no-campaigns">
+            No campaigns found
+          </p>
         </div>
       ) : (
         <div className="space-y-4">
-          {campaigns.map((campaign) => {
+          {filtered.map((campaign) => {
             const adType = getAdType(campaign.dealType);
             const placement = getPlacement(campaign.dealType);
-            const impressions = campaign.impressions ?? 0;
-            const clicks = campaign.clicks ?? 0;
-            const ctr = impressions > 0 ? ((clicks / impressions) * 100).toFixed(1) : "0.0";
-            const dailyBudget = campaign.dailyBudget ?? 0;
-            const totalBudget = campaign.totalBudget ?? 0;
-            const spent = campaign.spent ?? 0;
-            const spentPct = totalBudget > 0 ? Math.min(100, Math.round((spent / totalBudget) * 100)) : 0;
+            const metrics = getMockMetrics(campaign.id);
 
             return (
-              <div key={campaign.id} className="bg-white dark:bg-card rounded-2xl border border-gray-100 dark:border-border p-6" data-testid={`card-campaign-${campaign.id}`}>
+              <div
+                key={campaign.id}
+                className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6"
+                data-testid={`card-campaign-${campaign.id}`}
+              >
                 <div className="flex items-start justify-between gap-4 flex-wrap">
                   <div className="flex-1 min-w-0 space-y-3">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-semibold text-base text-foreground" data-testid={`text-campaign-title-${campaign.id}`}>{campaign.title}</span>
-                      <span className={`inline-flex items-center rounded-full px-3 py-0.5 text-xs font-medium ${statusPill(campaign.status)}`} data-testid={`badge-status-${campaign.id}`}>{campaign.status}</span>
-                      <span className={`inline-flex items-center rounded-full px-3 py-0.5 text-xs font-medium ${adType.className}`} data-testid={`badge-adtype-${campaign.id}`}>{adType.label}</span>
+                      <span
+                        className="font-semibold text-base text-gray-800"
+                        data-testid={`text-campaign-title-${campaign.id}`}
+                      >
+                        {campaign.title}
+                      </span>
+                      <span
+                        className={`inline-flex items-center rounded-full px-3 py-0.5 text-xs font-medium ${statusPill(campaign.status)}`}
+                        data-testid={`badge-status-${campaign.id}`}
+                      >
+                        {campaign.status}
+                      </span>
+                      <span
+                        className={`inline-flex items-center rounded-full px-3 py-0.5 text-xs font-medium ${adType.className}`}
+                        data-testid={`badge-adtype-${campaign.id}`}
+                      >
+                        {adType.label}
+                      </span>
+                      <span
+                        className="inline-flex items-center rounded-full px-3 py-0.5 text-xs font-medium border border-gray-100 text-muted-foreground"
+                        data-testid={`badge-deal-${campaign.id}`}
+                      >
+                        {campaign.dealType}
+                      </span>
                     </div>
 
                     <div className="flex items-center gap-1.5 text-xs text-muted-foreground" data-testid={`text-placement-${campaign.id}`}>
@@ -295,39 +448,174 @@ export default function AdminCampaigns() {
                       Placement: {placement}
                     </div>
 
+                    {campaign.dealValue && (
+                      <p
+                        className="text-sm text-muted-foreground"
+                        data-testid={`text-deal-value-${campaign.id}`}
+                      >
+                        Deal: {campaign.dealValue}
+                      </p>
+                    )}
+
                     <div className="flex items-center gap-5 text-xs flex-wrap" data-testid={`metrics-row-${campaign.id}`}>
-                      <div className="flex items-center gap-1.5"><Eye className="w-3.5 h-3.5 text-indigo-500" /><span className="text-muted-foreground">Impressions</span><span className="font-semibold text-foreground">{formatNum(impressions)}</span></div>
-                      <div className="flex items-center gap-1.5"><MousePointerClick className="w-3.5 h-3.5 text-cyan-500" /><span className="text-muted-foreground">Clicks</span><span className="font-semibold text-foreground">{formatNum(clicks)}</span></div>
-                      <div className="flex items-center gap-1.5"><TrendingUp className="w-3.5 h-3.5 text-emerald-500" /><span className="text-muted-foreground">CTR</span><span className="font-semibold text-foreground">{ctr}%</span></div>
+                      <div className="flex items-center gap-1.5">
+                        <Eye className="w-3.5 h-3.5 text-indigo-500" />
+                        <span className="text-muted-foreground">Impressions</span>
+                        <span className="font-semibold text-gray-800">{formatNum(metrics.impressions)}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <MousePointerClick className="w-3.5 h-3.5 text-cyan-500" />
+                        <span className="text-muted-foreground">Clicks</span>
+                        <span className="font-semibold text-gray-800">{formatNum(metrics.clicks)}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <TrendingUp className="w-3.5 h-3.5 text-emerald-500" />
+                        <span className="text-muted-foreground">CTR</span>
+                        <span className="font-semibold text-gray-800">{metrics.ctr}%</span>
+                      </div>
                     </div>
 
                     <div className="space-y-1" data-testid={`budget-info-${campaign.id}`}>
                       <div className="flex items-center justify-between text-xs">
-                        <span className="text-muted-foreground">Budget: THB {formatNum(spent)} / THB {formatNum(totalBudget)} <span className="ml-2 text-muted-foreground/60">(THB {formatNum(dailyBudget)}/day)</span></span>
-                        <span className="text-muted-foreground">{spentPct}%</span>
+                        <span className="text-muted-foreground">
+                          Budget: ฿{formatNum(metrics.spent)} / ฿{formatNum(metrics.totalBudget)}
+                          <span className="ml-2 text-muted-foreground/60">(฿{formatNum(metrics.dailyBudget)}/day)</span>
+                        </span>
+                        <span className="text-muted-foreground">{metrics.spentPct}%</span>
                       </div>
-                      <div className="w-full h-1.5 bg-gray-100 dark:bg-muted rounded-full overflow-hidden">
-                        <div className="h-full rounded-full" style={{ width: `${spentPct}%`, background: spentPct > 80 ? "hsl(350, 89%, 60%)" : "linear-gradient(90deg, hsl(222, 47%, 20%), hsl(222, 47%, 35%))" }} />
+                      <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                        <div
+                          className="h-full rounded-full"
+                          style={{
+                            width: `${metrics.spentPct}%`,
+                            background: metrics.spentPct > 80 ? "hsl(350, 89%, 60%)" : "#FFCC02",
+                          }}
+                        />
                       </div>
                     </div>
 
                     <div className="flex items-center gap-4 text-xs text-muted-foreground/60 flex-wrap">
-                      <span className="flex items-center gap-1" data-testid={`text-owner-${campaign.id}`}><User className="w-3 h-3" />{campaign.restaurantOwnerKey}</span>
-                      {campaign.startDate && <span className="flex items-center gap-1" data-testid={`text-dates-${campaign.id}`}><Calendar className="w-3 h-3" />{campaign.startDate}{campaign.endDate ? ` - ${campaign.endDate}` : ""}</span>}
+                      <span className="flex items-center gap-1" data-testid={`text-owner-${campaign.id}`}>
+                        <User className="w-3 h-3" />
+                        {campaign.restaurantOwnerKey}
+                      </span>
+                      {campaign.startDate && (
+                        <span className="flex items-center gap-1" data-testid={`text-dates-${campaign.id}`}>
+                          <Calendar className="w-3 h-3" />
+                          {campaign.startDate}
+                          {campaign.endDate ? ` - ${campaign.endDate}` : ""}
+                        </span>
+                      )}
                     </div>
 
                     <div className="flex gap-1.5 flex-wrap" data-testid={`pills-targets-${campaign.id}`}>
-                      {(campaign.targetGroups || []).map((group, idx) => <span key={idx} className="bg-gray-100 dark:bg-muted text-foreground rounded-full text-xs px-3 py-1 font-medium" data-testid={`pill-target-${campaign.id}-${idx}`}>{group}</span>)}
-                      <span className="bg-gray-100 dark:bg-muted text-foreground rounded-full text-xs px-3 py-1 font-medium flex items-center gap-1" data-testid={`pill-age-${campaign.id}`}><Target className="w-3 h-3" />Age 25-44</span>
+                      {campaign.targetGroups && campaign.targetGroups.length > 0 &&
+                        campaign.targetGroups.map((group, idx) => (
+                          <span
+                            key={idx}
+                            className="bg-gray-100 text-foreground rounded-full text-xs px-3 py-1 font-medium"
+                            data-testid={`pill-target-${campaign.id}-${idx}`}
+                          >
+                            {group}
+                          </span>
+                        ))
+                      }
+                      <span
+                        className="bg-gray-100 text-foreground rounded-full text-xs px-3 py-1 font-medium flex items-center gap-1"
+                        data-testid={`pill-age-${campaign.id}`}
+                      >
+                        <Target className="w-3 h-3" />
+                        Age 25-44
+                      </span>
+                      <span
+                        className="bg-gray-100 text-foreground rounded-full text-xs px-3 py-1 font-medium flex items-center gap-1"
+                        data-testid={`pill-location-${campaign.id}`}
+                      >
+                        <MapPin className="w-3 h-3" />
+                        Bangkok Central
+                      </span>
                     </div>
                   </div>
 
                   <div className="flex items-center gap-2 flex-wrap">
-                    {campaign.status === "draft" && <button className="inline-flex items-center gap-1 bg-foreground hover:bg-foreground/90 text-white text-sm font-medium rounded-xl px-4 py-1.5 transition-colors disabled:opacity-50" onClick={() => publishMutation.mutate(campaign.id)} disabled={isBusy} data-testid={`button-approve-${campaign.id}`}><CheckCircle className="w-4 h-4" />Approve</button>}
-                    {campaign.status === "active" && <button className="inline-flex items-center gap-1 border border-gray-200 dark:border-border text-muted-foreground hover:text-foreground hover:bg-gray-50 dark:hover:bg-muted text-sm font-medium rounded-xl px-4 py-1.5 transition-colors disabled:opacity-50" onClick={() => updateMutation.mutate({ id: campaign.id, updates: { status: "paused" as CampaignStatus } })} disabled={isBusy} data-testid={`button-pause-${campaign.id}`}><Pause className="w-4 h-4" />Pause</button>}
-                    {campaign.status === "paused" && <button className="inline-flex items-center gap-1 border border-gray-200 dark:border-border text-muted-foreground hover:text-foreground hover:bg-gray-50 dark:hover:bg-muted text-sm font-medium rounded-xl px-4 py-1.5 transition-colors disabled:opacity-50" onClick={() => updateMutation.mutate({ id: campaign.id, updates: { status: "active" as CampaignStatus } })} disabled={isBusy} data-testid={`button-resume-${campaign.id}`}><Play className="w-4 h-4" />Resume</button>}
-                    {(campaign.status === "active" || campaign.status === "paused") && <button className="inline-flex items-center gap-1 border border-gray-200 dark:border-border text-muted-foreground hover:text-foreground hover:bg-gray-50 dark:hover:bg-muted text-sm font-medium rounded-xl px-4 py-1.5 transition-colors disabled:opacity-50" onClick={() => archiveMutation.mutate(campaign.id)} disabled={isBusy} data-testid={`button-end-${campaign.id}`}><StopCircle className="w-4 h-4" />End</button>}
-                    <Button size="icon" variant="ghost" onClick={() => { if (confirm("Delete this campaign?")) deleteMutation.mutate(campaign.id); }} disabled={isBusy} data-testid={`button-delete-${campaign.id}`} className="text-red-400 hover:text-red-500"><Trash2 className="w-4 h-4" /></Button>
+                    {campaign.status === "draft" && (
+                      <button
+                        className="inline-flex items-center gap-1 bg-[#00B14F] hover:bg-[#00B14F]/90 text-white text-sm font-medium rounded-xl px-4 py-1.5 transition-colors disabled:opacity-50"
+                        onClick={() =>
+                          updateMutation.mutate({
+                            id: campaign.id,
+                            updates: { status: "active" },
+                          })
+                        }
+                        disabled={updateMutation.isPending}
+                        data-testid={`button-approve-${campaign.id}`}
+                      >
+                        <CheckCircle className="w-4 h-4" />
+                        Approve
+                      </button>
+                    )}
+                    {campaign.status === "active" && (
+                      <button
+                        className="inline-flex items-center gap-1 border border-gray-100 text-muted-foreground hover:text-foreground hover:bg-gray-50 text-sm font-medium rounded-xl px-4 py-1.5 transition-colors disabled:opacity-50"
+                        onClick={() =>
+                          updateMutation.mutate({
+                            id: campaign.id,
+                            updates: { status: "paused" },
+                          })
+                        }
+                        disabled={updateMutation.isPending}
+                        data-testid={`button-pause-${campaign.id}`}
+                      >
+                        <Pause className="w-4 h-4" />
+                        Pause
+                      </button>
+                    )}
+                    {campaign.status === "paused" && (
+                      <button
+                        className="inline-flex items-center gap-1 border border-gray-100 text-muted-foreground hover:text-foreground hover:bg-gray-50 text-sm font-medium rounded-xl px-4 py-1.5 transition-colors disabled:opacity-50"
+                        onClick={() =>
+                          updateMutation.mutate({
+                            id: campaign.id,
+                            updates: { status: "active" },
+                          })
+                        }
+                        disabled={updateMutation.isPending}
+                        data-testid={`button-resume-${campaign.id}`}
+                      >
+                        <Play className="w-4 h-4" />
+                        Resume
+                      </button>
+                    )}
+                    {(campaign.status === "active" || campaign.status === "paused") && (
+                      <button
+                        className="inline-flex items-center gap-1 border border-gray-100 text-muted-foreground hover:text-foreground hover:bg-gray-50 text-sm font-medium rounded-xl px-4 py-1.5 transition-colors disabled:opacity-50"
+                        onClick={() =>
+                          updateMutation.mutate({
+                            id: campaign.id,
+                            updates: { status: "ended" },
+                          })
+                        }
+                        disabled={updateMutation.isPending}
+                        data-testid={`button-end-${campaign.id}`}
+                      >
+                        <StopCircle className="w-4 h-4" />
+                        End
+                      </button>
+                    )}
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => {
+                        if (confirm("Delete this campaign?")) {
+                          deleteMutation.mutate(campaign.id);
+                        }
+                      }}
+                      disabled={deleteMutation.isPending}
+                      data-testid={`button-delete-${campaign.id}`}
+                      className="text-red-400 hover:text-red-500"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
                   </div>
                 </div>
               </div>
@@ -335,15 +623,6 @@ export default function AdminCampaigns() {
           })}
         </div>
       )}
-
-      <div className="flex items-center justify-between text-sm text-muted-foreground">
-        <span data-testid="text-pagination-range">Showing {rangeStart}-{rangeEnd} of {total}</span>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" disabled={currentPage <= 1 || isLoading} onClick={() => setPage((p) => Math.max(1, p - 1))} data-testid="button-page-prev">Previous</Button>
-          <span data-testid="text-pagination-page">Page {currentPage} / {totalPages}</span>
-          <Button variant="outline" size="sm" disabled={currentPage >= totalPages || isLoading} onClick={() => setPage((p) => Math.min(totalPages, p + 1))} data-testid="button-page-next">Next</Button>
-        </div>
-      </div>
     </div>
   );
 }

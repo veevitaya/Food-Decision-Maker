@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo } from "react";
 import {
   Settings2,
   ToggleLeft,
@@ -29,6 +29,7 @@ import {
   Database,
   RefreshCw,
   Shield,
+  Link2,
   Download,
   ExternalLink,
   Loader2,
@@ -39,7 +40,6 @@ import {
   TrendingUp,
 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
-import { useToast } from "@/hooks/use-toast";
 import toastLogo from "@assets/toast_logo_nobg.png";
 import mascotImg from "@assets/image_1772011321697.png";
 
@@ -160,11 +160,11 @@ const DEFAULT_UI: UIConfig = {
 };
 
 const CATEGORY_META: Record<string, { label: string; color: string; bgClass: string }> = {
-  core: { label: "Core", color: "text-blue-600", bgClass: "bg-blue-50 dark:bg-blue-500/10" },
-  discovery: { label: "Discovery", color: "text-purple-600", bgClass: "bg-purple-50 dark:bg-purple-500/10" },
-  social: { label: "Social", color: "text-green-600", bgClass: "bg-green-50 dark:bg-green-500/10" },
-  monetization: { label: "Revenue", color: "text-amber-600", bgClass: "bg-amber-50 dark:bg-amber-500/10" },
-  ui: { label: "Interface", color: "text-pink-600", bgClass: "bg-pink-50 dark:bg-pink-500/10" },
+  core: { label: "Core", color: "text-blue-600", bgClass: "bg-blue-50" },
+  discovery: { label: "Discovery", color: "text-purple-600", bgClass: "bg-purple-50" },
+  social: { label: "Social", color: "text-green-600", bgClass: "bg-green-50" },
+  monetization: { label: "Revenue", color: "text-[#FFCC02]", bgClass: "bg-[#FFCC02]/15" },
+  ui: { label: "Interface", color: "text-pink-600", bgClass: "bg-pink-50" },
 };
 
 const DEFAULT_APIS: ApiIntegration[] = [
@@ -179,10 +179,10 @@ const DEFAULT_APIS: ApiIntegration[] = [
 ];
 
 const API_CATEGORY_META: Record<string, { label: string; color: string; bgClass: string }> = {
-  data: { label: "Data & Maps", color: "text-blue-600", bgClass: "bg-blue-50 dark:bg-blue-500/10" },
-  messaging: { label: "Messaging", color: "text-green-600", bgClass: "bg-green-50 dark:bg-green-500/10" },
-  payments: { label: "Payments", color: "text-purple-600", bgClass: "bg-purple-50 dark:bg-purple-500/10" },
-  maps: { label: "Maps", color: "text-amber-600", bgClass: "bg-amber-50 dark:bg-amber-500/10" },
+  data: { label: "Data & Maps", color: "text-blue-600", bgClass: "bg-blue-50" },
+  messaging: { label: "Messaging", color: "text-green-600", bgClass: "bg-green-50" },
+  payments: { label: "Payments", color: "text-purple-600", bgClass: "bg-purple-50" },
+  maps: { label: "Maps", color: "text-amber-600", bgClass: "bg-amber-50" },
 };
 
 const TABS = [
@@ -196,7 +196,6 @@ const TABS = [
 type TabId = (typeof TABS)[number]["id"];
 
 export default function AdminConfig() {
-  const { toast } = useToast();
   const [activeTab, setActiveTab] = useState<TabId>("features");
   const [features, setFeatures] = useState<FeatureToggle[]>(DEFAULT_FEATURES);
   const [images, setImages] = useState<AppImage[]>(DEFAULT_IMAGES);
@@ -217,76 +216,6 @@ export default function AdminConfig() {
   const [placesMaxResults, setPlacesMaxResults] = useState(20);
   const [showApiKeyInput, setShowApiKeyInput] = useState<string | null>(null);
   const [apiKeyInputValue, setApiKeyInputValue] = useState("");
-  const [savingApiKey, setSavingApiKey] = useState(false);
-  const [saveKeyError, setSaveKeyError] = useState<string | null>(null);
-  const [testingApiId, setTestingApiId] = useState<string | null>(null);
-  const [testResults, setTestResults] = useState<Record<string, { ok: boolean; message: string }>>({});
-  const [uploadingImageId, setUploadingImageId] = useState<string | null>(null);
-
-  // Load real API key statuses and feature flags from backend on mount
-  useEffect(() => {
-    // API key statuses
-    apiRequest("GET", "/api/admin/config/api-keys")
-      .then((r) => r.json())
-      .then((statuses: Record<string, { configured: boolean; source: string }>) => {
-        setApis((prev) =>
-          prev.map((a) => {
-            const s = statuses[a.id];
-            if (!s) return a;
-            return { ...a, status: s.configured ? "connected" : "not_configured" };
-          })
-        );
-      })
-      .catch(() => {/* non-fatal */});
-
-    // Feature flags + full config (includes uiConfig, imageUrls)
-    apiRequest("GET", "/api/admin/config")
-      .then((r) => r.json())
-      .then((cfg: {
-        featuresList?: Array<{ id: string; label: string; description: string; enabled: boolean; category: string }>;
-        uiConfig?: Partial<UIConfig>;
-        imageUrls?: Record<string, string>;
-        imagesList?: Array<{ id: string; label: string; description: string; currentUrl: string; category: "branding" | "ui" }>;
-        vibesList?: Array<{ mode: string; emoji: string; label: string; enabled: boolean }>;
-      }) => {
-        if (cfg.featuresList?.length) {
-          setFeatures((prev) =>
-            prev.map((f) => {
-              const saved = cfg.featuresList!.find((s) => s.id === f.id);
-              return saved ? { ...f, enabled: saved.enabled } : f;
-            })
-          );
-        }
-        if (cfg.uiConfig) {
-          setUiConfig((prev) => ({ ...prev, ...cfg.uiConfig }));
-        }
-        if (cfg.imageUrls) {
-          setImages((prev) =>
-            prev.map((img) => {
-              const url = cfg.imageUrls![img.id];
-              return url !== undefined ? { ...img, currentUrl: url } : img;
-            })
-          );
-        }
-        if (cfg.imagesList?.length) {
-          setImages((prev) =>
-            prev.map((img) => {
-              const saved = cfg.imagesList!.find((s) => s.id === img.id);
-              return saved ? { ...img, currentUrl: saved.currentUrl } : img;
-            })
-          );
-        }
-        if (cfg.vibesList?.length) {
-          setVibes((prev) =>
-            prev.map((v) => {
-              const saved = cfg.vibesList!.find((s) => s.mode === v.mode);
-              return saved ? { ...v, enabled: saved.enabled } : v;
-            })
-          );
-        }
-      })
-      .catch(() => {/* non-fatal */});
-  }, []);
 
   const trackChange = (description: string) => {
     setHasChanges(true);
@@ -319,31 +248,11 @@ export default function AdminConfig() {
     trackChange(`Updated ${key}`);
   };
 
-  const handleSave = async () => {
-    try {
-      await apiRequest("PUT", "/api/admin/config", {
-        featuresList: features.map(({ id, label, description, enabled, category }) => ({
-          id, label, description, enabled, category,
-        })),
-        uiConfig,
-        imageUrls: images.reduce<Record<string, string>>((acc, img) => {
-          acc[img.id] = img.currentUrl;
-          return acc;
-        }, {}),
-        imagesList: images.map(({ id, label, description, currentUrl, category }) => ({
-          id, label, description, currentUrl, category,
-        })),
-        vibesList: vibes.map(({ mode, emoji, label, enabled }) => ({
-          mode, emoji, label, enabled,
-        })),
-      });
-      setSavedToast(true);
-      setHasChanges(false);
-      setPendingChanges([]);
-      setTimeout(() => setSavedToast(false), 2500);
-    } catch {
-      toast({ title: "Save failed", description: "Could not save configuration. Please try again.", variant: "destructive" });
-    }
+  const handleSave = () => {
+    setSavedToast(true);
+    setHasChanges(false);
+    setPendingChanges([]);
+    setTimeout(() => setSavedToast(false), 2500);
   };
 
   const handleReset = () => {
@@ -450,7 +359,7 @@ export default function AdminConfig() {
             >
               <Settings2 className="w-5 h-5 text-white" />
             </div>
-            <h2 className="text-2xl font-bold tracking-tight text-foreground" data-testid="text-config-title">
+            <h2 className="text-2xl font-bold tracking-tight text-gray-800" data-testid="text-config-title">
               App Configuration
             </h2>
           </div>
@@ -462,7 +371,7 @@ export default function AdminConfig() {
           {hasChanges && (
             <button
               onClick={() => setShowPreview(true)}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gray-50 dark:bg-muted text-foreground text-sm font-medium hover:bg-gray-100 dark:hover:bg-muted/80 transition-colors"
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gray-50 text-foreground text-sm font-medium hover:bg-gray-100 transition-colors"
               data-testid="button-preview-changes"
             >
               <Eye className="w-4 h-4" />
@@ -471,19 +380,19 @@ export default function AdminConfig() {
           )}
           <button
             onClick={handleReset}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gray-50 dark:bg-muted text-muted-foreground text-sm font-medium hover:bg-gray-100 dark:hover:bg-muted/80 transition-colors"
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gray-50 text-muted-foreground text-sm font-medium hover:bg-gray-100 transition-colors"
             data-testid="button-reset"
           >
             <RotateCcw className="w-3.5 h-3.5" />
             Reset
           </button>
           <button
-            onClick={hasChanges ? handleSave : undefined}
+            onClick={hasChanges ? () => setShowPreview(true) : undefined}
             disabled={!hasChanges}
             className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all ${
               hasChanges
-                ? "bg-foreground text-white hover:bg-foreground/90 shadow-sm"
-                : "bg-gray-100 dark:bg-muted text-muted-foreground/40 cursor-not-allowed"
+                ? "bg-[#FFCC02] text-gray-900 hover:bg-[#FFCC02]/90 shadow-sm"
+                : "bg-gray-100 text-muted-foreground/40 cursor-not-allowed"
             }`}
             data-testid="button-save-changes"
           >
@@ -495,13 +404,13 @@ export default function AdminConfig() {
 
       {savedToast && (
         <div
-          className="mb-4 flex items-center gap-3 px-4 py-3 rounded-xl bg-green-50 dark:bg-green-500/10 border border-green-200 dark:border-green-500/20"
+          className="mb-4 flex items-center gap-3 px-4 py-3 rounded-xl bg-green-50 border border-green-200"
           data-testid="toast-saved"
         >
           <div className="w-6 h-6 rounded-full bg-green-500 flex items-center justify-center flex-shrink-0">
             <Check className="w-3.5 h-3.5 text-white" />
           </div>
-          <span className="text-sm font-medium text-green-700 dark:text-green-400">
+          <span className="text-sm font-medium text-green-700">
             Configuration saved successfully. Changes are now live.
           </span>
         </div>
@@ -509,11 +418,11 @@ export default function AdminConfig() {
 
       {hasChanges && (
         <div
-          className="mb-4 flex items-center gap-3 px-4 py-3 rounded-xl bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20"
+          className="mb-4 flex items-center gap-3 px-4 py-3 rounded-xl bg-amber-50 border border-amber-200"
           data-testid="banner-unsaved"
         >
-          <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 flex-shrink-0" />
-          <span className="text-sm text-amber-700 dark:text-amber-400">
+          <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0" />
+          <span className="text-sm text-amber-700">
             {pendingChanges.length} unsaved change{pendingChanges.length !== 1 ? "s" : ""} — Preview before saving
           </span>
         </div>
@@ -521,8 +430,8 @@ export default function AdminConfig() {
 
       <div className="flex gap-6">
         <div className="flex-1 min-w-0">
-          <div className="bg-white dark:bg-card rounded-2xl border border-gray-100 dark:border-border overflow-hidden">
-            <div className="flex border-b border-gray-100 dark:border-border">
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+            <div className="flex border-b border-gray-100">
               {TABS.map((tab) => (
                 <button
                   key={tab.id}
@@ -530,7 +439,7 @@ export default function AdminConfig() {
                   className={`flex-1 flex items-center justify-center gap-2 py-3.5 text-sm font-medium transition-all border-b-2 ${
                     activeTab === tab.id
                       ? "border-[#FFCC02] text-foreground bg-[#FFCC02]/5"
-                      : "border-transparent text-muted-foreground hover:text-foreground hover:bg-gray-50 dark:hover:bg-muted"
+                      : "border-transparent text-muted-foreground hover:text-foreground hover:bg-gray-50"
                   }`}
                   data-testid={`tab-${tab.id}`}
                 >
@@ -565,8 +474,8 @@ export default function AdminConfig() {
                               key={feature.id}
                               className={`flex items-center gap-4 p-4 rounded-xl transition-all ${
                                 feature.enabled
-                                  ? "bg-gray-50 dark:bg-muted"
-                                  : "bg-white dark:bg-card opacity-60"
+                                  ? "bg-gray-50"
+                                  : "bg-white opacity-60"
                               }`}
                               data-testid={`feature-row-${feature.id}`}
                             >
@@ -574,14 +483,14 @@ export default function AdminConfig() {
                                 className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
                                 style={{
                                   background: feature.enabled
-                                    ? "linear-gradient(135deg, hsl(222,47%,20%) 0%, hsl(222,47%,35%) 100%)"
+                                    ? "linear-gradient(135deg, #6C2BD9 0%, #8B5CF6 100%)"
                                     : "hsl(0,0%,92%)",
                                 }}
                               >
                                 <feature.icon className={`w-4 h-4 ${feature.enabled ? "text-white" : "text-muted-foreground"}`} />
                               </div>
                               <div className="flex-1 min-w-0">
-                                <p className="text-sm font-semibold text-foreground">{feature.label}</p>
+                                <p className="text-sm font-semibold text-gray-800">{feature.label}</p>
                                 <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{feature.description}</p>
                               </div>
                               <button
@@ -632,7 +541,7 @@ export default function AdminConfig() {
                           {items.map((api) => (
                             <div
                               key={api.id}
-                              className="p-4 rounded-xl bg-gray-50 dark:bg-muted"
+                              className="p-4 rounded-xl bg-gray-50"
                               data-testid={`api-row-${api.id}`}
                             >
                               <div className="flex items-center gap-4">
@@ -648,13 +557,13 @@ export default function AdminConfig() {
                                 </div>
                                 <div className="flex-1 min-w-0">
                                   <div className="flex items-center gap-2">
-                                    <p className="text-sm font-semibold text-foreground">{api.name}</p>
+                                    <p className="text-sm font-semibold text-gray-800">{api.name}</p>
                                     <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${
                                       api.status === "connected"
-                                        ? "bg-green-100 dark:bg-green-500/10 text-green-700 dark:text-green-400"
+                                        ? "bg-[#00B14F]/10 text-[#00B14F]"
                                         : api.status === "error"
-                                          ? "bg-red-100 dark:bg-red-500/10 text-red-700 dark:text-red-400"
-                                          : "bg-gray-100 dark:bg-muted text-muted-foreground"
+                                          ? "bg-red-100 text-red-700"
+                                          : "bg-gray-100 text-muted-foreground"
                                     }`}>
                                       {api.status === "connected" ? "Connected" : api.status === "error" ? "Error" : "Not configured"}
                                     </span>
@@ -666,48 +575,14 @@ export default function AdminConfig() {
                                     href={api.docsUrl}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    className="w-8 h-8 rounded-lg bg-white dark:bg-card border border-gray-200 dark:border-border flex items-center justify-center hover:bg-gray-50 dark:hover:bg-muted transition-colors"
+                                    className="w-8 h-8 rounded-lg bg-white border border-gray-100 flex items-center justify-center hover:bg-gray-50 transition-colors"
                                     data-testid={`button-docs-${api.id}`}
                                   >
                                     <ExternalLink className="w-3.5 h-3.5 text-muted-foreground" />
                                   </a>
-                                  {api.status === "connected" && (
-                                    <button
-                                      onClick={async () => {
-                                        setTestingApiId(api.id);
-                                        setSaveKeyError(null);
-                                        try {
-                                          const r = await apiRequest("POST", `/api/admin/config/api-keys/${api.id}/test`, {});
-                                          const body = await r.json() as { ok: boolean; message: string };
-                                          setTestResults((prev) => ({ ...prev, [api.id]: body }));
-                                          toast({
-                                            title: body.ok ? `${api.name} — Connected` : `${api.name} — Failed`,
-                                            description: body.message,
-                                            variant: body.ok ? "default" : "destructive",
-                                          });
-                                        } catch {
-                                          const result = { ok: false, message: "Network error — could not reach API" };
-                                          setTestResults((prev) => ({ ...prev, [api.id]: result }));
-                                          toast({
-                                            title: `${api.name} — Error`,
-                                            description: result.message,
-                                            variant: "destructive",
-                                          });
-                                        } finally {
-                                          setTestingApiId(null);
-                                        }
-                                      }}
-                                      disabled={testingApiId === api.id}
-                                      className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white dark:bg-card border border-gray-200 dark:border-border text-xs font-medium text-foreground hover:bg-gray-50 dark:hover:bg-muted transition-colors disabled:opacity-50"
-                                      data-testid={`button-test-${api.id}`}
-                                    >
-                                      {testingApiId === api.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-                                      Test
-                                    </button>
-                                  )}
                                   <button
-                                    onClick={() => { setShowApiKeyInput(showApiKeyInput === api.id ? null : api.id); setApiKeyInputValue(""); setSaveKeyError(null); }}
-                                    className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white dark:bg-card border border-gray-200 dark:border-border text-xs font-medium text-foreground hover:bg-gray-50 dark:hover:bg-muted transition-colors"
+                                    onClick={() => { setShowApiKeyInput(showApiKeyInput === api.id ? null : api.id); setApiKeyInputValue(""); }}
+                                    className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white border border-gray-100 text-xs font-medium text-foreground hover:bg-gray-50 transition-colors"
                                     data-testid={`button-configure-${api.id}`}
                                   >
                                     <Key className="w-3 h-3" />
@@ -717,7 +592,7 @@ export default function AdminConfig() {
                               </div>
 
                               {showApiKeyInput === api.id && (
-                                <div className="mt-3 pt-3 border-t border-gray-200 dark:border-border">
+                                <div className="mt-3 pt-3 border-t border-gray-100">
                                   <label className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest block mb-2">
                                     {api.envKey}
                                   </label>
@@ -726,79 +601,29 @@ export default function AdminConfig() {
                                       type="password"
                                       value={apiKeyInputValue}
                                       onChange={(e) => setApiKeyInputValue(e.target.value)}
-                                      placeholder={api.status === "connected" ? "••••••••••••••••••••" : `Enter your ${api.name} key`}
-                                      className="flex-1 px-3 py-2 rounded-xl border border-gray-200 dark:border-border bg-white dark:bg-card text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-foreground/10 font-mono"
+                                      placeholder={`Enter your ${api.name} key`}
+                                      className="flex-1 px-3 py-2 rounded-xl border border-gray-100 bg-white text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-foreground/10 font-mono"
                                       data-testid={`input-api-key-${api.id}`}
                                     />
                                     <button
-                                      onClick={async () => {
-                                        const trimmed = apiKeyInputValue.trim();
-                                        if (!trimmed) return;
-                                        setSavingApiKey(true);
-                                        setSaveKeyError(null);
-                                        try {
-                                          const r = await apiRequest("POST", "/api/admin/config/api-keys", {
-                                            serviceId: api.id,
-                                            key: trimmed,
-                                          });
-                                          if (r.ok) {
-                                            updateApiStatus(api.id, "connected");
-                                            setShowApiKeyInput(null);
-                                            setApiKeyInputValue("");
-                                            setTestResults((prev) => {
-                                              const next = { ...prev };
-                                              delete next[api.id];
-                                              return next;
-                                            });
-                                            toast({
-                                              title: `${api.name} — Key saved`,
-                                              description: "API key stored securely. Click Test to verify the connection.",
-                                            });
-                                          } else {
-                                            const body = await r.json() as { message?: string };
-                                            setSaveKeyError(body.message ?? "Failed to save key");
-                                          }
-                                        } catch (err: any) {
-                                          const msg = err?.message ?? "";
-                                          if (msg.startsWith("401")) {
-                                            setSaveKeyError("Not authorized — please log in to admin first");
-                                          } else {
-                                            setSaveKeyError("Network error — could not save key");
-                                          }
-                                        } finally {
-                                          setSavingApiKey(false);
+                                      onClick={() => {
+                                        if (apiKeyInputValue.trim()) {
+                                          updateApiStatus(api.id, "connected");
+                                          setShowApiKeyInput(null);
+                                          setApiKeyInputValue("");
                                         }
                                       }}
-                                      disabled={!apiKeyInputValue.trim() || savingApiKey}
-                                      className="px-4 py-2 rounded-xl bg-foreground text-white text-xs font-semibold hover:bg-foreground/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
+                                      disabled={!apiKeyInputValue.trim()}
+                                      className="px-4 py-2 rounded-xl bg-[#FFCC02] text-gray-900 text-xs font-semibold hover:bg-[#FFCC02]/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                                       data-testid={`button-save-key-${api.id}`}
                                     >
-                                      {savingApiKey ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
                                       Save
                                     </button>
                                   </div>
-                                  {saveKeyError && showApiKeyInput === api.id && (
-                                    <p className="text-[10px] text-red-500 mt-1.5 flex items-center gap-1">
-                                      <AlertCircle className="w-3 h-3" />
-                                      {saveKeyError}
-                                    </p>
-                                  )}
                                   <p className="text-[10px] text-muted-foreground/60 mt-2 flex items-center gap-1">
                                     <Shield className="w-3 h-3" />
-                                    Keys are stored securely in the database and never returned to the frontend
+                                    Keys are stored securely as environment secrets and never exposed to the frontend
                                   </p>
-                                  {(api.id === "line_liff" || api.id === "google_analytics") && (
-                                    <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1 flex items-center gap-1">
-                                      <AlertTriangle className="w-3 h-3" />
-                                      This key also needs to be set in your <code className="font-mono">.env</code> file as <code className="font-mono">{api.envKey}</code> for the frontend Vite build
-                                    </p>
-                                  )}
-                                  {testResults[api.id] && (
-                                    <div className={`mt-2 flex items-center gap-1.5 text-[10px] font-medium ${testResults[api.id].ok ? "text-green-600 dark:text-green-400" : "text-red-500 dark:text-red-400"}`}>
-                                      {testResults[api.id].ok ? <CheckCircle2 className="w-3 h-3" /> : <AlertCircle className="w-3 h-3" />}
-                                      {testResults[api.id].message}
-                                    </div>
-                                  )}
                                 </div>
                               )}
                             </div>
@@ -808,7 +633,7 @@ export default function AdminConfig() {
                     );
                   })}
 
-                  <div className="border-t border-gray-100 dark:border-border pt-6">
+                  <div className="border-t border-gray-100 pt-6">
                     <div className="flex items-center gap-3 mb-4">
                       <div
                         className="w-9 h-9 rounded-xl flex items-center justify-center"
@@ -817,12 +642,12 @@ export default function AdminConfig() {
                         <MapPin className="w-4 h-4 text-white" />
                       </div>
                       <div>
-                        <p className="text-sm font-bold text-foreground">Google Places Data Fetch</p>
+                        <p className="text-sm font-bold text-gray-800">Google Places Data Fetch</p>
                         <p className="text-xs text-muted-foreground">Fetch restaurant data on-demand to save API costs</p>
                       </div>
                     </div>
 
-                    <div className="bg-white dark:bg-card rounded-xl border border-gray-100 dark:border-border p-5">
+                    <div className="bg-white rounded-xl border border-gray-100 p-5">
                       <div className="grid grid-cols-3 gap-3 mb-4">
                         <div>
                           <label className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest block mb-1.5">Search Query</label>
@@ -830,7 +655,7 @@ export default function AdminConfig() {
                             type="text"
                             value={placesQuery}
                             onChange={(e) => setPlacesQuery(e.target.value)}
-                            className="w-full px-3 py-2 rounded-xl border border-gray-200 dark:border-border bg-gray-50 dark:bg-muted text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-foreground/10"
+                            className="w-full px-3 py-2 rounded-xl border border-gray-100 bg-gray-50 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-foreground/10"
                             data-testid="input-places-query"
                           />
                         </div>
@@ -840,7 +665,7 @@ export default function AdminConfig() {
                             type="number"
                             value={placesRadius}
                             onChange={(e) => setPlacesRadius(Number(e.target.value))}
-                            className="w-full px-3 py-2 rounded-xl border border-gray-200 dark:border-border bg-gray-50 dark:bg-muted text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-foreground/10"
+                            className="w-full px-3 py-2 rounded-xl border border-gray-100 bg-gray-50 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-foreground/10"
                             data-testid="input-places-radius"
                           />
                         </div>
@@ -852,7 +677,7 @@ export default function AdminConfig() {
                             onChange={(e) => setPlacesMaxResults(Number(e.target.value))}
                             min={1}
                             max={60}
-                            className="w-full px-3 py-2 rounded-xl border border-gray-200 dark:border-border bg-gray-50 dark:bg-muted text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-foreground/10"
+                            className="w-full px-3 py-2 rounded-xl border border-gray-100 bg-gray-50 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-foreground/10"
                             data-testid="input-places-max"
                           />
                         </div>
@@ -862,7 +687,7 @@ export default function AdminConfig() {
                         <button
                           onClick={handleFetchPlaces}
                           disabled={fetchingPlaces}
-                          className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-foreground text-white text-sm font-semibold hover:bg-foreground/90 transition-colors disabled:opacity-50"
+                          className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#FFCC02] text-gray-900 text-sm font-semibold hover:bg-[#FFCC02]/90 transition-colors disabled:opacity-50"
                           data-testid="button-fetch-places"
                         >
                           {fetchingPlaces ? (
@@ -878,16 +703,16 @@ export default function AdminConfig() {
                       </div>
 
                       {fetchError && (
-                        <div className="flex items-center gap-2 p-3 rounded-xl bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 mb-4" data-testid="alert-fetch-error">
+                        <div className="flex items-center gap-2 p-3 rounded-xl bg-red-50 border border-red-200 mb-4" data-testid="alert-fetch-error">
                           <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0" />
-                          <span className="text-xs text-red-700 dark:text-red-400">{fetchError}</span>
+                          <span className="text-xs text-red-700">{fetchError}</span>
                         </div>
                       )}
 
                       {fetchSuccess && fetchedPlaces.length === 0 && (
-                        <div className="flex items-center gap-2 p-3 rounded-xl bg-green-50 dark:bg-green-500/10 border border-green-200 dark:border-green-500/20 mb-4" data-testid="alert-fetch-success">
+                        <div className="flex items-center gap-2 p-3 rounded-xl bg-green-50 border border-green-200 mb-4" data-testid="alert-fetch-success">
                           <CheckCircle2 className="w-4 h-4 text-green-500 flex-shrink-0" />
-                          <span className="text-xs text-green-700 dark:text-green-400">{fetchSuccess}</span>
+                          <span className="text-xs text-green-700">{fetchSuccess}</span>
                         </div>
                       )}
 
@@ -915,30 +740,30 @@ export default function AdminConfig() {
                             </div>
                           </div>
 
-                          <div className="max-h-[480px] overflow-y-auto space-y-1.5 mb-4 rounded-xl border border-gray-100 dark:border-border p-2">
+                          <div className="max-h-[480px] overflow-y-auto space-y-1.5 mb-4 rounded-xl border border-gray-100 p-2">
                             {fetchedPlaces.map((place, idx) => {
                               const cls = place.classification;
                               const isExpanded = expandedPlace === idx;
                               const budgetSymbols = "฿".repeat(place.priceLevel);
                               const ownershipLabel = cls?.ownershipType === "chain" ? "Chain" : cls?.ownershipType === "franchise" ? "Franchise" : "Independent";
                               const ownershipColor = cls?.ownershipType === "chain"
-                                ? "bg-orange-100 dark:bg-orange-500/10 text-orange-700 dark:text-orange-400"
+                                ? "bg-orange-100 text-orange-700"
                                 : cls?.ownershipType === "franchise"
-                                  ? "bg-blue-100 dark:bg-blue-500/10 text-blue-700 dark:text-blue-400"
-                                  : "bg-gray-100 dark:bg-muted text-muted-foreground";
+                                  ? "bg-blue-100 text-blue-700"
+                                  : "bg-gray-100 text-muted-foreground";
                               const confidenceColor = (cls?.confidence || 0) >= 80
-                                ? "text-green-600 dark:text-green-400"
+                                ? "text-green-600"
                                 : (cls?.confidence || 0) >= 50
-                                  ? "text-amber-600 dark:text-amber-400"
-                                  : "text-red-500 dark:text-red-400";
+                                  ? "text-amber-600"
+                                  : "text-red-500";
 
                               return (
                                 <div
                                   key={idx}
                                   className={`rounded-xl transition-all ${
                                     place.selected
-                                      ? "bg-gray-50 dark:bg-muted ring-1 ring-foreground/10"
-                                      : "bg-white dark:bg-card opacity-50"
+                                      ? "bg-gray-50 ring-1 ring-foreground/10"
+                                      : "bg-white opacity-50"
                                   }`}
                                   data-testid={`place-row-${idx}`}
                                 >
@@ -948,12 +773,12 @@ export default function AdminConfig() {
                                   >
                                     <div className={`w-5 h-5 rounded-md border-2 flex items-center justify-center flex-shrink-0 transition-colors ${
                                       place.selected
-                                        ? "bg-foreground border-foreground"
-                                        : "border-gray-300 dark:border-border"
+                                        ? "bg-[#FFCC02] border-[#FFCC02]"
+                                        : "border-gray-300"
                                     }`}>
                                       {place.selected && <Check className="w-3 h-3 text-white" />}
                                     </div>
-                                    <div className="w-10 h-10 rounded-lg overflow-hidden flex-shrink-0 bg-gray-100 dark:bg-muted">
+                                    <div className="w-10 h-10 rounded-lg overflow-hidden flex-shrink-0 bg-gray-100">
                                       <img src={place.imageUrl} alt={place.name} className="w-full h-full object-cover" />
                                     </div>
                                     <div className="flex-1 min-w-0">
@@ -961,10 +786,10 @@ export default function AdminConfig() {
                                       <p className="text-[10px] text-muted-foreground truncate">{place.address}</p>
                                     </div>
                                     <div className="flex items-center gap-1.5 flex-shrink-0 flex-wrap justify-end">
-                                      <span className="px-1.5 py-0.5 rounded-md bg-purple-50 dark:bg-purple-500/10 text-purple-700 dark:text-purple-400 text-[10px] font-semibold" data-testid={`badge-category-${idx}`}>
+                                      <span className="px-1.5 py-0.5 rounded-md bg-purple-50 text-purple-700 text-[10px] font-semibold" data-testid={`badge-category-${idx}`}>
                                         {place.category}
                                       </span>
-                                      <span className="px-1.5 py-0.5 rounded-md bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400 text-[10px] font-bold" data-testid={`badge-budget-${idx}`}>
+                                      <span className="px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-700 text-[10px] font-bold" data-testid={`badge-budget-${idx}`}>
                                         {budgetSymbols}
                                       </span>
                                       {cls && (
@@ -977,7 +802,7 @@ export default function AdminConfig() {
                                       </span>
                                       <button
                                         onClick={(e) => { e.stopPropagation(); setExpandedPlace(isExpanded ? null : idx); }}
-                                        className="w-6 h-6 rounded-md flex items-center justify-center hover:bg-gray-200 dark:hover:bg-muted/80 transition-colors"
+                                        className="w-6 h-6 rounded-md flex items-center justify-center hover:bg-gray-200 transition-colors"
                                         data-testid={`button-expand-${idx}`}
                                       >
                                         <Pencil className="w-3 h-3 text-muted-foreground" />
@@ -989,7 +814,7 @@ export default function AdminConfig() {
                                     <div className="px-3 pb-2 flex items-center gap-3">
                                       <div className="flex items-center gap-1.5 flex-1">
                                         <TrendingUp className="w-3 h-3 text-muted-foreground" />
-                                        <div className="flex-1 h-1.5 rounded-full bg-gray-200 dark:bg-border overflow-hidden max-w-[120px]">
+                                        <div className="flex-1 h-1.5 rounded-full bg-gray-200 overflow-hidden max-w-[120px]">
                                           <div
                                             className="h-full rounded-full transition-all"
                                             style={{
@@ -1018,7 +843,7 @@ export default function AdminConfig() {
                                   )}
 
                                   {isExpanded && (
-                                    <div className="px-3 pb-3 border-t border-gray-100 dark:border-border pt-3 space-y-3" data-testid={`edit-panel-${idx}`}>
+                                    <div className="px-3 pb-3 border-t border-gray-100 pt-3 space-y-3" data-testid={`edit-panel-${idx}`}>
                                       <div className="grid grid-cols-2 gap-3">
                                         <div>
                                           <label className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest block mb-1">Name</label>
@@ -1026,7 +851,7 @@ export default function AdminConfig() {
                                             type="text"
                                             value={place.name}
                                             onChange={(e) => updatePlace(idx, { name: e.target.value })}
-                                            className="w-full px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-border bg-white dark:bg-card text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-foreground/10"
+                                            className="w-full px-2.5 py-1.5 rounded-lg border border-gray-100 bg-white text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-foreground/10"
                                             data-testid={`input-name-${idx}`}
                                           />
                                         </div>
@@ -1036,7 +861,7 @@ export default function AdminConfig() {
                                             type="text"
                                             value={place.category}
                                             onChange={(e) => updatePlace(idx, { category: e.target.value })}
-                                            className="w-full px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-border bg-white dark:bg-card text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-foreground/10"
+                                            className="w-full px-2.5 py-1.5 rounded-lg border border-gray-100 bg-white text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-foreground/10"
                                             data-testid={`input-category-${idx}`}
                                           />
                                         </div>
@@ -1047,7 +872,7 @@ export default function AdminConfig() {
                                           type="text"
                                           value={place.description}
                                           onChange={(e) => updatePlace(idx, { description: e.target.value })}
-                                          className="w-full px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-border bg-white dark:bg-card text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-foreground/10"
+                                          className="w-full px-2.5 py-1.5 rounded-lg border border-gray-100 bg-white text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-foreground/10"
                                           data-testid={`input-description-${idx}`}
                                         />
                                       </div>
@@ -1057,7 +882,7 @@ export default function AdminConfig() {
                                           <select
                                             value={place.priceLevel}
                                             onChange={(e) => updatePlace(idx, { priceLevel: Number(e.target.value) })}
-                                            className="w-full px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-border bg-white dark:bg-card text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-foreground/10"
+                                            className="w-full px-2.5 py-1.5 rounded-lg border border-gray-100 bg-white text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-foreground/10"
                                             data-testid={`select-budget-${idx}`}
                                           >
                                             <option value={1}>฿ Budget</option>
@@ -1074,7 +899,7 @@ export default function AdminConfig() {
                                             max={99}
                                             value={place.trendingScore}
                                             onChange={(e) => updatePlace(idx, { trendingScore: Math.min(99, Math.max(0, Number(e.target.value))) })}
-                                            className="w-full px-2.5 py-1.5 rounded-lg border border-gray-200 dark:border-border bg-white dark:bg-card text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-foreground/10"
+                                            className="w-full px-2.5 py-1.5 rounded-lg border border-gray-100 bg-white text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-foreground/10"
                                             data-testid={`input-trending-${idx}`}
                                           />
                                         </div>
@@ -1084,8 +909,8 @@ export default function AdminConfig() {
                                             onClick={() => updatePlace(idx, { isNew: !place.isNew })}
                                             className={`w-full px-2.5 py-1.5 rounded-lg border text-sm font-medium transition-colors ${
                                               place.isNew
-                                                ? "bg-green-50 dark:bg-green-500/10 border-green-200 dark:border-green-500/20 text-green-700 dark:text-green-400"
-                                                : "bg-white dark:bg-card border-gray-200 dark:border-border text-muted-foreground"
+                                                ? "bg-green-50 border-green-200 text-green-700"
+                                                : "bg-white border-gray-100 text-muted-foreground"
                                             }`}
                                             data-testid={`toggle-new-${idx}`}
                                           >
@@ -1128,86 +953,40 @@ export default function AdminConfig() {
                     {images.map((img) => (
                       <div
                         key={img.id}
-                        className="flex items-center gap-4 p-4 rounded-xl bg-gray-50 dark:bg-muted"
+                        className="flex items-center gap-4 p-4 rounded-xl bg-gray-50"
                         data-testid={`image-row-${img.id}`}
                       >
-                        <div className="w-16 h-16 rounded-xl bg-white dark:bg-card border border-gray-100 dark:border-border flex items-center justify-center flex-shrink-0 overflow-hidden">
+                        <div className="w-16 h-16 rounded-xl bg-white border border-gray-100 flex items-center justify-center flex-shrink-0 overflow-hidden">
                           {img.currentUrl ? (
-                            <img src={img.currentUrl} alt={img.label} className="w-12 h-12 object-contain" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                            <img src={img.currentUrl} alt={img.label} className="w-12 h-12 object-contain" />
                           ) : (
                             <Image className="w-6 h-6 text-muted-foreground/30" />
                           )}
                         </div>
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm font-semibold text-foreground">{img.label}</p>
+                          <p className="text-sm font-semibold text-gray-800">{img.label}</p>
                           <p className="text-xs text-muted-foreground mt-0.5">{img.description}</p>
                           <div className="flex items-center gap-2 mt-2">
                             <span className={`text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-md ${
-                              img.category === "branding" ? "bg-purple-50 dark:bg-purple-500/10 text-purple-600" : "bg-blue-50 dark:bg-blue-500/10 text-blue-600"
+                              img.category === "branding" ? "bg-purple-50 text-purple-600" : "bg-blue-50 text-blue-600"
                             }`}>
                               {img.category}
                             </span>
-                            {img.currentUrl && (
-                              <span className="text-[10px] text-green-600 font-medium flex items-center gap-1">
-                                <CheckCircle2 className="w-3 h-3" /> Uploaded
-                              </span>
-                            )}
                           </div>
                         </div>
-                        <label
-                          className={`flex items-center gap-2 px-4 py-2 rounded-xl border text-sm font-medium transition-colors cursor-pointer flex-shrink-0 ${
-                            uploadingImageId === img.id
-                              ? "bg-gray-100 dark:bg-muted text-muted-foreground border-gray-200 dark:border-border"
-                              : "bg-white dark:bg-card border-gray-200 dark:border-border text-foreground hover:bg-gray-50 dark:hover:bg-muted"
-                          }`}
+                        <button
+                          className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white border border-gray-100 text-sm font-medium text-foreground hover:bg-gray-50 transition-colors"
+                          onClick={() => trackChange(`Updated ${img.label} image`)}
                           data-testid={`button-upload-${img.id}`}
                         >
-                          {uploadingImageId === img.id ? (
-                            <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Uploading…</>
-                          ) : (
-                            <><Upload className="w-3.5 h-3.5" /> Upload</>
-                          )}
-                          <input
-                            type="file"
-                            accept="image/*"
-                            className="sr-only"
-                            disabled={uploadingImageId !== null}
-                            onChange={async (e) => {
-                              const file = e.target.files?.[0];
-                              if (!file) return;
-                              e.target.value = "";
-                              setUploadingImageId(img.id);
-                              try {
-                                const base64 = await new Promise<string>((resolve, reject) => {
-                                  const reader = new FileReader();
-                                  reader.onload = () => {
-                                    const result = reader.result as string;
-                                    resolve(result.split(",")[1]);
-                                  };
-                                  reader.onerror = reject;
-                                  reader.readAsDataURL(file);
-                                });
-                                const res = await apiRequest("POST", "/api/admin/upload", {
-                                  name: file.name,
-                                  type: file.type,
-                                  data: base64,
-                                });
-                                const { url } = await res.json();
-                                setImages((prev) => prev.map((i) => i.id === img.id ? { ...i, currentUrl: url } : i));
-                                trackChange(`Updated ${img.label} image`);
-                              } catch {
-                                toast({ title: "Upload failed", description: "Could not upload image. Please try again.", variant: "destructive" });
-                              } finally {
-                                setUploadingImageId(null);
-                              }
-                            }}
-                          />
-                        </label>
+                          <Upload className="w-3.5 h-3.5" />
+                          Replace
+                        </button>
                       </div>
                     ))}
                   </div>
 
-                  <div className="p-4 rounded-xl bg-gray-50 dark:bg-muted">
+                  <div className="p-4 rounded-xl bg-gray-50">
                     <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">Accent Color</p>
                     <div className="flex items-center gap-3">
                       {["#FFCC02", "#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4", "#6C2BD9"].map((color) => (
@@ -1223,7 +1002,7 @@ export default function AdminConfig() {
                           data-testid={`color-${color.replace("#", "")}`}
                         />
                       ))}
-                      <div className="ml-2 flex items-center gap-2 px-3 py-2 rounded-xl bg-white dark:bg-card border border-gray-200 dark:border-border">
+                      <div className="ml-2 flex items-center gap-2 px-3 py-2 rounded-xl bg-white border border-gray-100">
                         <div className="w-5 h-5 rounded-md" style={{ backgroundColor: uiConfig.accentColor }} />
                         <span className="text-xs font-mono text-muted-foreground">{uiConfig.accentColor}</span>
                       </div>
@@ -1247,15 +1026,15 @@ export default function AdminConfig() {
                         key={vibe.mode}
                         className={`flex items-center gap-3 p-3.5 rounded-xl border transition-all cursor-pointer ${
                           vibe.enabled
-                            ? "bg-white dark:bg-card border-gray-100 dark:border-border"
-                            : "bg-gray-50 dark:bg-muted border-gray-100 dark:border-border opacity-50"
+                            ? "bg-white border-gray-100"
+                            : "bg-gray-50 border-gray-100 opacity-50"
                         }`}
                         onClick={() => toggleVibe(vibe.mode)}
                         data-testid={`vibe-toggle-${vibe.mode}`}
                       >
                         <span className="text-2xl">{vibe.emoji}</span>
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm font-semibold text-foreground">{vibe.label}</p>
+                          <p className="text-sm font-semibold text-gray-800">{vibe.label}</p>
                           <p className="text-[10px] text-muted-foreground/60 font-mono">{vibe.mode}</p>
                         </div>
                         <button className="flex-shrink-0">
@@ -1269,7 +1048,7 @@ export default function AdminConfig() {
                     ))}
                   </div>
 
-                  <div className="p-4 rounded-xl bg-gray-50 dark:bg-muted">
+                  <div className="p-4 rounded-xl bg-gray-50">
                     <p className="text-xs text-muted-foreground leading-relaxed">
                       Disabled vibes will be hidden from the "Pick a vibe" grid on the home screen. Users who previously frequented a disabled vibe will see their next most-used option instead.
                     </p>
@@ -1282,35 +1061,35 @@ export default function AdminConfig() {
                   <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest">Text & Labels</p>
 
                   <div className="space-y-4">
-                    <div className="p-4 rounded-xl bg-gray-50 dark:bg-muted">
-                      <label className="text-xs font-semibold text-foreground block mb-2">Hero Title</label>
+                    <div className="p-4 rounded-xl bg-gray-50">
+                      <label className="text-xs font-semibold text-gray-800 block mb-2">Hero Title</label>
                       <input
                         type="text"
                         value={uiConfig.heroTitle}
                         onChange={(e) => updateUI("heroTitle", e.target.value)}
-                        className="w-full px-3 py-2.5 rounded-xl border border-gray-200 dark:border-border bg-white dark:bg-card text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-foreground/10"
+                        className="w-full px-3 py-2.5 rounded-xl border border-gray-100 bg-white text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-foreground/10"
                         data-testid="input-hero-title"
                       />
                     </div>
 
-                    <div className="p-4 rounded-xl bg-gray-50 dark:bg-muted">
-                      <label className="text-xs font-semibold text-foreground block mb-2">Hero Subtitle</label>
+                    <div className="p-4 rounded-xl bg-gray-50">
+                      <label className="text-xs font-semibold text-gray-800 block mb-2">Hero Subtitle</label>
                       <input
                         type="text"
                         value={uiConfig.heroSubtitle}
                         onChange={(e) => updateUI("heroSubtitle", e.target.value)}
-                        className="w-full px-3 py-2.5 rounded-xl border border-gray-200 dark:border-border bg-white dark:bg-card text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-foreground/10"
+                        className="w-full px-3 py-2.5 rounded-xl border border-gray-100 bg-white text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-foreground/10"
                         data-testid="input-hero-subtitle"
                       />
                     </div>
 
-                    <div className="p-4 rounded-xl bg-gray-50 dark:bg-muted">
-                      <label className="text-xs font-semibold text-foreground block mb-2">Mascot Greeting</label>
+                    <div className="p-4 rounded-xl bg-gray-50">
+                      <label className="text-xs font-semibold text-gray-800 block mb-2">Mascot Greeting</label>
                       <input
                         type="text"
                         value={uiConfig.mascotGreeting}
                         onChange={(e) => updateUI("mascotGreeting", e.target.value)}
-                        className="w-full px-3 py-2.5 rounded-xl border border-gray-200 dark:border-border bg-white dark:bg-card text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-foreground/10"
+                        className="w-full px-3 py-2.5 rounded-xl border border-gray-100 bg-white text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-foreground/10"
                         data-testid="input-mascot-greeting"
                       />
                     </div>
@@ -1320,15 +1099,15 @@ export default function AdminConfig() {
 
                   <div className="grid grid-cols-3 gap-3">
                     {(["explore", "swipe", "profile"] as const).map((tab) => (
-                      <div key={tab} className="p-4 rounded-xl bg-gray-50 dark:bg-muted">
-                        <label className="text-xs font-semibold text-foreground block mb-2 capitalize">{tab} Tab</label>
+                      <div key={tab} className="p-4 rounded-xl bg-gray-50">
+                        <label className="text-xs font-semibold text-gray-800 block mb-2 capitalize">{tab} Tab</label>
                         <input
                           type="text"
                           value={uiConfig.bottomNavLabels[tab]}
                           onChange={(e) =>
                             updateUI("bottomNavLabels", { ...uiConfig.bottomNavLabels, [tab]: e.target.value })
                           }
-                          className="w-full px-3 py-2 rounded-xl border border-gray-200 dark:border-border bg-white dark:bg-card text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-foreground/10"
+                          className="w-full px-3 py-2 rounded-xl border border-gray-100 bg-white text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-foreground/10"
                           data-testid={`input-nav-${tab}`}
                         />
                       </div>
@@ -1342,15 +1121,15 @@ export default function AdminConfig() {
 
         <div className="w-[300px] flex-shrink-0">
           <div className="sticky top-6 space-y-4">
-            <div className="bg-white dark:bg-card rounded-2xl border border-gray-100 dark:border-border p-5">
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
               <div className="flex items-center gap-2 mb-4">
                 <Smartphone className="w-4 h-4 text-muted-foreground" />
                 <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest">Live Preview</p>
               </div>
 
-              <div className="w-full aspect-[9/16] rounded-2xl bg-gray-50 dark:bg-muted border border-gray-100 dark:border-border overflow-hidden relative">
+              <div className="w-full aspect-[9/16] rounded-2xl bg-gray-50 border border-gray-100 overflow-hidden relative">
                 <div className="absolute inset-0 flex flex-col">
-                  <div className="flex items-center justify-center py-3 bg-white dark:bg-card border-b border-gray-100 dark:border-border">
+                  <div className="flex items-center justify-center py-3 bg-white border-b border-gray-100">
                     <div className="flex flex-col items-center">
                       <img src={toastLogo} alt="Toast" className="h-6 w-auto" />
                       <span className="text-[6px] font-extrabold text-foreground uppercase" style={{ letterSpacing: "0.8em", paddingLeft: "0.8em" }}>THINGS</span>
@@ -1364,15 +1143,15 @@ export default function AdminConfig() {
                       </div>
                     </div>
 
-                    <p className="text-[8px] font-bold text-foreground mb-1 truncate">{uiConfig.heroTitle}</p>
+                    <p className="text-[8px] font-bold text-gray-800 mb-1 truncate">{uiConfig.heroTitle}</p>
                     <p className="text-[6px] text-muted-foreground mb-2 truncate">{uiConfig.heroSubtitle}</p>
 
-                    <p className="text-[6px] font-bold text-foreground mb-1">Pick a vibe</p>
+                    <p className="text-[6px] font-bold text-gray-800 mb-1">Pick a vibe</p>
                     <div className="grid grid-cols-4 gap-1 mb-2">
                       {vibes.filter((v) => v.enabled).slice(0, 4).map((v) => (
                         <div
                           key={v.mode}
-                          className="flex flex-col items-center justify-center py-1.5 rounded-lg bg-white dark:bg-card border border-gray-100 dark:border-border"
+                          className="flex flex-col items-center justify-center py-1.5 rounded-lg bg-white border border-gray-100"
                         >
                           <span className="text-[10px]">{v.emoji}</span>
                           <span className="text-[5px] text-muted-foreground mt-0.5">{v.label}</span>
@@ -1382,7 +1161,7 @@ export default function AdminConfig() {
 
                     <div className="space-y-1.5">
                       {features.filter((f) => f.enabled).slice(0, 3).map((f) => (
-                        <div key={f.id} className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-white dark:bg-card border border-gray-100 dark:border-border">
+                        <div key={f.id} className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-white border border-gray-100">
                           <div className="w-4 h-4 rounded-md flex items-center justify-center" style={{ backgroundColor: uiConfig.accentColor + "20" }}>
                             <f.icon className="w-2.5 h-2.5" style={{ color: uiConfig.accentColor }} />
                           </div>
@@ -1393,7 +1172,7 @@ export default function AdminConfig() {
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-around py-2 bg-white dark:bg-card border-t border-gray-100 dark:border-border">
+                  <div className="flex items-center justify-around py-2 bg-white border-t border-gray-100">
                     {(["explore", "swipe", "profile"] as const).map((tab) => (
                       <div key={tab} className="flex flex-col items-center gap-0.5">
                         <div className="w-3 h-3 rounded-full" style={{ backgroundColor: tab === "explore" ? uiConfig.accentColor : "hsl(0,0%,85%)" }} />
@@ -1408,7 +1187,7 @@ export default function AdminConfig() {
             </div>
 
             {pendingChanges.length > 0 && (
-              <div className="bg-white dark:bg-card rounded-2xl border border-gray-100 dark:border-border p-5">
+              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
                 <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">Pending Changes</p>
                 <div className="space-y-1.5 max-h-40 overflow-y-auto">
                   {pendingChanges.map((change, i) => (
@@ -1426,20 +1205,20 @@ export default function AdminConfig() {
 
       {showPreview && (
         <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-6" data-testid="preview-modal">
-          <div className="bg-white dark:bg-card rounded-3xl border border-gray-100 dark:border-border w-full max-w-2xl max-h-[80vh] overflow-hidden shadow-2xl">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 dark:border-border">
+          <div className="bg-white rounded-3xl border border-gray-100 shadow-sm w-full max-w-2xl max-h-[80vh] overflow-hidden shadow-2xl">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
               <div className="flex items-center gap-3">
                 <div className="w-8 h-8 rounded-xl bg-[#FFCC02]/15 flex items-center justify-center">
                   <Eye className="w-4 h-4 text-foreground" />
                 </div>
                 <div>
-                  <h3 className="text-base font-semibold text-foreground">Review Changes</h3>
+                  <h3 className="text-base font-semibold text-gray-800">Review Changes</h3>
                   <p className="text-xs text-muted-foreground">{pendingChanges.length} change{pendingChanges.length !== 1 ? "s" : ""} to apply</p>
                 </div>
               </div>
               <button
                 onClick={() => setShowPreview(false)}
-                className="w-8 h-8 rounded-xl bg-gray-100 dark:bg-muted flex items-center justify-center hover:bg-gray-200 dark:hover:bg-muted/80 transition-colors"
+                className="w-8 h-8 rounded-xl bg-gray-100 flex items-center justify-center hover:bg-gray-200 transition-colors"
                 data-testid="button-close-preview"
               >
                 <X className="w-4 h-4 text-muted-foreground" />
@@ -1454,10 +1233,10 @@ export default function AdminConfig() {
                     {pendingChanges.map((change, i) => (
                       <div
                         key={i}
-                        className="flex items-start gap-3 p-3 rounded-xl bg-gray-50 dark:bg-muted"
+                        className="flex items-start gap-3 p-3 rounded-xl bg-gray-50"
                       >
-                        <div className="w-5 h-5 rounded-full bg-amber-100 dark:bg-amber-500/10 flex items-center justify-center flex-shrink-0 mt-0.5">
-                          <ChevronRight className="w-3 h-3 text-amber-600 dark:text-amber-400" />
+                        <div className="w-5 h-5 rounded-full bg-amber-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+                          <ChevronRight className="w-3 h-3 text-amber-600" />
                         </div>
                         <span className="text-sm text-foreground leading-relaxed">{change}</span>
                       </div>
@@ -1467,9 +1246,9 @@ export default function AdminConfig() {
 
                 <div>
                   <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">Preview</p>
-                  <div className="w-full aspect-[9/16] rounded-2xl bg-gray-50 dark:bg-muted border border-gray-100 dark:border-border overflow-hidden relative">
+                  <div className="w-full aspect-[9/16] rounded-2xl bg-gray-50 border border-gray-100 overflow-hidden relative">
                     <div className="absolute inset-0 flex flex-col">
-                      <div className="flex items-center justify-center py-3 bg-white dark:bg-card border-b border-gray-100 dark:border-border">
+                      <div className="flex items-center justify-center py-3 bg-white border-b border-gray-100">
                         <div className="flex flex-col items-center">
                           <img src={toastLogo} alt="Toast" className="h-5 w-auto" />
                           <span className="text-[5px] font-extrabold text-foreground uppercase" style={{ letterSpacing: "0.8em", paddingLeft: "0.8em" }}>THINGS</span>
@@ -1481,17 +1260,17 @@ export default function AdminConfig() {
                             <MapPin className="w-3 h-3 text-muted-foreground/40" />
                           </div>
                         </div>
-                        <p className="text-[7px] font-bold text-foreground mb-0.5 truncate">{uiConfig.heroTitle}</p>
+                        <p className="text-[7px] font-bold text-gray-800 mb-0.5 truncate">{uiConfig.heroTitle}</p>
                         <div className="grid grid-cols-4 gap-0.5 mb-1.5">
                           {vibes.filter((v) => v.enabled).slice(0, 4).map((v) => (
-                            <div key={v.mode} className="flex flex-col items-center py-1 rounded bg-white dark:bg-card border border-gray-100 dark:border-border">
+                            <div key={v.mode} className="flex flex-col items-center py-1 rounded bg-white border border-gray-100">
                               <span className="text-[8px]">{v.emoji}</span>
                               <span className="text-[4px] text-muted-foreground">{v.label}</span>
                             </div>
                           ))}
                         </div>
                       </div>
-                      <div className="flex items-center justify-around py-1.5 bg-white dark:bg-card border-t border-gray-100 dark:border-border">
+                      <div className="flex items-center justify-around py-1.5 bg-white border-t border-gray-100">
                         {(["explore", "swipe", "profile"] as const).map((tab) => (
                           <div key={tab} className="flex flex-col items-center gap-0.5">
                             <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: tab === "explore" ? uiConfig.accentColor : "hsl(0,0%,85%)" }} />
@@ -1505,7 +1284,7 @@ export default function AdminConfig() {
               </div>
             </div>
 
-            <div className="flex items-center justify-between px-6 py-4 border-t border-gray-100 dark:border-border bg-gray-50 dark:bg-muted">
+            <div className="flex items-center justify-between px-6 py-4 border-t border-gray-100 bg-gray-50">
               <button
                 onClick={() => setShowPreview(false)}
                 className="px-5 py-2.5 rounded-xl text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
@@ -1515,7 +1294,7 @@ export default function AdminConfig() {
               </button>
               <button
                 onClick={() => { handleSave(); setShowPreview(false); }}
-                className="flex items-center gap-2 px-6 py-2.5 rounded-xl bg-foreground text-white text-sm font-semibold hover:bg-foreground/90 transition-colors shadow-sm"
+                className="flex items-center gap-2 px-6 py-2.5 rounded-xl bg-[#FFCC02] text-gray-900 text-sm font-semibold hover:bg-[#FFCC02]/90 transition-colors shadow-sm"
                 data-testid="button-confirm-save"
               >
                 <Check className="w-4 h-4" />

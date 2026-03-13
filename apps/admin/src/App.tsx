@@ -28,7 +28,14 @@ import AdminCampaigns from "@/pages/admin/AdminCampaigns";
 import AdminBanners from "@/pages/admin/AdminBanners";
 import AdminAnalytics from "@/pages/admin/AdminAnalytics";
 import AdminConfig from "@/pages/admin/AdminConfig";
+import AdminPayments from "@/pages/admin/AdminPayments";
 import AdminOwnerDashboard from "@/pages/admin/AdminOwnerDashboard";
+import OwnerMenu from "@/pages/admin/OwnerMenu";
+import OwnerReviews from "@/pages/admin/OwnerReviews";
+import OwnerPromotions from "@/pages/admin/OwnerPromotions";
+import OwnerPerformance from "@/pages/admin/OwnerPerformance";
+import OwnerNotifications from "@/pages/admin/OwnerNotifications";
+import OwnerSettings from "@/pages/admin/OwnerSettings";
 import AdminMapCheck from "@/pages/admin/AdminMapCheck";
 import AdminPlaces from "@/pages/admin/AdminPlaces";
 import AdminRestaurantEditor from "@/pages/admin/AdminRestaurantEditor";
@@ -134,6 +141,9 @@ function Router() {
         <Route path="/admin/analytics">
           <AdminLayout><AdminAnalytics /></AdminLayout>
         </Route>
+        <Route path="/admin/payments">
+          <AdminLayout><AdminPayments /></AdminLayout>
+        </Route>
         <Route path="/admin/recommendations">
           <AdminLayout><AdminRecommendations /></AdminLayout>
         </Route>
@@ -169,6 +179,24 @@ function Router() {
         </Route>
         <Route path="/admin/my-restaurant">
           <AdminLayout><AdminOwnerDashboard /></AdminLayout>
+        </Route>
+        <Route path="/admin/owner/menu">
+          <AdminLayout><OwnerMenu /></AdminLayout>
+        </Route>
+        <Route path="/admin/owner/reviews">
+          <AdminLayout><OwnerReviews /></AdminLayout>
+        </Route>
+        <Route path="/admin/owner/promotions">
+          <AdminLayout><OwnerPromotions /></AdminLayout>
+        </Route>
+        <Route path="/admin/owner/performance">
+          <AdminLayout><OwnerPerformance /></AdminLayout>
+        </Route>
+        <Route path="/admin/owner/notifications">
+          <AdminLayout><OwnerNotifications /></AdminLayout>
+        </Route>
+        <Route path="/admin/owner/settings">
+          <AdminLayout><OwnerSettings /></AdminLayout>
         </Route>
         <Route path="/admin">
           <Redirect to="/admin/dashboard" />
