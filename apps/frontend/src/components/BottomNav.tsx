@@ -1,6 +1,6 @@
 import { motion } from "framer-motion";
 import { useLocation } from "wouter";
-import { Search, Flame, User, ArrowLeft } from "lucide-react";
+import { Search, Flame, User, ArrowLeft, Heart } from "lucide-react";
 import { useFeatureFlags } from "@/hooks/use-feature-flags";
 import { useBranding } from "@/hooks/use-branding";
 
@@ -12,11 +12,12 @@ interface BottomNavProps {
   hidden?: boolean;
 }
 
-type TabKey = "explore" | "swipe" | "profile";
+type TabKey = "explore" | "swipe" | "saved" | "profile";
 
 const tabs: { key: TabKey; icon: typeof Search; path: string }[] = [
   { key: "explore", icon: Search, path: "/" },
   { key: "swipe", icon: Flame, path: "/swipe" },
+  { key: "saved", icon: Heart, path: "/saved" },
   { key: "profile", icon: User, path: "/profile" },
 ];
 
@@ -24,6 +25,7 @@ function getActiveTab(location: string): TabKey {
   if (location === "/") return "explore";
   if (location === "/restaurants" || location.startsWith("/restaurant/")) return "explore";
   if (location === "/swipe" || location.startsWith("/solo") || location.startsWith("/group")) return "swipe";
+  if (location === "/saved") return "saved";
   if (location === "/profile" || location.startsWith("/toast-picks")) return "profile";
   return "explore";
 }
@@ -50,6 +52,7 @@ export function BottomNav({ showBack = true, onBack, hidden = false }: BottomNav
   const labelFor = (key: TabKey) => {
     if (key === "explore") return bottomNavLabels.explore;
     if (key === "swipe") return bottomNavLabels.swipe;
+    if (key === "saved") return "Saved";
     return bottomNavLabels.profile;
   };
 

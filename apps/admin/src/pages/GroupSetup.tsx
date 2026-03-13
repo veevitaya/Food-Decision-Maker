@@ -81,6 +81,7 @@ function isSameDay(a: Date | null, b: Date) {
 export default function GroupSetup() {
   const [, navigate] = useLocation();
   const { profile } = useLineProfile();
+  const againCode = new URLSearchParams(window.location.search).get("again");
   const [selectedLocations, setSelectedLocations] = useState<string[]>([]);
   const [selectedBudget, setSelectedBudget] = useState<string>("");
   const [selectedGroupType, setSelectedGroupType] = useState<string>("");
@@ -93,6 +94,7 @@ export default function GroupSetup() {
   const [hourPickerOpen, setHourPickerOpen] = useState(false);
   const [inviteStatus, setInviteStatus] = useState<"idle" | "sending" | "sent">("idle");
   const [pendingSessionId, setPendingSessionId] = useState<string | null>(null);
+  const [expectedMembers, setExpectedMembers] = useState<number>(3);
   const dateScrollRef = useRef<HTMLDivElement>(null);
   const hourPickerRef = useRef<HTMLDivElement>(null);
   const upcomingDays = getNext14Days();
@@ -126,6 +128,7 @@ export default function GroupSetup() {
             hostLineUserId: profile.userId,
             hostDisplayName: profile.displayName,
             hostPictureUrl: profile.pictureUrl || "",
+            expectedMembers: expectedMembers || undefined,
           }),
         });
       } catch {}
@@ -159,7 +162,7 @@ export default function GroupSetup() {
   ].filter(Boolean).length;
 
   return (
-    <div className="w-full h-[100dvh] bg-[#F7F7F7] flex flex-col overflow-hidden" data-testid="group-setup-page">
+    <div className="w-full h-[100dvh] bg-[#FCFCFC] flex flex-col overflow-hidden" data-testid="group-setup-page">
       <div className="flex-shrink-0 bg-white border-b border-gray-100/60 z-40">
         <div className="flex items-center gap-3 px-5 pt-12 pb-3">
           <button
@@ -184,6 +187,13 @@ export default function GroupSetup() {
           </div>
         </div>
       </div>
+
+      {againCode && (
+        <div className="flex-shrink-0 bg-[#FFCC02]/10 border-b border-[#FFCC02]/30 px-5 py-2.5 flex items-center gap-2">
+          <span className="text-sm">🔄</span>
+          <p className="text-xs font-semibold text-[#2d2000]">Same group, new round! Invite your friends again to get started.</p>
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto pb-6 hide-scrollbar">
 
@@ -489,6 +499,27 @@ export default function GroupSetup() {
               <Users className="w-4 h-4 text-[#00B14F]" />
               <h2 className="text-[12px] font-bold uppercase tracking-[0.1em] text-foreground">Who's coming?</h2>
             </div>
+
+            <div className="mb-4">
+              <p className="text-[11px] text-muted-foreground mb-2">How many people? (including you)</p>
+              <div className="flex items-center gap-2">
+                {[2, 3, 4, 5, 6, 8, 10].map((n) => (
+                  <button
+                    key={n}
+                    onClick={() => setExpectedMembers(n)}
+                    data-testid={`chip-group-size-${n}`}
+                    className={`w-10 h-10 rounded-xl text-sm font-bold transition-all duration-200 ${
+                      expectedMembers === n
+                        ? "bg-foreground text-white shadow-md"
+                        : "bg-white border border-gray-100 text-muted-foreground"
+                    }`}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div className="grid grid-cols-4 gap-2 mb-4">
               {GROUP_TYPES.map((g) => {
                 const Icon = g.icon;

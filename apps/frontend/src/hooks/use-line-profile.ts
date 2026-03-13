@@ -76,6 +76,7 @@ export function useLineProfile() {
     profile,
     loading,
     liffReady,
+    loggedIn: liffReady ? isLoggedIn() : false,
     liffAvailable: isLiffAvailable(),
     isInLiff: liffReady ? isInLiff() : false,
     login: handleLogin,

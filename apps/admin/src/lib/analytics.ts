@@ -8,7 +8,7 @@ function mapToCanonical(eventType: string): CanonicalEventType {
     case "view_detail":
       return "view_card";
     case "delivery_click":
-      return "order_click";
+      return "deeplink_click";
     case "quiz_start":
       return "session_join";
     case "favorite":

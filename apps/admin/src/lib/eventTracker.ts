@@ -10,7 +10,8 @@ export type CanonicalEventType =
   | "search"
   | "filter"
   | "order_click"
-  | "booking_click";
+  | "booking_click"
+  | "deeplink_click";
 
 type EventPayload = {
   eventType: CanonicalEventType;

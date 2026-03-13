@@ -5,7 +5,8 @@ import { addSession, updateSession } from "@/lib/sessionStore";
 import { BottomNav } from "@/components/BottomNav";
 import { trackEvent } from "@/lib/analytics";
 import { useLineProfile } from "@/lib/useLineProfile";
-import { Square, X } from "lucide-react";
+import { shareMessage } from "@/lib/liff";
+import { Square, Share2 } from "lucide-react";
 
 interface MenuItem {
   id: number;
@@ -290,24 +291,43 @@ export default function GroupSwipe() {
   useEffect(() => {
     const loadRestaurants = async () => {
       try {
-        const res = await fetch("/api/restaurants");
-        if (res.ok) {
-          const data = await res.json();
-          const items: MenuItem[] = data.map((r: any) => ({
-            id: r.id,
-            name: r.name,
-            category: r.category || "Restaurant",
-            tags: buildTagsFromCategory(r.category || ""),
-            description: r.description || "",
-            priceLevel: r.priceLevel || 2,
-            rating: r.rating || "4.0",
-            address: r.address || "Bangkok",
-            imageUrl: r.imageUrl || "",
-            isNew: r.isNew || false,
-          }));
-          const shuffled = items.sort(() => Math.random() - 0.5);
-          setMenuItems(shuffled);
+        let data: any[] = [];
+
+        if (sessionCode) {
+          const sessionRes = await fetch(`/api/group/sessions/${sessionCode}`);
+          if (sessionRes.ok) {
+            const sessionData = await sessionRes.json();
+            if (sessionData.session?.sessionType === "trending") {
+              const trendingRes = await fetch(`/api/group/sessions/${sessionCode}/trending-restaurants`);
+              if (trendingRes.ok) {
+                const trendingData = await trendingRes.json();
+                data = trendingData.restaurants || [];
+              }
+            }
+          }
         }
+
+        if (data.length === 0) {
+          const res = await fetch("/api/restaurants");
+          if (res.ok) {
+            data = await res.json();
+          }
+        }
+
+        const items: MenuItem[] = data.map((r: any) => ({
+          id: r.id,
+          name: r.name,
+          category: r.category || "Restaurant",
+          tags: buildTagsFromCategory(r.category || ""),
+          description: r.description || "",
+          priceLevel: r.priceLevel || r.price_level || 2,
+          rating: r.rating || "4.0",
+          address: r.address || "Bangkok",
+          imageUrl: r.imageUrl || r.image_url || "",
+          isNew: r.isNew || r.is_new || false,
+        }));
+        const shuffled = items.sort(() => Math.random() - 0.5);
+        setMenuItems(shuffled);
       } catch (err) {
         console.error("Failed to load restaurants:", err);
       } finally {
@@ -315,7 +335,7 @@ export default function GroupSwipe() {
       }
     };
     loadRestaurants();
-  }, []);
+  }, [sessionCode]);
 
   useEffect(() => {
     if (!sessionCode) return;
@@ -495,6 +515,7 @@ export default function GroupSwipe() {
       });
       setSessionEnded(true);
       setShowEndConfirm(false);
+      navigate(`/group/result?session=${sessionCode}`);
     } catch (err) {
       console.error("Failed to end session:", err);
     }
@@ -508,7 +529,7 @@ export default function GroupSwipe() {
 
   if (loading) {
     return (
-      <div className="w-full h-[100dvh] bg-white flex items-center justify-center">
+      <div className="w-full h-[100dvh] bg-[#FCFCFC] flex items-center justify-center">
         <div className="w-8 h-8 rounded-full border-2 border-gray-300 border-t-foreground animate-spin" />
       </div>
     );
@@ -516,7 +537,7 @@ export default function GroupSwipe() {
 
   if (sessionEnded) {
     return (
-      <div className="w-full h-[100dvh] bg-white flex flex-col overflow-hidden" data-testid="group-summary-page">
+      <div className="w-full h-[100dvh] bg-[#FCFCFC] flex flex-col overflow-hidden" data-testid="group-summary-page">
         <div className="flex-shrink-0 px-6 pt-12 pb-4 border-b border-gray-100">
           <h1 className="text-[22px] font-bold" data-testid="text-summary-title">Session Summary</h1>
           <p className="text-sm text-muted-foreground mt-1">
@@ -592,7 +613,7 @@ export default function GroupSwipe() {
 
   if (fullMatch && matchedItem) {
     return (
-      <div className="w-full h-[100dvh] bg-white flex flex-col items-center justify-center px-6 relative overflow-hidden" data-testid="group-match-page">
+      <div className="w-full h-[100dvh] bg-[#FCFCFC] flex flex-col items-center justify-center px-6 relative overflow-hidden" data-testid="group-match-page">
         <div className="absolute inset-0 pointer-events-none">
           <div className="absolute top-[20%] left-[5%] w-48 h-48 bg-amber-50/50 rounded-full blur-3xl" />
           <div className="absolute bottom-[15%] right-[10%] w-56 h-56 bg-amber-50/50 rounded-full blur-3xl" />
@@ -697,6 +718,22 @@ export default function GroupSwipe() {
             style={{ boxShadow: "var(--shadow-glow-primary)" }}
           >
             Keep Swiping
+          </motion.button>
+
+          <motion.button
+            initial={{ y: 12, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            transition={{ delay: 0.9, duration: 0.3, ease: [0.4, 0, 0.2, 1] }}
+            onClick={async () => {
+              if (!matchedItem) return;
+              const text = `Toast found a match! We're going to ${matchedItem.name} 🍽️\n📍 ${matchedItem.address}\n⭐ ${matchedItem.rating} | ${"฿".repeat(matchedItem.priceLevel)}\n\nDecided with Toast!`;
+              await shareMessage(text);
+            }}
+            className="w-full py-4 rounded-full bg-[#06C755] text-white font-bold text-[15px] flex items-center justify-center gap-2 active:scale-[0.96] transition-transform duration-200"
+            style={{ boxShadow: "0 8px 25px -5px rgba(6,199,85,0.3)" }}
+          >
+            <Share2 className="w-4 h-4" />
+            Share to LINE
           </motion.button>
 
           {isHost && (
@@ -804,7 +841,17 @@ export default function GroupSwipe() {
                 See Results ({allMatches.length} match{allMatches.length !== 1 ? "es" : ""})
               </button>
             ) : (
-              <p className="text-sm text-muted-foreground">Waiting for the host to end the session...</p>
+              <>
+                <p className="text-sm text-muted-foreground mb-3">Waiting for the host to end the session...</p>
+                {sessionCode && (
+                  <button
+                    onClick={() => navigate(`/group/result?session=${sessionCode}`)}
+                    className="text-sm font-semibold text-[#2d2000] underline underline-offset-2"
+                  >
+                    View results so far
+                  </button>
+                )}
+              </>
             )}
           </div>
         ) : (

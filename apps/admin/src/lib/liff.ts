@@ -153,3 +153,7 @@ export function getLiffIdToken(): string | null {
     return null;
   }
 }
+
+export function isLineOAAvailable(): boolean {
+  return initialized && liff.isApiAvailable("openWindow");
+}

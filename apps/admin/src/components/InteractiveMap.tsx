@@ -19,12 +19,14 @@ interface InteractiveMapProps {
   selectedPinId: number | null;
   onPinSelect: (id: number) => void;
   filteredCategory: string | null;
+  userLocation?: [number, number] | null;
 }
 
-export function InteractiveMap({ pins, center, zoom = 13, selectedPinId, onPinSelect, filteredCategory }: InteractiveMapProps) {
+export function InteractiveMap({ pins, center, zoom = 13, selectedPinId, onPinSelect, filteredCategory, userLocation }: InteractiveMapProps) {
   const mapRef = useRef<HTMLDivElement>(null);
   const leafletMap = useRef<L.Map | null>(null);
   const markersRef = useRef<Map<number, L.Marker>>(new Map());
+  const userMarkerRef = useRef<L.Marker | null>(null);
   const onPinSelectRef = useRef(onPinSelect);
   onPinSelectRef.current = onPinSelect;
 
@@ -40,7 +42,7 @@ export function InteractiveMap({ pins, center, zoom = 13, selectedPinId, onPinSe
       minZoom: 11,
     });
 
-    L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
+    L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png", {
       maxZoom: 19,
       subdomains: "abcd",
     }).addTo(map);
@@ -74,6 +76,24 @@ export function InteractiveMap({ pins, center, zoom = 13, selectedPinId, onPinSe
     if (!map) return;
     setTimeout(() => map.invalidateSize(), 100);
   }, []);
+
+  useEffect(() => {
+    const map = leafletMap.current;
+    if (!map) return;
+    if (userMarkerRef.current) {
+      userMarkerRef.current.remove();
+      userMarkerRef.current = null;
+    }
+    if (userLocation) {
+      const icon = L.divIcon({
+        html: `<div class="user-location-dot"><div class="user-location-pulse"></div><div class="user-location-center"></div></div>`,
+        className: "user-location-icon",
+        iconSize: [24, 24],
+        iconAnchor: [12, 12],
+      });
+      userMarkerRef.current = L.marker(userLocation, { icon, interactive: false, zIndexOffset: 1000 }).addTo(map);
+    }
+  }, [userLocation]);
 
   useEffect(() => {
     const map = leafletMap.current;
@@ -175,12 +195,12 @@ export function InteractiveMap({ pins, center, zoom = 13, selectedPinId, onPinSe
           background: hsl(222, 47%, 11%);
         }
         .leaflet-container {
-          background: #D8E2F0 !important;
+          background: #E8E5E0 !important;
           z-index: 0 !important;
           isolation: isolate;
         }
         .leaflet-tile {
-          filter: saturate(1.1) contrast(0.94) brightness(1.02) hue-rotate(-5deg);
+          filter: saturate(0.3) contrast(0.95) brightness(1.06);
         }
         .pin-drunk-sway {
           animation: pin-sway 8s cubic-bezier(0.45, 0, 0.55, 1) infinite;
@@ -197,6 +217,44 @@ export function InteractiveMap({ pins, center, zoom = 13, selectedPinId, onPinSe
           68% { transform: translate(-50%, -50%) rotate(2deg) translateX(1.5px); }
           85% { transform: translate(-50%, -50%) rotate(-1deg) translateX(-0.5px); }
           100% { transform: translate(-50%, -50%) rotate(0deg); }
+        }
+        .user-location-icon {
+          background: none !important;
+          border: none !important;
+        }
+        .user-location-dot {
+          position: relative;
+          width: 24px;
+          height: 24px;
+        }
+        .user-location-center {
+          position: absolute;
+          top: 50%;
+          left: 50%;
+          transform: translate(-50%, -50%);
+          width: 14px;
+          height: 14px;
+          border-radius: 50%;
+          background: #4285F4;
+          border: 3px solid white;
+          box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+          z-index: 2;
+        }
+        .user-location-pulse {
+          position: absolute;
+          top: 50%;
+          left: 50%;
+          transform: translate(-50%, -50%);
+          width: 24px;
+          height: 24px;
+          border-radius: 50%;
+          background: rgba(66, 133, 244, 0.25);
+          animation: user-pulse 2s ease-out infinite;
+          z-index: 1;
+        }
+        @keyframes user-pulse {
+          0% { transform: translate(-50%, -50%) scale(1); opacity: 0.6; }
+          100% { transform: translate(-50%, -50%) scale(2.5); opacity: 0; }
         }
       `}</style>
     </>

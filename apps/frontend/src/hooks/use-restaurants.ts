@@ -2,15 +2,33 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, type RestaurantResponse, type UserPreferenceResponse } from "@shared/routes";
 import { z } from "zod";
 
+interface UseRestaurantsOptions {
+  lat?: number;
+  lng?: number;
+  radius?: number;
+  query?: string;
+  forceRefresh?: boolean;
+  localOnly?: boolean;
+  sourcePreference?: "osm-first" | "google-first" | "hybrid";
+  limit?: number;
+}
+
 // Fetch restaurants for the swipe deck
-export function useRestaurants(mode?: string) {
+export function useRestaurants(mode?: string, options?: UseRestaurantsOptions) {
   return useQuery({
-    queryKey: [api.restaurants.list.path, { mode }],
+    queryKey: [api.restaurants.list.path, { mode, ...options }],
     queryFn: async () => {
       // Build query string if mode is provided
       const params = new URLSearchParams();
       if (mode) params.append("mode", mode);
-      params.append("limit", "30");
+      params.append("limit", String(options?.limit ?? 30));
+      if (Number.isFinite(options?.lat)) params.append("lat", String(options?.lat));
+      if (Number.isFinite(options?.lng)) params.append("lng", String(options?.lng));
+      if (Number.isFinite(options?.radius)) params.append("radius", String(options?.radius));
+      if (options?.query) params.append("query", options.query);
+      if (options?.forceRefresh) params.append("forceRefresh", "true");
+      if (options?.localOnly) params.append("localOnly", "true");
+      if (options?.sourcePreference) params.append("sourcePreference", options.sourcePreference);
 
       const url = `${api.restaurants.list.path}?${params.toString()}`;
       

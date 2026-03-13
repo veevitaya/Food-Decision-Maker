@@ -17,6 +17,8 @@ interface MenuItem {
   rating: string;
   address: string;
   imageUrl: string;
+  availableCount?: number;
+  mode?: "restaurant" | "menu";
   isNew?: boolean;
 }
 
@@ -222,6 +224,13 @@ function SwipeCardGroup({ item, active, behind, onSwipe, onTap, showHint = false
               New
             </div>
           )}
+          {item.availableCount && item.availableCount > 0 && (
+            <div className="bg-white/95 backdrop-blur-sm rounded-full px-3 py-1 text-[10px] font-bold tracking-wide text-foreground"
+              style={{ boxShadow: "0 2px 8px rgba(0,0,0,0.1)" }}
+            >
+              {item.availableCount} nearby
+            </div>
+          )}
         </div>
       </div>
 
@@ -271,6 +280,7 @@ export default function GroupSwipe() {
   const sessionCode = new URLSearchParams(window.location.search).get("session") || "";
   const [members, setMembers] = useState<SessionMember[]>([]);
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
+  const [sessionMode, setSessionMode] = useState<"restaurant" | "menu">("restaurant");
   const [loading, setLoading] = useState(true);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [matchNotification, setMatchNotification] = useState<string | null>(null);
@@ -335,9 +345,13 @@ export default function GroupSwipe() {
             rating: r.rating || "4.0",
             address: r.address || "Bangkok",
             imageUrl: r.imageUrl || "",
+            availableCount: r.availableCount,
+            mode: r.mode || "restaurant",
             isNew: r.isNew || false,
           }));
-          setMenuItems(items.sort(() => Math.random() - 0.5));
+          const normalizedMode = items[0]?.mode === "menu" ? "menu" : "restaurant";
+          setSessionMode(normalizedMode);
+          setMenuItems(normalizedMode === "menu" ? items : items.sort(() => Math.random() - 0.5));
         }
       } catch (err) {
         console.error("Failed to load restaurants:", err);
@@ -356,6 +370,11 @@ export default function GroupSwipe() {
         if (res.ok) {
           const data = await res.json();
           setMembers(data.members);
+          if (data.session?.settings?.mode === "menu") {
+            setSessionMode("menu");
+          } else if (data.session?.settings?.mode === "restaurant") {
+            setSessionMode("restaurant");
+          }
           if (profile && data.session?.hostLineUserId === profile.userId) {
             setIsHost(true);
           }
@@ -378,6 +397,8 @@ export default function GroupSwipe() {
               }
             }
             setSessionEnded(true);
+            navigate(`/group/result?session=${sessionCode}`);
+            return;
           }
         }
       } catch {}
@@ -385,7 +406,7 @@ export default function GroupSwipe() {
     fetchSession();
     const interval = setInterval(fetchSession, 3000);
     return () => clearInterval(interval);
-  }, [sessionCode, profile, sessionEnded, menuItems]);
+  }, [sessionCode, profile, sessionEnded, menuItems, navigate]);
 
   useEffect(() => {
     addSession({
@@ -513,6 +534,10 @@ export default function GroupSwipe() {
   };
 
   const handleTap = (item: MenuItem) => {
+    if (sessionMode === "menu") {
+      navigate(`/group/menu-restaurants?session=${sessionCode}&menuItem=${item.id}`);
+      return;
+    }
     navigate(`/restaurant/${item.id}`);
   };
 
@@ -524,8 +549,8 @@ export default function GroupSwipe() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: "completed", lineUserId: profile.userId }),
       });
-      setSessionEnded(true);
       setShowEndConfirm(false);
+      navigate(`/group/result?session=${sessionCode}`);
     } catch (err) {
       console.error("Failed to end session:", err);
     }
@@ -752,7 +777,9 @@ export default function GroupSwipe() {
       <div className="flex items-center justify-between px-6 pt-12 pb-3">
         <div className="text-left flex items-center gap-2">
           <div>
-            <h1 className="font-bold text-[22px] tracking-tight" data-testid="text-group-title">Group Swipe</h1>
+            <h1 className="font-bold text-[22px] tracking-tight" data-testid="text-group-title">
+              {sessionMode === "menu" ? "Group Dish Swipe" : "Group Swipe"}
+            </h1>
             <p className="text-[11px] text-muted-foreground mt-0.5">
               {members.map(m => m.lineUserId === profile?.userId ? "You" : m.name).join(", ")}
             </p>

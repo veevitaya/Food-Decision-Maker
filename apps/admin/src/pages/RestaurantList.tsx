@@ -199,7 +199,7 @@ export default function RestaurantList() {
   const loading = mockList ? false : isLoading;
 
   return (
-    <div className="w-full min-h-[100dvh] bg-white" data-testid="restaurant-list-page">
+    <div className="w-full min-h-[100dvh] bg-[#FCFCFC]" data-testid="restaurant-list-page">
       <div className="flex items-center gap-3 px-6 pt-14 pb-4 border-b border-gray-100/80">
         {isBars ? (
           <>

@@ -6,6 +6,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useEffect } from "react";
 import { useBranding } from "@/hooks/use-branding";
+import { useLineProfile } from "@/hooks/use-line-profile";
 import { AnimatePresence, motion } from "framer-motion";
 import NotFound from "@/pages/not-found";
 import Home from "@/pages/Home";
@@ -15,9 +16,13 @@ import RestaurantList from "@/pages/RestaurantList";
 import GroupSetup from "@/pages/GroupSetup";
 import WaitingRoom from "@/pages/WaitingRoom";
 import GroupSwipe from "@/pages/GroupSwipe";
+import GroupResult from "@/pages/GroupResult";
+import GroupFinalVote from "@/pages/GroupFinalVote";
+import GroupMenuRestaurants from "@/pages/GroupMenuRestaurants";
 import SwipePage from "@/pages/SwipePage";
 import RestaurantDetail from "@/pages/RestaurantDetail";
 import Profile from "@/pages/Profile";
+import SavedPage from "@/pages/SavedPage";
 import ToastPicks from "@/pages/ToastPicks";
 import CampaignDetail from "@/pages/CampaignDetail";
 import AdminLogin from "@/pages/admin/AdminLogin";
@@ -69,114 +74,169 @@ function AnimatedPage({ children }: { children: React.ReactNode }) {
   );
 }
 
+function RequireLiffLogin({ children }: { children: React.ReactNode }) {
+  const { profile, loading, liffReady, liffAvailable, loggedIn, login } = useLineProfile();
+
+  useEffect(() => {
+    if (!liffAvailable) return;
+    if (!liffReady || loading) return;
+    if (loggedIn && profile?.userId) return;
+    login();
+  }, [liffAvailable, liffReady, loading, loggedIn, profile?.userId, login]);
+
+  if (!liffAvailable) {
+    return (
+      <div className="w-full h-[100dvh] flex items-center justify-center px-6 text-center">
+        <div>
+          <p className="text-base font-semibold text-foreground">LINE login unavailable</p>
+          <p className="text-sm text-muted-foreground mt-1">Set `VITE_LIFF_ID` to enable personalized routes.</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!liffReady || loading || !loggedIn || !profile?.userId) {
+    return (
+      <div className="w-full h-[100dvh] flex items-center justify-center px-6 text-center">
+        <div>
+          <p className="text-base font-semibold text-foreground">Redirecting to LINE login...</p>
+          <p className="text-sm text-muted-foreground mt-1">Authentication is required for personalized experience.</p>
+        </div>
+      </div>
+    );
+  }
+
+  return <>{children}</>;
+}
+
 function Router() {
   const [location] = useLocation();
+  const requiresLiffAuth = !location.startsWith("/admin") && !location.startsWith("/owner");
 
   return (
-    <AnimatePresence mode="wait">
-      <Switch location={location} key={location}>
-        <Route path="/">
-          <AnimatedPage><Home /></AnimatedPage>
-        </Route>
-        <Route path="/solo/quiz">
-          <AnimatedPage><SoloQuiz /></AnimatedPage>
-        </Route>
-        <Route path="/solo/results">
-          <AnimatedPage><SoloResults /></AnimatedPage>
-        </Route>
-        <Route path="/restaurants">
-          <AnimatedPage><RestaurantList /></AnimatedPage>
-        </Route>
-        <Route path="/restaurant/:id">
-          <AnimatedPage><RestaurantDetail /></AnimatedPage>
-        </Route>
-        <Route path="/campaign/:id">
-          <AnimatedPage><CampaignDetail /></AnimatedPage>
-        </Route>
-        <Route path="/group/setup">
-          <AnimatedPage><GroupSetup /></AnimatedPage>
-        </Route>
-        <Route path="/group/waiting">
-          <AnimatedPage><WaitingRoom /></AnimatedPage>
-        </Route>
-        <Route path="/group/swipe">
-          <AnimatedPage><GroupSwipe /></AnimatedPage>
-        </Route>
-        <Route path="/swipe">
-          <AnimatedPage><SwipePage /></AnimatedPage>
-        </Route>
-        <Route path="/profile">
-          <AnimatedPage><Profile /></AnimatedPage>
-        </Route>
-        <Route path="/toast-picks">
-          <AnimatedPage><ToastPicks /></AnimatedPage>
-        </Route>
-        <Route path="/admin/login">
-          <AdminLogin />
-        </Route>
-        <Route path="/owner/login">
-          <OwnerLogin />
-        </Route>
-        <Route path="/admin/dashboard">
-          <AdminLayout><AdminDashboard /></AdminLayout>
-        </Route>
-        <Route path="/admin/users">
-          <AdminLayout><AdminUsers /></AdminLayout>
-        </Route>
-        <Route path="/admin/restaurants">
-          <AdminLayout><AdminRestaurants /></AdminLayout>
-        </Route>
-        <Route path="/admin/campaigns">
-          <AdminLayout><AdminCampaigns /></AdminLayout>
-        </Route>
-        <Route path="/admin/banners">
-          <AdminLayout><AdminBanners /></AdminLayout>
-        </Route>
-        <Route path="/admin/analytics">
-          <AdminLayout><AdminAnalytics /></AdminLayout>
-        </Route>
-        <Route path="/admin/recommendations">
-          <AdminLayout><AdminRecommendations /></AdminLayout>
-        </Route>
-        <Route path="/admin/experiments">
-          <AdminLayout><AdminExperiments /></AdminLayout>
-        </Route>
-        <Route path="/admin/operations">
-          <AdminLayout><AdminOperations /></AdminLayout>
-        </Route>
-        <Route path="/admin/security-audit">
-          <AdminLayout><AdminSecurityAudit /></AdminLayout>
-        </Route>
-        <Route path="/admin/config">
-          <AdminLayout><AdminConfig /></AdminLayout>
-        </Route>
-        <Route path="/admin/restaurants/import/google">
-          <AdminRestaurantImport />
-        </Route>
-        <Route path="/admin/map-check">
-          <AdminMapCheck />
-        </Route>
-        <Route path="/admin/restaurants/:id">
-          <AdminRestaurantEditor />
-        </Route>
-        <Route path="/admin/sessions">
-          <AdminSessions />
-        </Route>
-        <Route path="/admin/places">
-          <AdminPlaces />
-        </Route>
-        <Route path="/admin/my-restaurant">
-          <AdminLayout><AdminOwnerDashboard /></AdminLayout>
-        </Route>
-        <Route path="/admin">
-          <Redirect to="/admin/dashboard" />
-        </Route>
-        <Route>
-          <AnimatedPage><NotFound /></AnimatedPage>
-        </Route>
-      </Switch>
-    </AnimatePresence>
+    <RequireLiffLoginWrapper enabled={requiresLiffAuth}>
+      <AnimatePresence mode="wait">
+        <Switch location={location} key={location}>
+          <Route path="/">
+            <AnimatedPage><Home /></AnimatedPage>
+          </Route>
+          <Route path="/solo/quiz">
+            <AnimatedPage><SoloQuiz /></AnimatedPage>
+          </Route>
+          <Route path="/solo/results">
+            <AnimatedPage><SoloResults /></AnimatedPage>
+          </Route>
+          <Route path="/restaurants">
+            <AnimatedPage><RestaurantList /></AnimatedPage>
+          </Route>
+          <Route path="/restaurant/:id">
+            <AnimatedPage><RestaurantDetail /></AnimatedPage>
+          </Route>
+          <Route path="/campaign/:id">
+            <AnimatedPage><CampaignDetail /></AnimatedPage>
+          </Route>
+          <Route path="/group/setup">
+            <AnimatedPage><GroupSetup /></AnimatedPage>
+          </Route>
+          <Route path="/group/waiting">
+            <AnimatedPage><WaitingRoom /></AnimatedPage>
+          </Route>
+          <Route path="/group/swipe">
+            <AnimatedPage><GroupSwipe /></AnimatedPage>
+          </Route>
+          <Route path="/group/result">
+            <AnimatedPage><GroupResult /></AnimatedPage>
+          </Route>
+          <Route path="/group/final-vote">
+            <AnimatedPage><GroupFinalVote /></AnimatedPage>
+          </Route>
+          <Route path="/group/menu-restaurants">
+            <AnimatedPage><GroupMenuRestaurants /></AnimatedPage>
+          </Route>
+          <Route path="/swipe">
+            <AnimatedPage><SwipePage /></AnimatedPage>
+          </Route>
+          <Route path="/saved">
+            <AnimatedPage><SavedPage /></AnimatedPage>
+          </Route>
+          <Route path="/profile">
+            <AnimatedPage><Profile /></AnimatedPage>
+          </Route>
+          <Route path="/toast-picks">
+            <AnimatedPage><ToastPicks /></AnimatedPage>
+          </Route>
+          <Route path="/admin/login">
+            <AdminLogin />
+          </Route>
+          <Route path="/owner/login">
+            <OwnerLogin />
+          </Route>
+          <Route path="/admin/dashboard">
+            <AdminLayout><AdminDashboard /></AdminLayout>
+          </Route>
+          <Route path="/admin/users">
+            <AdminLayout><AdminUsers /></AdminLayout>
+          </Route>
+          <Route path="/admin/restaurants">
+            <AdminLayout><AdminRestaurants /></AdminLayout>
+          </Route>
+          <Route path="/admin/campaigns">
+            <AdminLayout><AdminCampaigns /></AdminLayout>
+          </Route>
+          <Route path="/admin/banners">
+            <AdminLayout><AdminBanners /></AdminLayout>
+          </Route>
+          <Route path="/admin/analytics">
+            <AdminLayout><AdminAnalytics /></AdminLayout>
+          </Route>
+          <Route path="/admin/recommendations">
+            <AdminLayout><AdminRecommendations /></AdminLayout>
+          </Route>
+          <Route path="/admin/experiments">
+            <AdminLayout><AdminExperiments /></AdminLayout>
+          </Route>
+          <Route path="/admin/operations">
+            <AdminLayout><AdminOperations /></AdminLayout>
+          </Route>
+          <Route path="/admin/security-audit">
+            <AdminLayout><AdminSecurityAudit /></AdminLayout>
+          </Route>
+          <Route path="/admin/config">
+            <AdminLayout><AdminConfig /></AdminLayout>
+          </Route>
+          <Route path="/admin/restaurants/import/google">
+            <AdminRestaurantImport />
+          </Route>
+          <Route path="/admin/map-check">
+            <AdminMapCheck />
+          </Route>
+          <Route path="/admin/restaurants/:id">
+            <AdminRestaurantEditor />
+          </Route>
+          <Route path="/admin/sessions">
+            <AdminSessions />
+          </Route>
+          <Route path="/admin/places">
+            <AdminPlaces />
+          </Route>
+          <Route path="/admin/my-restaurant">
+            <AdminLayout><AdminOwnerDashboard /></AdminLayout>
+          </Route>
+          <Route path="/admin">
+            <Redirect to="/admin/dashboard" />
+          </Route>
+          <Route>
+            <AnimatedPage><NotFound /></AnimatedPage>
+          </Route>
+        </Switch>
+      </AnimatePresence>
+    </RequireLiffLoginWrapper>
   );
+}
+
+function RequireLiffLoginWrapper({ enabled, children }: { enabled: boolean; children: React.ReactNode }) {
+  if (!enabled) return <>{children}</>;
+  return <RequireLiffLogin>{children}</RequireLiffLogin>;
 }
 
 function BrandingApplier() {

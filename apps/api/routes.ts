@@ -13,6 +13,8 @@ import { getBearerToken, requireVerifiedLineUser, verifyLineIdToken } from "./li
 import * as placesService from "./services/places/placesService";
 import type { RestaurantOpeningHour, RestaurantReview, AdminRole, AdminPermission } from "@shared/schema";
 import { ROLE_DEFAULT_PERMISSIONS } from "@shared/schema";
+import { insertMenuSchema } from "@shared/schema";
+import { insertPromotionSchema, insertRestaurantClaimSchema, insertRestaurantOwnerSchema } from "@shared/schema";
 import type { NormalizedPlace } from "./services/places/types";
 import { buildPersonalizedRecommendations } from "./services/recommendations/personalized";
 import { enqueueFeatureUpdate } from "./jobs/featureUpdateJob";
@@ -22,6 +24,7 @@ import { persistAnalyticsQualityReport } from "./jobs/analyticsQuality";
 import { appendSecurityAudit } from "./lib/opsLog";
 import { checkSLOs } from "./lib/slo";
 import { sendAlert } from "./lib/alerting";
+import * as lineMessaging from "./services/line/messaging";
 
 const isDev = process.env.NODE_ENV !== "production";
 
@@ -1124,6 +1127,82 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/restaurants/:id/menus", async (req, res) => {
+    try {
+      const restaurantId = Number.parseInt(req.params.id, 10);
+      if (!Number.isFinite(restaurantId)) return res.status(400).json({ message: "Invalid restaurant ID" });
+      const menus = await storage.listMenusByRestaurant(restaurantId);
+      res.json(menus);
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.post("/api/menus", async (req, res) => {
+    try {
+      const input = insertMenuSchema.parse(req.body ?? {});
+      const created = await storage.createMenu(input);
+      res.status(201).json(created);
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid payload" });
+      }
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.put("/api/menus/:id", async (req, res) => {
+    try {
+      const id = Number.parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) return res.status(400).json({ message: "Invalid menu ID" });
+      const updates = insertMenuSchema.partial().parse(req.body ?? {});
+      const updated = await storage.updateMenu(id, updates);
+      if (!updated) return res.status(404).json({ message: "Menu not found" });
+      res.json(updated);
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid payload" });
+      }
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.delete("/api/menus/:id", async (req, res) => {
+    try {
+      const id = Number.parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) return res.status(400).json({ message: "Invalid menu ID" });
+      const deleted = await storage.deleteMenu(id);
+      if (!deleted) return res.status(404).json({ message: "Menu not found" });
+      res.status(204).send();
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.get("/api/restaurants/:id/promotions", async (req, res) => {
+    try {
+      const restaurantId = Number.parseInt(req.params.id, 10);
+      if (!Number.isFinite(restaurantId)) return res.status(400).json({ message: "Invalid restaurant ID" });
+      const items = await storage.listPromotionsByRestaurant(restaurantId, true);
+      res.json(items);
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.post("/api/promotions", async (req, res) => {
+    try {
+      const input = insertPromotionSchema.parse(req.body ?? {});
+      const created = await storage.createPromotion(input);
+      res.status(201).json(created);
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid payload" });
+      }
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
   app.get(api.restaurants.list.path, async (req, res) => {
     try {
       const input: Partial<RestaurantListInput> = api.restaurants.list.input?.parse(req.query) ?? {};
@@ -1362,39 +1441,235 @@ export async function registerRoutes(
 
   // ── Admin authentication ────────────────────────────────────────────────
   app.post("/api/admin/login", async (req, res) => {
-    const { email, username, password } = (req.body ?? {}) as { email?: string; username?: string; password?: string };
-    const loginId = (email ?? username ?? "").trim();
-    if (!loginId || typeof password !== "string") {
-      return res.status(400).json({ message: "Email/username and password are required" });
-    }
+    try {
+      console.log("[admin/login] Request received:", { body: req.body, hasSession: !!req.session });
+      const { email, username, password } = (req.body ?? {}) as { email?: string; username?: string; password?: string };
+      const loginId = (email ?? username ?? "").trim();
+      console.log("[admin/login] loginId:", loginId, "hasPassword:", !!password);
+      if (!loginId || typeof password !== "string") {
+        console.log("[admin/login] Missing credentials");
+        return res.status(400).json({ message: "Email/username and password are required" });
+      }
 
-    // Verify email first
-    if (loginId !== process.env.ADMIN_EMAIL) {
-      void appendSecurityAudit({ ts: new Date().toISOString(), level: "warn", source: "auth", message: "admin_login_failed", metadata: { loginId, ip: req.ip } });
-      return res.status(401).json({ message: "Invalid login or password" });
-    }
+      // ── 1. DB lookup (by email or username) ─────────────────────────────
+      let dbAdmin = await storage.getAdminUserByEmail(loginId);
+      if (!dbAdmin) dbAdmin = await storage.getAdminUserByUsername(loginId);
 
-    // Password check: prefer bcrypt hash; fall back to plaintext for dev backwards-compat
-    const hashEnv = process.env.ADMIN_PASSWORD_HASH;
-    const plainEnv = process.env.ADMIN_PASSWORD;
-    const passwordValid = hashEnv
-      ? await bcrypt.compare(password, hashEnv)
-      : (plainEnv ? password === plainEnv : false);
+      let resolvedRole: AdminRole = "superadmin";
+      let resolvedUserId: number | undefined;
+      let resolvedUsername: string = loginId;
+      let passwordValid = false;
 
-    if (!passwordValid) {
-      void appendSecurityAudit({ ts: new Date().toISOString(), level: "warn", source: "auth", message: "admin_login_failed", metadata: { loginId, ip: req.ip } });
-      return res.status(401).json({ message: "Invalid login or password" });
-    }
+      if (dbAdmin) {
+        if (!dbAdmin.isActive) {
+          void appendSecurityAudit({ ts: new Date().toISOString(), level: "warn", source: "auth", message: "admin_login_inactive", metadata: { loginId, ip: req.ip } });
+          return res.status(401).json({ message: "Account is disabled" });
+        }
+        passwordValid = await bcrypt.compare(password, dbAdmin.passwordHash);
+        resolvedRole = (dbAdmin.role as AdminRole) ?? "admin";
+        resolvedUserId = dbAdmin.id;
+        resolvedUsername = dbAdmin.username;
+      } else {
+        // ── 2. Env-based fallback (backwards-compat) ────────────────────
+        console.log("[admin/login] No DB user found — falling back to env credentials");
+        const adminEmail = process.env.ADMIN_EMAIL ?? "";
+        if (loginId.toLowerCase() !== adminEmail.toLowerCase()) {
+          console.log("[admin/login] Email mismatch (env fallback)");
+          void appendSecurityAudit({ ts: new Date().toISOString(), level: "warn", source: "auth", message: "admin_login_failed", metadata: { loginId, ip: req.ip } });
+          return res.status(401).json({ message: "Invalid login or password" });
+        }
+        const hashEnv = process.env.ADMIN_PASSWORD_HASH;
+        const plainEnv = process.env.ADMIN_PASSWORD;
+        console.log("[admin/login] Password check - hasHash:", !!hashEnv, "hasPlain:", !!plainEnv);
+        passwordValid = hashEnv
+          ? await bcrypt.compare(password, hashEnv)
+          : (plainEnv ? password === plainEnv : false);
+        resolvedRole = "superadmin";
+        resolvedUsername = loginId;
+      }
 
-    if (!req.session) {
-      return res.status(500).json({ message: "Session middleware unavailable" });
+      console.log("[admin/login] Password valid:", passwordValid);
+      if (!passwordValid) {
+        console.log("[admin/login] Password invalid");
+        void appendSecurityAudit({ ts: new Date().toISOString(), level: "warn", source: "auth", message: "admin_login_failed", metadata: { loginId, ip: req.ip } });
+        return res.status(401).json({ message: "Invalid login or password" });
+      }
+
+      if (!req.session) {
+        console.log("[admin/login] ❌ Session middleware unavailable - req.session is undefined");
+        return res.status(500).json({ message: "Session middleware unavailable" });
+      }
+      console.log("[admin/login] Session OK, setting admin flags. sessionID:", req.sessionID);
+      req.session.isAdmin = true;
+      req.session.adminRole = resolvedRole;
+      req.session.adminUserId = resolvedUserId;
+      req.session.sessionType = "admin";
+      req.session.username = resolvedUsername;
+
+      // Explicitly save session so we can catch DB write errors
+      await new Promise<void>((resolve, reject) => {
+        req.session.save((err) => {
+          if (err) {
+            console.error("[admin/login] ❌ Session SAVE failed:", err);
+            reject(err);
+          } else {
+            console.log("[admin/login] ✅ Session saved OK, sessionID:", req.sessionID);
+            resolve();
+          }
+        });
+      });
+
+      void appendSecurityAudit({ ts: new Date().toISOString(), level: "info", source: "auth", message: "admin_login_success", metadata: { loginId, role: resolvedRole, ip: req.ip } });
+      console.log("[admin/login] ✅ Login success for:", resolvedUsername, "role:", resolvedRole);
+      return res.json({ ok: true, username: resolvedUsername, role: resolvedRole });
+    } catch (err) {
+      console.error("[admin/login] ❌ ERROR:", err);
+      return res.status(500).json({ message: "Internal server error", detail: String(err) });
     }
-    req.session.isAdmin = true;
-    req.session.adminRole = "superadmin"; // env-based admin always has full access
-    req.session.sessionType = "admin";
-    req.session.username = loginId;
-    void appendSecurityAudit({ ts: new Date().toISOString(), level: "info", source: "auth", message: "admin_login_success", metadata: { loginId, ip: req.ip } });
-    return res.json({ ok: true, username: loginId, role: "superadmin" });
+  });
+
+  // ── Admin user management ─────────────────────────────────────────────────
+  app.get("/api/admin/admin-users", async (req, res) => {
+    if (!requirePermission("manage_users")(req, res)) return;
+    try {
+      const users = await storage.listAdminUsers();
+      // Strip password_hash before returning
+      const safe = users.map(({ passwordHash: _ph, ...rest }) => rest);
+      return res.json(safe);
+    } catch {
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.post("/api/admin/admin-users", async (req, res) => {
+    if (!requirePermission("manage_users")(req, res)) return;
+    try {
+      const input = z.object({
+        username: z.string().min(2).max(64),
+        password: z.string().min(6),
+        role: z.enum(["superadmin", "admin", "moderator", "viewer"]).default("viewer"),
+        permissions: z.array(z.string()).optional(),
+      }).parse(req.body ?? {});
+
+      const existing = await storage.getAdminUserByUsername(input.username);
+      if (existing) return res.status(409).json({ message: "Username already taken" });
+
+      const passwordHash = await bcrypt.hash(input.password, 10);
+      const perms = (input.permissions as AdminPermission[] | undefined) ?? ROLE_DEFAULT_PERMISSIONS[input.role] ?? [];
+      const created = await storage.createAdminUser({
+        username: input.username,
+        email: `${input.username}@admin.local`,
+        passwordHash,
+        role: input.role,
+        permissions: perms,
+        isActive: true,
+      });
+      const { passwordHash: _ph, ...safe } = created;
+      void appendSecurityAudit({ ts: new Date().toISOString(), level: "info", source: "admin", message: "admin_user_created", metadata: { newUsername: created.username, role: created.role, by: req.session.username } });
+      return res.status(201).json(safe);
+    } catch (err) {
+      if (err instanceof z.ZodError) return res.status(400).json({ message: "Validation error", errors: err.errors });
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.patch("/api/admin/admin-users/:id", async (req, res) => {
+    if (!requirePermission("manage_users")(req, res)) return;
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (isNaN(id)) return res.status(400).json({ message: "Invalid user ID" });
+
+      const input = z.object({
+        role: z.enum(["superadmin", "admin", "moderator", "viewer"]).optional(),
+        permissions: z.array(z.string()).optional(),
+        isActive: z.boolean().optional(),
+        password: z.string().min(6).optional(),
+      }).parse(req.body ?? {});
+
+      const updates: Record<string, unknown> = {};
+      if (input.role !== undefined) updates.role = input.role;
+      if (input.permissions !== undefined) updates.permissions = input.permissions;
+      if (input.isActive !== undefined) updates.isActive = input.isActive;
+      if (input.password) updates.passwordHash = await bcrypt.hash(input.password, 10);
+
+      const updated = await storage.updateAdminUser(id, updates as Parameters<typeof storage.updateAdminUser>[1]);
+      if (!updated) return res.status(404).json({ message: "Admin user not found" });
+
+      const { passwordHash: _ph, ...safe } = updated;
+      void appendSecurityAudit({ ts: new Date().toISOString(), level: "info", source: "admin", message: "admin_user_updated", metadata: { targetId: id, changes: Object.keys(updates), by: req.session.username } });
+      return res.json(safe);
+    } catch (err) {
+      if (err instanceof z.ZodError) return res.status(400).json({ message: "Validation error", errors: err.errors });
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // ── Sponsored requests ─────────────────────────────────────────────────────
+  // Owner submits a request
+  app.post("/api/sponsored-requests", async (req, res) => {
+    if (!requireOwnerOrAdmin(req, res)) return;
+    try {
+      const input = z.object({
+        restaurantId: z.number().int().positive(),
+        ownerId: z.number().int().positive(),
+        requestedStartDate: z.string().optional(),
+        requestedEndDate: z.string().optional(),
+        notes: z.string().max(500).optional(),
+      }).parse(req.body ?? {});
+      const created = await storage.createSponsoredRequest({ ...input, status: "pending" });
+      return res.status(201).json(created);
+    } catch (err) {
+      if (err instanceof z.ZodError) return res.status(400).json({ message: "Validation error", errors: err.errors });
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // Admin lists pending/all sponsored requests
+  app.get("/api/admin/sponsored-requests", async (req, res) => {
+    if (!requirePermission("manage_campaigns")(req, res)) return;
+    try {
+      const status = (req.query.status as string | undefined) || undefined;
+      const requests = await storage.listSponsoredRequests(status);
+      return res.json(requests);
+    } catch {
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // Admin approves / rejects a sponsored request
+  app.patch("/api/admin/sponsored-requests/:id", async (req, res) => {
+    if (!requirePermission("manage_campaigns")(req, res)) return;
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (isNaN(id)) return res.status(400).json({ message: "Invalid ID" });
+
+      const input = z.object({
+        status: z.enum(["approved", "rejected"]),
+        reviewNotes: z.string().max(500).optional(),
+      }).parse(req.body ?? {});
+
+      const request = await storage.getSponsoredRequestById(id);
+      if (!request) return res.status(404).json({ message: "Sponsored request not found" });
+
+      const updated = await storage.updateSponsoredRequest(id, {
+        status: input.status,
+        reviewNotes: input.reviewNotes ?? null,
+        reviewedAt: new Date(),
+      });
+
+      // On approval, flip is_sponsored on the restaurant with the date range
+      if (input.status === "approved") {
+        await storage.updateRestaurant(request.restaurantId, {
+          isSponsored: true,
+          sponsoredUntil: request.requestedEndDate ?? null,
+        });
+      }
+
+      return res.json(updated);
+    } catch (err) {
+      if (err instanceof z.ZodError) return res.status(400).json({ message: "Validation error", errors: err.errors });
+      return res.status(500).json({ message: "Internal server error" });
+    }
   });
 
   app.post("/api/admin/owner-login", async (req, res) => {
@@ -1405,7 +1680,8 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Email and password are required" });
       }
 
-      const ownerEmail = (process.env.OWNER_EMAIL ?? "owner@example.com").trim();
+      const dbOwner = await storage.getRestaurantOwnerByEmail(loginEmail);
+      const ownerEmail = (dbOwner?.email ?? process.env.OWNER_EMAIL ?? "owner@example.com").trim();
       const ownerHashEnv = process.env.OWNER_PASSWORD_HASH;
       const ownerPlainEnv = process.env.OWNER_PASSWORD ?? "change-me-owner";
       const ownerPasswordValid = ownerHashEnv
@@ -1422,7 +1698,7 @@ export async function registerRoutes(
         return res.status(401).json({ message: "Invalid email or password" });
       }
 
-      const preferredRestaurantId = Number(process.env.OWNER_RESTAURANT_ID ?? "");
+      const preferredRestaurantId = dbOwner?.restaurantId ?? Number(process.env.OWNER_RESTAURANT_ID ?? "");
       const restaurants = await storage.getRestaurants("trending");
       const restaurant =
         (Number.isFinite(preferredRestaurantId)
@@ -1447,16 +1723,102 @@ export async function registerRoutes(
       });
 
       return res.json({
-        id: 1,
+        id: dbOwner?.id ?? 1,
         email: ownerEmail,
-        displayName: process.env.OWNER_DISPLAY_NAME ?? "Restaurant Owner",
+        displayName: dbOwner?.displayName ?? process.env.OWNER_DISPLAY_NAME ?? "Restaurant Owner",
         restaurantId: restaurant.id,
         restaurantName: restaurant.name,
-        isVerified: true,
-        subscriptionTier: process.env.OWNER_SUBSCRIPTION_TIER ?? "pro",
+        isVerified: dbOwner?.isVerified ?? true,
+        subscriptionTier: dbOwner?.subscriptionTier ?? process.env.OWNER_SUBSCRIPTION_TIER ?? "pro",
       });
     } catch {
       return res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.post("/api/owners/register", async (req, res) => {
+    try {
+      const input = z.object({
+        displayName: z.string().min(1),
+        email: z.string().email(),
+        phone: z.string().optional(),
+        lineUserId: z.string().optional(),
+        restaurantId: z.number().int().positive().optional(),
+        restaurantName: z.string().optional(),
+        ownershipType: z.string().optional().default("single_location"),
+      }).parse(req.body ?? {});
+
+      const existingOwner = await storage.getRestaurantOwnerByEmail(input.email);
+      if (existingOwner) {
+        return res.status(409).json({ message: "Owner with this email already exists", ownerId: existingOwner.id });
+      }
+
+      let restaurantId = input.restaurantId;
+      if (!restaurantId) {
+        const restaurants = await storage.getRestaurants();
+        const byName = restaurants.find((r) =>
+          input.restaurantName ? r.name.toLowerCase().includes(input.restaurantName.toLowerCase()) : false,
+        );
+        if (!byName) return res.status(400).json({ message: "Restaurant not found. Provide a valid restaurant name or ID." });
+        restaurantId = byName.id;
+      }
+
+      const owner = await storage.createRestaurantOwner({
+        restaurantId,
+        lineUserId: input.lineUserId ?? null,
+        displayName: input.displayName,
+        email: input.email,
+        phone: input.phone ?? null,
+        isVerified: false,
+        verificationStatus: "pending",
+        subscriptionTier: "free",
+        subscriptionExpiry: null,
+        paymentConnected: false,
+        paymentMethod: null,
+      });
+
+      const claim = await storage.createRestaurantClaim({
+        restaurantId,
+        ownerId: owner.id,
+        ownershipType: input.ownershipType,
+        status: "pending",
+        reviewNotes: null,
+        proofDocuments: [],
+        verificationChecklist: {},
+      });
+
+      res.status(201).json({ owner, claim });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid payload" });
+      }
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.get("/api/owners/:id", async (req, res) => {
+    try {
+      const id = Number.parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) return res.status(400).json({ message: "Invalid owner ID" });
+      const owner = await storage.getRestaurantOwnerById(id);
+      if (!owner) return res.status(404).json({ message: "Owner not found" });
+      const claims = (await storage.listRestaurantClaims()).filter((claim) => claim.ownerId === owner.id);
+      res.json({ owner, claims });
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.post("/api/claims", async (req, res) => {
+    try {
+      const input = insertRestaurantClaimSchema.parse(req.body ?? {});
+      const created = await storage.createRestaurantClaim(input);
+      res.status(201).json(created);
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid payload" });
+      }
+      res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -2185,7 +2547,7 @@ export async function registerRoutes(
   app.get("/api/admin/owners", async (req, res) => {
     try {
       if (!requireAdminSession(req, res)) return;
-      const owners = await getStoredOwners();
+      const owners = await storage.listRestaurantOwners();
       res.json(owners);
     } catch {
       res.status(500).json({ message: "Internal server error" });
@@ -2196,15 +2558,15 @@ export async function registerRoutes(
     try {
       if (!requireAdminSession(req, res)) return;
       const [claims, owners, restaurants] = await Promise.all([
-        getStoredClaims(),
-        getStoredOwners(),
+        storage.listRestaurantClaims(),
+        storage.listRestaurantOwners(),
         storage.getRestaurants(),
       ]);
-      const ownerById = new Map(owners.map((o) => [o.id, o]));
+      const ownerById = new Map(owners.map((o) => [o.id, o as any]));
       const restaurantById = new Map(restaurants.map((r) => [r.id, r]));
-      const enriched = claims
+      const enriched = (claims as any[])
         .slice()
-        .sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime())
+        .sort((a, b) => new Date(b.submittedAt ?? b.submitted_at).getTime() - new Date(a.submittedAt ?? a.submitted_at).getTime())
         .map((claim) => {
           const owner = ownerById.get(claim.ownerId);
           const restaurant = restaurantById.get(claim.restaurantId);
@@ -2228,33 +2590,9 @@ export async function registerRoutes(
   app.post("/api/admin/claims", async (req, res) => {
     try {
       if (!requireOwnerOrAdmin(req, res)) return;
-      const input = z.object({
-        restaurantId: z.number().int().positive(),
-        ownerId: z.number().int().positive(),
-        proofDocuments: z.array(z.string()).optional().default([]),
-        ownershipType: z.string().optional().default("single_location"),
-        notes: z.string().optional().default(""),
-      }).parse(req.body ?? {});
-
-      const [claims, owners] = await Promise.all([getStoredClaims(), getStoredOwners()]);
-      const ownerExists = owners.some((o) => o.id === input.ownerId);
-      if (!ownerExists) return res.status(400).json({ message: "Owner not found" });
-
-      const id = claims.reduce((max, item) => Math.max(max, item.id), 0) + 1;
-      const claim: StoredClaim = {
-        id,
-        restaurantId: input.restaurantId,
-        ownerId: input.ownerId,
-        ownershipType: input.ownershipType,
-        status: "pending",
-        submittedAt: new Date().toISOString(),
-        proofDocuments: input.proofDocuments,
-        reviewNotes: null,
-        verificationChecklist: [],
-        notes: input.notes,
-      };
-      await saveStoredClaims([claim, ...claims]);
-      res.status(201).json(claim);
+      const input = insertRestaurantClaimSchema.parse(req.body ?? {});
+      const created = await storage.createRestaurantClaim(input);
+      res.status(201).json(created);
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid payload" });
@@ -2341,40 +2679,76 @@ export async function registerRoutes(
       const input = z.object({
         status: z.enum(["pending", "approved", "rejected"]),
         reviewNotes: z.string().optional(),
-        verificationChecklist: z.array(z.object({
-          id: z.string(),
-          label: z.string(),
-          checked: z.boolean(),
-        })).optional(),
+        verificationChecklist: z.record(z.boolean()).optional(),
       }).parse(req.body ?? {});
 
-      const [claims, owners] = await Promise.all([getStoredClaims(), getStoredOwners()]);
-      const idx = claims.findIndex((c) => c.id === id);
-      if (idx < 0) return res.status(404).json({ message: "Claim not found" });
+      const existing = (await storage.listRestaurantClaims()).find((claim) => claim.id === id);
+      if (!existing) return res.status(404).json({ message: "Claim not found" });
 
-      const updated: StoredClaim = {
-        ...claims[idx],
+      const updated = await storage.updateRestaurantClaim(id, {
         status: input.status,
-        reviewNotes: input.reviewNotes ?? claims[idx].reviewNotes ?? null,
-        verificationChecklist: input.verificationChecklist ?? claims[idx].verificationChecklist ?? [],
-      };
-      claims[idx] = updated;
-      await saveStoredClaims(claims);
+        reviewNotes: input.reviewNotes ?? existing.reviewNotes ?? null,
+        verificationChecklist: (input.verificationChecklist ?? existing.verificationChecklist ?? {}) as Record<string, boolean>,
+      });
+      if (!updated) return res.status(404).json({ message: "Claim not found" });
 
       if (updated.status === "approved") {
-        const ownerIndex = owners.findIndex((o) => o.id === updated.ownerId);
-        if (ownerIndex >= 0) {
-          owners[ownerIndex] = {
-            ...owners[ownerIndex],
-            restaurantId: updated.restaurantId,
-            isVerified: true,
-            verificationStatus: "approved",
-          };
-          await saveStoredOwners(owners);
-        }
+        await storage.updateRestaurantOwner(updated.ownerId, {
+          restaurantId: updated.restaurantId,
+          isVerified: true,
+          verificationStatus: "approved",
+        });
+      } else if (updated.status === "rejected") {
+        await storage.updateRestaurantOwner(updated.ownerId, {
+          isVerified: false,
+          verificationStatus: "rejected",
+        });
       }
 
-      res.json(updated);
+      res.json(updated as any);
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid payload" });
+      }
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.put("/api/admin/claims/:id", async (req, res) => {
+    try {
+      if (!requireAdminSession(req, res)) return;
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id)) return res.status(400).json({ message: "Invalid claim id" });
+      const input = z.object({
+        status: z.enum(["pending", "approved", "rejected"]),
+        reviewNotes: z.string().optional(),
+        verificationChecklist: z.record(z.boolean()).optional(),
+      }).parse(req.body ?? {});
+
+      const existing = (await storage.listRestaurantClaims()).find((claim) => claim.id === id);
+      if (!existing) return res.status(404).json({ message: "Claim not found" });
+
+      const updated = await storage.updateRestaurantClaim(id, {
+        status: input.status,
+        reviewNotes: input.reviewNotes ?? existing.reviewNotes ?? null,
+        verificationChecklist: input.verificationChecklist ?? (existing.verificationChecklist as Record<string, boolean> ?? {}),
+      });
+      if (!updated) return res.status(404).json({ message: "Claim not found" });
+
+      if (updated.status === "approved") {
+        await storage.updateRestaurantOwner(updated.ownerId, {
+          restaurantId: updated.restaurantId,
+          isVerified: true,
+          verificationStatus: "approved",
+        });
+      } else if (updated.status === "rejected") {
+        await storage.updateRestaurantOwner(updated.ownerId, {
+          isVerified: false,
+          verificationStatus: "rejected",
+        });
+      }
+
+      res.json(updated as any);
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid payload" });
@@ -2451,7 +2825,7 @@ export async function registerRoutes(
         views: relatedEvents.filter((e) => e.eventType === "view_card" || e.eventType === "view_detail").length,
         likes: relatedEvents.filter((e) => e.eventType === "favorite").length,
         saves: relatedEvents.filter((e) => e.eventType === "favorite").length,
-        deliveryTaps: relatedEvents.filter((e) => e.eventType === "order_click" || e.eventType === "booking_click").length,
+        deliveryTaps: relatedEvents.filter((e) => e.eventType === "order_click" || e.eventType === "booking_click" || e.eventType === "deeplink_click").length,
       };
 
       res.json({
@@ -3201,6 +3575,76 @@ export async function registerRoutes(
         revenueGrowth: 0,
       };
 
+      // Audience breakdown from user profiles of engaged users
+      const engagedUserIds = new Set<string>();
+      for (const e of events) {
+        if (e.userId && (e.eventType === "swipe_right" || e.eventType === "favorite" || e.eventType === "view_detail")) {
+          engagedUserIds.add(e.userId);
+        }
+      }
+      const profiles = await storage.listProfiles(500);
+      const engagedProfiles = profiles.filter(p => engagedUserIds.has(p.lineUserId));
+      const totalEngaged = engagedProfiles.length || 1;
+      const cuisineCount: Record<string, number> = {};
+      const healthCount = engagedProfiles.filter(p =>
+        (p.dietaryRestrictions ?? []).some(d => ["vegetarian", "vegan", "healthy"].includes(d))
+      ).length;
+      for (const p of engagedProfiles) {
+        for (const c of (p.cuisinePreferences ?? [])) {
+          cuisineCount[c] = (cuisineCount[c] ?? 0) + 1;
+        }
+      }
+      const topCuisines = Object.entries(cuisineCount)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([c, n]) => ({
+          segment: c.charAt(0).toUpperCase() + c.slice(1) + " Lovers",
+          pct: Math.round((n / totalEngaged) * 100),
+          trend: "+0%",
+        }));
+      const healthPct = Math.round((healthCount / totalEngaged) * 100);
+      const audienceBreakdown = [
+        ...topCuisines,
+        ...(healthPct > 0 ? [{ segment: "Health-conscious", pct: healthPct, trend: "+0%" }] : []),
+      ].filter(s => s.pct > 0).slice(0, 5);
+
+      // Opportunity score from KPIs
+      const swipeRate = impressions > 0 ? swipeRights / impressions : 0;
+      const convRate = impressions > 0 ? deliveryTaps / impressions : 0;
+      let opportunityScore = 50;
+      if (impressions > 100) opportunityScore += 5;
+      if (impressions > 500) opportunityScore += 5;
+      if (impressions > 1000) opportunityScore += 5;
+      if (swipeRate > 0.3) opportunityScore += 5;
+      if (swipeRate > 0.5) opportunityScore += 5;
+      if (convRate > 0.05) opportunityScore += 5;
+      if (convRate > 0.15) opportunityScore += 5;
+      if (returningPct > 20) opportunityScore += 5;
+      if (returningPct > 40) opportunityScore += 5;
+      if (saves > 10) opportunityScore += 5;
+      opportunityScore = Math.min(100, opportunityScore);
+
+      // Recommendations generated from real metrics
+      const recommendationsData: { title: string; impact: "high" | "medium" | "low"; reason: string; action: string }[] = [];
+      if (impressions < 500) {
+        recommendationsData.push({ title: "Increase your visibility", impact: "high", reason: `You've had ${impressions} impressions this month — top restaurants get 2,000+`, action: "Boost listing" });
+      }
+      if (swipeRate < 0.5 && impressions > 50) {
+        recommendationsData.push({ title: "Improve your main photo", impact: "high", reason: `Your swipe-right rate is ${(swipeRate * 100).toFixed(0)}% — listings with better photos average 65%+`, action: "Upload photo" });
+      }
+      if (convRate < 0.1 && impressions > 50) {
+        recommendationsData.push({ title: "Add delivery platform links", impact: "high", reason: `Only ${(convRate * 100).toFixed(1)}% of viewers click to order — add Grab or LINE MAN`, action: "Add link" });
+      }
+      if (saves < 20) {
+        recommendationsData.push({ title: "Create a weekend promotion", impact: "medium", reason: "Promotions increase saves by 38% on average", action: "Create promo" });
+      }
+      if (returningPct < 30) {
+        recommendationsData.push({ title: "Update vibe tags", impact: "low", reason: `${returningPct}% of visitors return — adding tags like 'date night' boosts discovery`, action: "Edit tags" });
+      }
+      if (recommendationsData.length < 3) {
+        recommendationsData.push({ title: "Add more menu photos", impact: "medium", reason: "Listings with 5+ photos get 42% more clickouts", action: "Upload images" });
+      }
+
       res.json({
         overview: {
           impressions: { value: impressions, trend: 0, label: "Impressions" },
@@ -3223,7 +3667,9 @@ export async function registerRoutes(
         repeatVisitors,
         competitorBenchmark,
         revenueEstimate,
-        audienceDemographics: [],
+        audienceBreakdown,
+        recommendationsData,
+        opportunityScore,
         conversionRate: impressions > 0 ? ((deliveryTaps / impressions) * 100).toFixed(1) : "0.0",
         avgTimeOnPage: null,
         returnVisitors: `${returningPct}%`,
@@ -3236,9 +3682,132 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/owner/delivery-conversions", async (req, res) => {
+    if (!requireOwnerOrAdmin(req, res)) return;
+    try {
+      const restaurantId = (req.session as any)?.ownerRestaurantId ?? parseInt(String(req.query.restaurantId ?? "0"), 10);
+      const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const logs = await storage.listEventLogs(20000, since);
+      const myLogs = restaurantId ? logs.filter(e => e.itemId === restaurantId) : logs;
+
+      const seen = myLogs.filter(e => e.eventType === "view_card").length;
+      const swipedRight = myLogs.filter(e => e.eventType === "swipe" && (e.metadata as any)?.direction === "right").length;
+      const clickedDelivery = myLogs.filter(e => e.eventType === "deeplink_click").length;
+
+      // Platform breakdown
+      const byPlatform: Record<string, number> = {};
+      for (const e of myLogs.filter(e => e.eventType === "deeplink_click")) {
+        const plat = (e.metadata as any)?.platform ?? "other";
+        byPlatform[plat] = (byPlatform[plat] ?? 0) + 1;
+      }
+
+      // Time of day clicks
+      const timeMap: Record<number, number> = {};
+      for (const e of myLogs.filter(e => e.eventType === "deeplink_click")) {
+        const h = new Date(e.createdAt).getHours();
+        timeMap[h] = (timeMap[h] ?? 0) + 1;
+      }
+      const timeClicks = Object.entries(timeMap)
+        .map(([hour, clicks]) => ({ hour: `${String(Number(hour)).padStart(2, "0")}:00`, clicks }))
+        .sort((a, b) => a.hour.localeCompare(b.hour));
+
+      // Solo vs group
+      const soloClicks = myLogs.filter(e => e.eventType === "deeplink_click" && !(e.metadata as any)?.groupSessionId).length;
+      const groupClicks = myLogs.filter(e => e.eventType === "deeplink_click" && (e.metadata as any)?.groupSessionId).length;
+
+      // Previous 30-day window (30-60 days ago) for week-over-week badge
+      const prevSince = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
+      const prevLogs = await storage.listEventLogs(20000, prevSince);
+      const cutoff = since.getTime();
+      const prevMyLogs = (restaurantId ? prevLogs.filter(e => e.itemId === restaurantId) : prevLogs)
+        .filter(e => new Date(e.createdAt).getTime() < cutoff);
+      const prevClicks = prevMyLogs.filter(e => e.eventType === "deeplink_click").length;
+      const clicksChangePct = prevClicks > 0 ? Math.round(((clickedDelivery - prevClicks) / prevClicks) * 100) : 0;
+
+      // Dish clicks from menus table
+      const menuItems = restaurantId ? await storage.listMenusByRestaurant(restaurantId) : [];
+      const dishClicks = menuItems
+        .filter(m => m.isActive)
+        .map(m => ({ name: m.name, clicks: 0, ctr: 0, trend: "up" as const, matchRate: 0 }));
+
+      // Campaign clicks from campaigns table
+      const allCampaigns = await storage.listCampaigns();
+      const ownerEmail = (req.session as any)?.ownerEmail ?? "";
+      const ownerCampaigns = allCampaigns.filter(c =>
+        ownerEmail ? c.restaurantOwnerKey === ownerEmail : false
+      );
+      const campaignClicks = ownerCampaigns.map(c => ({
+        campaign: c.title,
+        clicks: c.clicks ?? 0,
+        ctr: c.impressions > 0 ? Number(((c.clicks / c.impressions) * 100).toFixed(1)) : 0,
+        spend: c.spent ?? 0,
+        roi: c.spent > 0 ? Number(((c.clicks * 245) / c.spent).toFixed(1)) : 0,
+      }));
+
+      res.json({
+        funnel: {
+          seen,
+          swipedRight,
+          matched: Math.round(swipedRight * 0.13),
+          clickedDelivery,
+        },
+        byPlatform,
+        timeClicks,
+        sessionClicks: { solo: soloClicks, group: groupClicks },
+        totalClicks: clickedDelivery,
+        overallCtr: seen > 0 ? Number(((clickedDelivery / seen) * 100).toFixed(1)) : 0,
+        clicksChangePct,
+        dishClicks,
+        campaignClicks,
+      });
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.get("/api/owner/notifications", async (req, res) => {
+    if (!requireOwnerOrAdmin(req, res)) return;
+    try {
+      const restaurantId = (req.session as any)?.ownerRestaurantId ?? parseInt(String(req.query.restaurantId ?? "0"), 10);
+      const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const logs = await storage.listEventLogs(20000, since);
+      const myLogs = restaurantId ? logs.filter(e => e.itemId === restaurantId) : logs;
+
+      const saves = myLogs.filter(e => e.eventType === "favorite").length;
+      const deliveryClicks = myLogs.filter(e => e.eventType === "deeplink_click").length;
+      const swipeRights = myLogs.filter(e => e.eventType === "swipe" && (e.metadata as any)?.direction === "right").length;
+      const impressions = myLogs.filter(e => e.eventType === "view_card").length;
+
+      const notifications: { id: number; type: string; title: string; message: string; time: string; read: boolean }[] = [];
+      let id = 1;
+
+      if (saves >= 5) {
+        notifications.push({ id: id++, type: "milestone", title: "Milestone Reached", message: `Your restaurant has been saved by ${saves} users this month!`, time: "recently", read: false });
+      }
+      if (deliveryClicks > 0) {
+        notifications.push({ id: id++, type: "campaign", title: "Delivery Activity", message: `You received ${deliveryClicks} delivery click${deliveryClicks !== 1 ? "s" : ""} in the past 30 days.`, time: "this month", read: false });
+      }
+      if (swipeRights >= 20) {
+        notifications.push({ id: id++, type: "milestone", title: "Popular Restaurant", message: `${swipeRights} users swiped right on your restaurant this month!`, time: "this month", read: false });
+      }
+      if (impressions >= 50) {
+        notifications.push({ id: id++, type: "tip", title: "Great Visibility", message: `Your restaurant appeared in ${impressions} feeds this month — keep your listing updated!`, time: "this month", read: true });
+      }
+      notifications.push(
+        { id: id++, type: "tip", title: "Performance Tip", message: "Add more photos to your listing — restaurants with 5+ photos get 40% more views.", time: "2 days ago", read: true },
+        { id: id++, type: "verification", title: "Verification Reminder", message: "Complete your business verification to unlock premium features and the Verified badge.", time: "3 days ago", read: true },
+      );
+
+      res.json({ notifications });
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
   app.post("/api/group/sessions", async (req, res) => {
     try {
       const input = z.object({
+        mode: z.enum(["restaurant", "menu"]).optional().default("restaurant"),
         locations: z.array(z.string()).optional().default([]),
         budget: z.string().optional().default(""),
         diet: z.array(z.string()).optional().default([]),
@@ -3252,6 +3821,7 @@ export async function registerRoutes(
         code,
         status: "active",
         settings: {
+          mode: input.mode,
           locations: input.locations,
           budget: input.budget,
           diet: input.diet,
@@ -3397,10 +3967,12 @@ export async function registerRoutes(
       const radius = Math.max(300, Math.min(20000, Number(req.query.radius || 5000)));
 
       const settings = (session.settings || {}) as {
+        mode?: "restaurant" | "menu";
         locations?: string[];
         budget?: string;
         diet?: string[];
       };
+      const sessionMode = settings.mode === "menu" ? "menu" : "restaurant";
       const selectedLocations = settings.locations ?? [];
       const selectedBudget = String(settings.budget || "").toLowerCase();
       const selectedDiet = settings.diet ?? [];
@@ -3414,6 +3986,12 @@ export async function registerRoutes(
       };
 
       const locationTokensMap: Record<string, string[]> = {
+        bts: ["bts", "station", "skytrain"],
+        mall: ["mall", "plaza", "center", "centre"],
+        street: ["street", "market", "night market"],
+        rooftop: ["rooftop", "sky", "view"],
+        riverside: ["river", "riverside", "waterfront"],
+        latenight: ["late", "night", "24", "midnight"],
         "street food": ["street", "market", "night market"],
         restaurants: ["restaurant", "food", "eatery"],
         "near bts": ["bts", "station", "skytrain"],
@@ -3435,6 +4013,12 @@ export async function registerRoutes(
       const dietTokens = selectedDiet.flatMap((diet) => dietTokensMap[diet.toLowerCase()] ?? []);
 
       // ── Geo-aware fetch: L1 memory → L2 DB tile → L3 external API ───────────
+      const toMeters = (aLat: number, aLng: number, bLat: number, bLng: number) => {
+        const dLat = (aLat - bLat) * 111_320;
+        const dLng = (aLng - bLng) * 111_320 * Math.cos(((aLat + bLat) * Math.PI) / 360);
+        return Math.sqrt(dLat * dLat + dLng * dLng);
+      };
+
       // Build the deck from NormalizedPlace objects so we keep live photo URLs
       // (OSM has none; Google provides them). DB rows lose photos after insert.
       type DeckItem = {
@@ -3442,10 +4026,143 @@ export async function registerRoutes(
         lat: string; lng: string; category: string; priceLevel: number;
         rating: string; address: string; isNew: boolean; trendingScore: number;
         distanceMeters?: number;
+        mode?: "restaurant" | "menu";
+        availableCount?: number;
       };
       let deckItems: DeckItem[] = [];
 
-      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+      if (sessionMode === "menu") {
+        const nearRestaurants = Number.isFinite(lat) && Number.isFinite(lng)
+          ? await storage.findRestaurantsNear(lat, lng, radius)
+          : await storage.getRestaurants();
+
+        const textMatchRestaurant = (
+          r: { name: string; category: string; description: string; address: string },
+          tokens: string[],
+        ) => {
+          if (tokens.length === 0) return true;
+          const haystack = `${r.name} ${r.category} ${r.description} ${r.address}`.toLowerCase();
+          return tokens.some((t) => haystack.includes(t.toLowerCase()));
+        };
+
+        const filteredRestaurants = nearRestaurants.filter((r) => {
+          if (!budgetPredicate(Number(r.priceLevel ?? 2))) return false;
+          return textMatchRestaurant(
+            {
+              name: r.name,
+              category: r.category ?? "",
+              description: r.description ?? "",
+              address: r.address ?? "",
+            },
+            locationTokens,
+          );
+        });
+
+        const menusPerRestaurant = await Promise.all(
+          filteredRestaurants.map(async (restaurant) => {
+            const menuRows = await storage.listMenusByRestaurant(restaurant.id);
+            return { restaurant, menuRows: menuRows.filter((m) => m.isActive) };
+          }),
+        );
+
+        type GroupedMenu = {
+          id: number;
+          name: string;
+          description: string;
+          imageUrl: string;
+          restaurantIds: Set<number>;
+          sampleAddress: string;
+          sampleLat: string;
+          sampleLng: string;
+          minDistanceMeters: number;
+          minPrice: number | null;
+          maxPrice: number | null;
+        };
+        const grouped = new Map<string, GroupedMenu>();
+
+        for (const { restaurant, menuRows } of menusPerRestaurant) {
+          for (const menu of menuRows) {
+            const menuText = `${menu.name} ${menu.description ?? ""} ${(menu.tags ?? []).join(" ")} ${(menu.dietFlags ?? []).join(" ")}`.toLowerCase();
+            const dietMatches = dietTokens.length === 0 || dietTokens.some((t) => menuText.includes(t.toLowerCase()));
+            if (!dietMatches) continue;
+
+            const key = menu.name.trim().toLowerCase();
+            const distanceMeters = Number.isFinite(lat) && Number.isFinite(lng)
+              ? toMeters(lat, lng, Number(restaurant.lat), Number(restaurant.lng))
+              : Number.MAX_SAFE_INTEGER;
+            const current = grouped.get(key);
+
+            if (!current) {
+              grouped.set(key, {
+                id: menu.id,
+                name: menu.name,
+                description: menu.description ?? restaurant.category ?? "Menu item",
+                imageUrl: menu.imageUrl || restaurant.imageUrl || "",
+                restaurantIds: new Set([restaurant.id]),
+                sampleAddress: restaurant.address,
+                sampleLat: restaurant.lat,
+                sampleLng: restaurant.lng,
+                minDistanceMeters: distanceMeters,
+                minPrice: menu.priceApprox ?? null,
+                maxPrice: menu.priceApprox ?? null,
+              });
+              continue;
+            }
+
+            current.restaurantIds.add(restaurant.id);
+            if (!current.imageUrl && (menu.imageUrl || restaurant.imageUrl)) {
+              current.imageUrl = menu.imageUrl || restaurant.imageUrl || "";
+            }
+            if (!current.description && menu.description) current.description = menu.description;
+            if (distanceMeters < current.minDistanceMeters) {
+              current.minDistanceMeters = distanceMeters;
+              current.sampleAddress = restaurant.address;
+              current.sampleLat = restaurant.lat;
+              current.sampleLng = restaurant.lng;
+              current.id = menu.id;
+            }
+            if (menu.priceApprox != null) {
+              current.minPrice = current.minPrice == null ? menu.priceApprox : Math.min(current.minPrice, menu.priceApprox);
+              current.maxPrice = current.maxPrice == null ? menu.priceApprox : Math.max(current.maxPrice, menu.priceApprox);
+            }
+          }
+        }
+
+        deckItems = Array.from(grouped.values())
+          .map((entry) => {
+            const avgPrice = entry.minPrice != null && entry.maxPrice != null
+              ? (entry.minPrice + entry.maxPrice) / 2
+              : null;
+            const derivedPriceLevel = avgPrice == null
+              ? 2
+              : avgPrice <= 120
+              ? 1
+              : avgPrice <= 250
+              ? 2
+              : avgPrice <= 450
+              ? 3
+              : 4;
+            return {
+              id: entry.id,
+              name: entry.name,
+              description: entry.description,
+              imageUrl: entry.imageUrl,
+              lat: entry.sampleLat,
+              lng: entry.sampleLng,
+              category: "Dish",
+              priceLevel: derivedPriceLevel,
+              rating: "-",
+              address: `${entry.restaurantIds.size} places nearby`,
+              isNew: false,
+              trendingScore: 0,
+              distanceMeters: Number.isFinite(entry.minDistanceMeters) ? entry.minDistanceMeters : undefined,
+              mode: "menu" as const,
+              availableCount: entry.restaurantIds.size,
+            };
+          })
+          .sort((a, b) => (b.availableCount ?? 0) - (a.availableCount ?? 0) || (a.distanceMeters ?? 0) - (b.distanceMeters ?? 0))
+          .slice(0, 30);
+      } else if (Number.isFinite(lat) && Number.isFinite(lng)) {
         const placesResult = await placesService.query({
           lat,
           lng,
@@ -3513,6 +4230,7 @@ export async function registerRoutes(
           isNew: false,
           trendingScore: 0,
           distanceMeters: p.distanceMeters,
+          mode: "restaurant" as const,
         }));
         if (isDev) {
           const firstDeckItem = deckItems[0];
@@ -3550,6 +4268,7 @@ export async function registerRoutes(
           address: r.address ?? "N/A",
           isNew: r.isNew ?? false,
           trendingScore: Number(r.trendingScore ?? 0),
+          mode: "restaurant" as const,
         }));
       }
 
@@ -3559,13 +4278,15 @@ export async function registerRoutes(
         return tokens.some((t) => haystack.includes(t.toLowerCase()));
       };
 
-      let filtered = deckItems.filter((r) => budgetPredicate(Number(r.priceLevel || 2)));
+      let filtered = sessionMode === "menu"
+        ? deckItems
+        : deckItems.filter((r) => budgetPredicate(Number(r.priceLevel || 2)));
 
-      if (locationTokens.length > 0) {
+      if (locationTokens.length > 0 && sessionMode !== "menu") {
         const byLocation = filtered.filter((r) => textMatch(r, locationTokens));
         if (byLocation.length > 0) filtered = byLocation;
       }
-      if (dietTokens.length > 0) {
+      if (dietTokens.length > 0 && sessionMode !== "menu") {
         const byDiet = filtered.filter((r) => textMatch(r, dietTokens));
         if (byDiet.length > 0) filtered = byDiet;
       }
@@ -3599,18 +4320,134 @@ export async function registerRoutes(
 
   // ── In-memory swipe store for group sessions ────────────────────────────────
   type GroupSwipeRecord = { voterName: string; menuItemId: number; direction: "left" | "right" | "super" };
+  type FinalVoteRecord = { voterName: string; menuItemId: number };
   const groupSwipes = new Map<string, GroupSwipeRecord[]>();
+  const groupFinalVotes = new Map<string, FinalVoteRecord[]>();
+
+  function getSessionSwipeMode(session: Awaited<ReturnType<typeof storage.getGroupSessionByCode>>) {
+    const mode = (session?.settings as { mode?: "restaurant" | "menu" } | null | undefined)?.mode;
+    return mode === "menu" ? "menu" : "restaurant";
+  }
+
+  async function listRestaurantsServingMenu(menuItemId: number, lat?: number, lng?: number, radius = 5000) {
+    const menu = await storage.getMenuById(menuItemId);
+    if (!menu) return [];
+    const sameNameMenus = await storage.listMenusByName(menu.name);
+    const restaurantIds = Array.from(new Set(sameNameMenus.map((m) => m.restaurantId)));
+    const restaurants = await Promise.all(restaurantIds.map((id) => storage.getRestaurantById(id)));
+    const valid = restaurants.filter(Boolean);
+    const normalized = valid.map((restaurant) => {
+      const r = restaurant!;
+      const distanceMeters =
+        Number.isFinite(lat) && Number.isFinite(lng)
+          ? (() => {
+              const dLat = (Number(r.lat) - Number(lat)) * 111_320;
+              const dLng =
+                (Number(r.lng) - Number(lng)) *
+                111_320 *
+                Math.cos(((Number(r.lat) + Number(lat)) * Math.PI) / 360);
+              return Math.sqrt(dLat * dLat + dLng * dLng);
+            })()
+          : null;
+      return { restaurant: r, distanceMeters };
+    });
+    return normalized
+      .filter((entry) => entry.distanceMeters == null || entry.distanceMeters <= radius)
+      .sort((a, b) => (a.distanceMeters ?? Number.MAX_SAFE_INTEGER) - (b.distanceMeters ?? Number.MAX_SAFE_INTEGER));
+  }
+
+  async function resolveResultItem(menuItemId: number, mode: "restaurant" | "menu") {
+    if (mode === "menu") {
+      const menu = await storage.getMenuById(menuItemId);
+      if (!menu) return null;
+      const restaurants = await listRestaurantsServingMenu(menuItemId);
+      const firstRestaurant = restaurants[0]?.restaurant ?? null;
+      return {
+        id: menu.id,
+        name: menu.name,
+        imageUrl: menu.imageUrl || firstRestaurant?.imageUrl || "",
+        address: `${restaurants.length} places nearby`,
+        rating: "-",
+        priceLevel: menu.priceApprox == null ? 2 : menu.priceApprox <= 120 ? 1 : menu.priceApprox <= 250 ? 2 : menu.priceApprox <= 450 ? 3 : 4,
+        restaurantCount: restaurants.length,
+      };
+    }
+    const restaurant = await storage.getRestaurantById(menuItemId);
+    if (!restaurant) return null;
+    return {
+      id: restaurant.id,
+      name: restaurant.name,
+      imageUrl: restaurant.imageUrl,
+      address: restaurant.address,
+      rating: restaurant.rating,
+      priceLevel: restaurant.priceLevel,
+      restaurantCount: 1,
+    };
+  }
+
+  async function buildGroupResult(code: string) {
+    const session = await storage.getGroupSessionByCode(code);
+    if (!session) return null;
+    const mode = getSessionSwipeMode(session);
+    const members = await storage.listGroupMembers(session.id);
+    const memberCount = members.length;
+    const swipes = groupSwipes.get(code) ?? [];
+    const scoreByItem = new Map<number, number>();
+    const votersByItem = new Map<number, Set<string>>();
+
+    for (const swipe of swipes) {
+      if (!votersByItem.has(swipe.menuItemId)) votersByItem.set(swipe.menuItemId, new Set());
+      if (swipe.direction === "right" || swipe.direction === "super") {
+        votersByItem.get(swipe.menuItemId)!.add(swipe.voterName);
+        const weight = swipe.direction === "super" ? 2 : 1;
+        scoreByItem.set(swipe.menuItemId, (scoreByItem.get(swipe.menuItemId) ?? 0) + weight);
+      }
+    }
+
+    const ranked = Array.from(scoreByItem.entries())
+      .map(([menuItemId, score]) => ({
+        menuItemId,
+        score,
+        agreeCount: votersByItem.get(menuItemId)?.size ?? 0,
+      }))
+      .sort((a, b) => b.score - a.score || b.agreeCount - a.agreeCount)
+      .slice(0, 3);
+
+    const top3 = await Promise.all(
+      ranked.map(async (entry) => {
+        return {
+          ...entry,
+          item: await resolveResultItem(entry.menuItemId, mode),
+        };
+      }),
+    );
+
+    const winner = top3[0] ?? null;
+    const hasStrongMatch = Boolean(winner && winner.agreeCount > 0 && winner.agreeCount >= Math.ceil(memberCount * 0.7));
+    return {
+      code,
+      mode,
+      memberCount,
+      hasStrongMatch,
+      top3,
+      winner: hasStrongMatch ? winner : null,
+    };
+  }
 
   app.post("/api/group/sessions/:code/swipe", async (req, res) => {
     try {
       const code = String(req.params.code || "").trim().toUpperCase();
       const session = await storage.getGroupSessionByCode(code);
       if (!session) return res.status(404).json({ message: "Session not found" });
-      const { voterName, menuItemId, direction } = z.object({
-        voterName: z.string().min(1),
+      const body = z.object({
+        lineUserId: z.string().optional(),
+        voterName: z.string().optional(),
         menuItemId: z.number().int(),
         direction: z.enum(["left", "right", "super"]),
       }).parse(req.body ?? {});
+      const { menuItemId, direction } = body;
+      const voterName = body.lineUserId ?? body.voterName ?? "";
+      if (!voterName) return res.status(400).json({ message: "lineUserId is required" });
 
       if (!groupSwipes.has(code)) groupSwipes.set(code, []);
       const swipes = groupSwipes.get(code)!;
@@ -3679,6 +4516,108 @@ export async function registerRoutes(
 
       res.json({ matches, memberCount });
     } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.get("/api/group/:code/result", async (req, res) => {
+    try {
+      const code = String(req.params.code || "").trim().toUpperCase();
+      const result = await buildGroupResult(code);
+      if (!result) return res.status(404).json({ message: "Session not found" });
+      res.json(result);
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.get("/api/group/:code/menu/:menuItemId/restaurants", async (req, res) => {
+    try {
+      const code = String(req.params.code || "").trim().toUpperCase();
+      const menuItemId = Number(req.params.menuItemId);
+      if (!Number.isFinite(menuItemId)) return res.status(400).json({ message: "Invalid menuItemId" });
+      const session = await storage.getGroupSessionByCode(code);
+      if (!session) return res.status(404).json({ message: "Session not found" });
+      if (getSessionSwipeMode(session) !== "menu") return res.status(400).json({ message: "Session is not in menu mode" });
+      const menu = await storage.getMenuById(menuItemId);
+      if (!menu) return res.status(404).json({ message: "Menu item not found" });
+
+      const lat = Number(req.query.lat);
+      const lng = Number(req.query.lng);
+      const radius = Math.max(300, Math.min(20000, Number(req.query.radius || 5000)));
+      const restaurants = await listRestaurantsServingMenu(
+        menuItemId,
+        Number.isFinite(lat) ? lat : undefined,
+        Number.isFinite(lng) ? lng : undefined,
+        radius,
+      );
+
+      res.json({
+        menuItemId,
+        menuName: menu.name,
+        menuImageUrl: menu.imageUrl,
+        restaurants: restaurants.map((entry) => ({
+          id: entry.restaurant.id,
+          name: entry.restaurant.name,
+          imageUrl: entry.restaurant.imageUrl,
+          address: entry.restaurant.address,
+          rating: entry.restaurant.rating,
+          priceLevel: entry.restaurant.priceLevel,
+          distanceMeters: entry.distanceMeters,
+        })),
+      });
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.post("/api/group/:code/vote", async (req, res) => {
+    try {
+      const code = String(req.params.code || "").trim().toUpperCase();
+      const session = await storage.getGroupSessionByCode(code);
+      if (!session) return res.status(404).json({ message: "Session not found" });
+      const mode = getSessionSwipeMode(session);
+
+      const { voterName, menuItemId } = z.object({
+        voterName: z.string().min(1),
+        menuItemId: z.number().int(),
+      }).parse(req.body ?? {});
+
+      const members = await storage.listGroupMembers(session.id);
+      const memberCount = members.length;
+      if (!groupFinalVotes.has(code)) groupFinalVotes.set(code, []);
+      const votes = groupFinalVotes.get(code)!;
+
+      const existingIdx = votes.findIndex((vote) => vote.voterName === voterName);
+      if (existingIdx >= 0) votes[existingIdx] = { voterName, menuItemId };
+      else votes.push({ voterName, menuItemId });
+
+      const voteCounts = votes.reduce<Map<number, number>>((acc, vote) => {
+        acc.set(vote.menuItemId, (acc.get(vote.menuItemId) ?? 0) + 1);
+        return acc;
+      }, new Map());
+      const winnerEntry = Array.from(voteCounts.entries()).sort((a, b) => b[1] - a[1])[0] ?? null;
+      const winnerId = winnerEntry?.[0] ?? null;
+      const winnerVotes = winnerEntry?.[1] ?? 0;
+      const winner = winnerId ? await resolveResultItem(winnerId, mode) : null;
+      const completed = votes.length >= memberCount && memberCount > 0;
+
+      res.json({
+        mode,
+        completed,
+        totalVotes: votes.length,
+        memberCount,
+        winner: winner
+          ? {
+              ...winner,
+            }
+          : null,
+        winnerVotes,
+      });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid payload" });
+      }
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -3765,6 +4704,7 @@ export async function registerRoutes(
             "filter",
             "order_click",
             "booking_click",
+            "deeplink_click",
           ]),
           eventName: z.string().optional(),
           timestamp: z.string().datetime(),
@@ -3961,6 +4901,157 @@ export async function registerRoutes(
       });
     } catch {
       res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // ── Clickout analytics ────────────────────────────────────────────────────
+  app.get("/api/admin/analytics/clickouts", async (req, res) => {
+    if (!requireAdminSession(req, res)) return;
+    try {
+      const days = Math.min(parseInt(String(req.query.days ?? "7"), 10) || 7, 90);
+      const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+      const events = await storage.listEventLogsByType("deeplink_click", since, 5000);
+
+      // Total counts
+      const total = events.length;
+
+      // By platform (from metadata.platform)
+      const byPlatform: Record<string, number> = {};
+      for (const e of events) {
+        const platform = (e.metadata as Record<string, unknown> | null)?.platform as string | undefined;
+        const key = platform ?? "unknown";
+        byPlatform[key] = (byPlatform[key] ?? 0) + 1;
+      }
+
+      // By restaurant (itemId = restaurantId)
+      const byRestaurantId: Record<number, number> = {};
+      for (const e of events) {
+        if (e.itemId) byRestaurantId[e.itemId] = (byRestaurantId[e.itemId] ?? 0) + 1;
+      }
+      // Enrich with restaurant names
+      const restaurantIds = Object.keys(byRestaurantId).map(Number);
+      const restaurantNames: Record<number, string> = {};
+      if (restaurantIds.length > 0) {
+        const allRestaurants = await storage.getRestaurants();
+        for (const r of allRestaurants) {
+          restaurantNames[r.id] = r.name;
+        }
+      }
+      const topRestaurants = Object.entries(byRestaurantId)
+        .map(([id, count]) => ({ restaurantId: Number(id), name: restaurantNames[Number(id)] ?? `Restaurant #${id}`, count }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 10);
+
+      // By daypart
+      const daypartBuckets: Record<string, number> = { Breakfast: 0, Brunch: 0, Lunch: 0, Dinner: 0, "Late Night": 0 };
+      for (const e of events) {
+        const h = new Date(e.createdAt ?? Date.now()).getHours();
+        if (h >= 6 && h < 10) daypartBuckets["Breakfast"]++;
+        else if (h >= 10 && h < 12) daypartBuckets["Brunch"]++;
+        else if (h >= 12 && h < 15) daypartBuckets["Lunch"]++;
+        else if (h >= 17 && h < 22) daypartBuckets["Dinner"]++;
+        else daypartBuckets["Late Night"]++;
+      }
+      const dayparts = Object.entries(daypartBuckets).map(([daypart, count]) => ({
+        daypart,
+        count,
+        pct: total > 0 ? Math.round((count / total) * 100) : 0,
+      }));
+
+      return res.json({ total, days, byPlatform, topRestaurants, dayparts });
+    } catch {
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // Overview: funnel, top restaurants, cuisine trend, day patterns, heatmap — all from event_logs
+  app.get("/api/admin/analytics/overview", async (req, res) => {
+    if (!requireAdminSession(req, res)) return;
+    try {
+      const daysParam = req.query.days === "all" ? 365 : Math.min(parseInt(String(req.query.days ?? "30"), 10) || 30, 365);
+      const since = new Date(Date.now() - daysParam * 24 * 60 * 60 * 1000);
+      const logs = await storage.listEventLogs(30000, since);
+
+      // Funnel
+      let impressions = 0, swipeViews = 0, rightSwipes = 0, orderIntent = 0, deliveryTotal = 0;
+      for (const e of logs) {
+        if (e.eventType === "view_card") impressions++;
+        if (e.eventType === "swipe") {
+          swipeViews++;
+          const dir = (e.metadata as Record<string, unknown> | null)?.direction;
+          if (dir === "right") rightSwipes++;
+        }
+        if (e.eventType === "deeplink_click") { deliveryTotal++; orderIntent++; }
+        else if (e.eventType === "order_click" || e.eventType === "booking_click") orderIntent++;
+      }
+
+      // Enrich with restaurant data (categories + names)
+      const allRestaurants = await storage.getRestaurants();
+      const restaurantMap: Record<number, { name: string; category: string }> = {};
+      for (const r of allRestaurants) restaurantMap[r.id] = { name: r.name, category: r.category ?? "Other" };
+
+      // Top restaurants by right swipes
+      const byRestaurant: Record<number, { rightSwipes: number; views: number }> = {};
+      const byCuisine: Record<string, number> = {};
+      for (const e of logs) {
+        if (!e.itemId) continue;
+        if (!byRestaurant[e.itemId]) byRestaurant[e.itemId] = { rightSwipes: 0, views: 0 };
+        if (e.eventType === "swipe" && (e.metadata as Record<string, unknown> | null)?.direction === "right") {
+          byRestaurant[e.itemId].rightSwipes++;
+          const cat = restaurantMap[e.itemId]?.category ?? "Other";
+          byCuisine[cat] = (byCuisine[cat] ?? 0) + 1;
+        }
+        if (e.eventType === "view_card") byRestaurant[e.itemId].views++;
+      }
+
+      const topRestaurants = Object.entries(byRestaurant)
+        .map(([id, data]) => ({
+          restaurantId: Number(id),
+          name: restaurantMap[Number(id)]?.name ?? `#${id}`,
+          rightSwipes: data.rightSwipes,
+          views: data.views,
+        }))
+        .sort((a, b) => b.rightSwipes - a.rightSwipes)
+        .slice(0, 8);
+
+      // Cuisine trend
+      const cuisineTotal = Object.values(byCuisine).reduce((s, v) => s + v, 0) || 1;
+      const cuisineTrend = Object.entries(byCuisine)
+        .map(([cuisine, count]) => ({ cuisine, rightSwipes: count, pct: Math.round((count / cuisineTotal) * 100) }))
+        .sort((a, b) => b.rightSwipes - a.rightSwipes)
+        .slice(0, 8);
+
+      // Day patterns (Mon=0 ... Sun=6)
+      const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+      const dayCount = [0, 0, 0, 0, 0, 0, 0];
+      for (const e of logs) {
+        const d = new Date(e.createdAt ?? Date.now()).getDay(); // 0=Sun, 6=Sat
+        const idx = d === 0 ? 6 : d - 1;
+        dayCount[idx]++;
+      }
+      const maxDay = Math.max(...dayCount, 1);
+      const dayPatterns = DAY_NAMES.map((day, i) => ({
+        day,
+        count: dayCount[i],
+        pct: Math.round((dayCount[i] / maxDay) * 100),
+      }));
+
+      // Heatmap: 7 rows (Mon-Sun) × 18 cols (6am-11pm)
+      const heatmap: number[][] = Array.from({ length: 7 }, () => new Array(18).fill(0));
+      for (const e of logs) {
+        const dt = new Date(e.createdAt ?? Date.now());
+        const d = dt.getDay();
+        const dayIdx = d === 0 ? 6 : d - 1;
+        const h = dt.getHours();
+        if (h >= 6 && h < 24) {
+          const hourIdx = h - 6;
+          if (hourIdx < 18) heatmap[dayIdx][hourIdx]++;
+        }
+      }
+
+      return res.json({ funnel: { impressions, swipeViews, rightSwipes, orderIntent }, topRestaurants, cuisineTrend, dayPatterns, heatmap, deliveryTotal });
+    } catch {
+      return res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -4546,6 +5637,98 @@ export async function registerRoutes(
         swipeCounts: padTo7(sorted.map((r) => r.funnelSwipes), 0),
       });
     } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // ── Notifications: admin manual campaign send ────────────────────────────────
+  app.post("/api/notifications/send", async (req, res) => {
+    try {
+      if (!requireAdminSession(req, res)) return;
+      const input = z.object({
+        lineUserIds: z.array(z.string().min(1)).min(1),
+        message: z.string().min(1).max(2000),
+        campaignId: z.number().int().optional(),
+      }).parse(req.body ?? {});
+
+      const ok = await lineMessaging.sendToUsers(input.lineUserIds, [{ type: "text", text: input.message }]);
+      const status = ok ? "sent" : "failed";
+
+      await storage.createNotificationLog({
+        channel: "line",
+        type: "campaign",
+        recipientId: `multicast:${input.lineUserIds.length}`,
+        campaignId: input.campaignId ?? null,
+        sessionCode: null,
+        messageText: input.message,
+        status,
+        sentBy: req.session?.username ?? "admin",
+      });
+
+      res.json({ ok, lineConfigured: lineMessaging.isConfigured(), recipientCount: input.lineUserIds.length });
+    } catch (err) {
+      if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid payload" });
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // ── Notifications: logs list ─────────────────────────────────────────────────
+  app.get("/api/notifications/logs", async (req, res) => {
+    try {
+      if (!requireAdminSession(req, res)) return;
+      const limit = Math.min(Number(req.query.limit ?? 100), 500);
+      const logs = await storage.listNotificationLogs(limit);
+      res.json(logs);
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // ── Group nudge: server-side rate limited (max 1 per member per 5 min) ───────
+  const nudgeLog = new Map<string, number>(); // key: "code:memberName" → lastSentMs
+  const NUDGE_COOLDOWN_MS = 5 * 60 * 1000;
+
+  app.post("/api/group/:code/nudge", async (req, res) => {
+    try {
+      const { code } = req.params;
+      const input = z.object({
+        memberName: z.string().min(1),
+        lineUserId: z.string().optional(),
+        inviteText: z.string().max(500).optional(),
+      }).parse(req.body ?? {});
+
+      const key = `${code}:${input.memberName}`;
+      const lastSent = nudgeLog.get(key) ?? 0;
+      const now = Date.now();
+
+      if (now - lastSent < NUDGE_COOLDOWN_MS) {
+        const waitSec = Math.ceil((NUDGE_COOLDOWN_MS - (now - lastSent)) / 1000);
+        return res.status(429).json({ message: `Please wait ${waitSec}s before nudging ${input.memberName} again.` });
+      }
+
+      nudgeLog.set(key, now);
+
+      const message = input.inviteText ?? `Hey! Your group is waiting for you to join the Toast session (${code}). Come swipe! 🍽️`;
+
+      let lineOk = false;
+      if (input.lineUserId) {
+        lineOk = await lineMessaging.sendToUser(input.lineUserId, [{ type: "text", text: message }]);
+      }
+
+      await storage.createNotificationLog({
+        channel: "line",
+        type: "nudge",
+        recipientId: input.lineUserId ?? input.memberName,
+        campaignId: null,
+        sessionCode: code,
+        messageText: message,
+        status: input.lineUserId ? (lineOk ? "sent" : "skipped") : "skipped",
+        sentBy: "system",
+      });
+
+      res.json({ ok: true, lineDelivered: lineOk, lineConfigured: lineMessaging.isConfigured() });
+    } catch (err) {
+      if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid payload" });
       res.status(500).json({ message: "Internal server error" });
     }
   });

@@ -1,6 +1,7 @@
 import { motion } from "framer-motion";
 import { useLocation } from "wouter";
-import { Search, Flame, User, ArrowLeft } from "lucide-react";
+import { Search, TrendingUp, User, ArrowLeft } from "lucide-react";
+import { useLanguage } from "@/i18n/LanguageProvider";
 
 interface BottomNavProps {
   showBack?: boolean;
@@ -10,20 +11,20 @@ interface BottomNavProps {
   hidden?: boolean;
 }
 
-type TabKey = "explore" | "swipe" | "profile";
+type TabKey = "explore" | "trending" | "profile";
 
 const BRAND_COLOR = "#FFCC02";
 
-const tabs: { key: TabKey; label: string; icon: typeof Search; path: string }[] = [
-  { key: "explore", label: "Explore", icon: Search, path: "/" },
-  { key: "swipe", label: "Swipe", icon: Flame, path: "/swipe" },
-  { key: "profile", label: "Profile", icon: User, path: "/profile" },
+const tabConfig: { key: TabKey; labelKey: string; icon: typeof Search; path: string }[] = [
+  { key: "explore", labelKey: "navigation.explore", icon: Search, path: "/" },
+  { key: "trending", labelKey: "navigation.trending", icon: TrendingUp, path: "/trending" },
+  { key: "profile", labelKey: "navigation.profile", icon: User, path: "/profile" },
 ];
 
 function getActiveTab(location: string): TabKey {
   if (location === "/") return "explore";
   if (location === "/restaurants" || location.startsWith("/restaurant/")) return "explore";
-  if (location === "/swipe" || location.startsWith("/solo") || location.startsWith("/group")) return "swipe";
+  if (location === "/trending" || location === "/swipe" || location.startsWith("/solo") || location.startsWith("/group")) return "trending";
   if (location === "/profile" || location.startsWith("/toast-picks")) return "profile";
   return "explore";
 }
@@ -31,6 +32,7 @@ function getActiveTab(location: string): TabKey {
 export function BottomNav({ showBack = true, onBack, hidden = false }: BottomNavProps) {
   const [location, navigate] = useLocation();
   const activeTab = getActiveTab(location);
+  const { t } = useLanguage();
 
   const isHidden = hidden;
 
@@ -59,10 +61,10 @@ export function BottomNav({ showBack = true, onBack, hidden = false }: BottomNav
             data-testid="button-back"
           >
             <ArrowLeft className="w-[22px] h-[22px]" strokeWidth={1.5} />
-            <span className="text-[10px] font-medium leading-tight">Back</span>
+            <span className="text-[10px] font-medium leading-tight">{t("navigation.back")}</span>
           </button>
         )}
-        {tabs.map((tab) => {
+        {tabConfig.map((tab) => {
           const isActive = activeTab === tab.key;
           const Icon = tab.icon;
           return (
@@ -85,7 +87,7 @@ export function BottomNav({ showBack = true, onBack, hidden = false }: BottomNav
                 className={`text-[10px] leading-tight transition-colors duration-200 ${isActive ? "font-semibold" : "font-medium"}`}
                 style={{ color: isActive ? BRAND_COLOR : "#9ca3af" }}
               >
-                {tab.label}
+                {t(tab.labelKey)}
               </span>
             </button>
           );

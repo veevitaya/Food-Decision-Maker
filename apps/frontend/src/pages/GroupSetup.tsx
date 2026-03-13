@@ -32,6 +32,11 @@ const GROUP_TYPES = [
   { id: "coworkers", icon: Briefcase, label: "Coworkers", color: "#6C2BD9" },
 ];
 
+const SWIPE_MODES = [
+  { id: "restaurant", label: "Swipe Restaurants", sub: "Pick places directly" },
+  { id: "menu", label: "Swipe Dishes", sub: "Match on food first" },
+];
+
 const RESTRICTIONS = [
   { id: "halal", icon: "🕌", label: "Halal" },
   { id: "vegan", icon: "🥬", label: "Vegan" },
@@ -84,6 +89,7 @@ export default function GroupSetup() {
   const [selectedLocations, setSelectedLocations] = useState<string[]>([]);
   const [selectedBudget, setSelectedBudget] = useState<string>("");
   const [selectedGroupType, setSelectedGroupType] = useState<string>("");
+  const [swipeMode, setSwipeMode] = useState<"restaurant" | "menu">("restaurant");
   const [selectedRestrictions, setSelectedRestrictions] = useState<string[]>([]);
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const now = new Date();
@@ -120,6 +126,7 @@ export default function GroupSetup() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          mode: swipeMode,
           creatorName: profile?.displayName ?? "You",
           creatorAvatarUrl: profile?.pictureUrl || undefined,
           creatorLineUserId: profile?.userId || undefined,
@@ -374,6 +381,43 @@ export default function GroupSetup() {
                 </span>
               </div>
             )}
+          </motion.div>
+        </div>
+
+        <div className="px-5 pb-3">
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.1 }}
+          >
+            <div className="flex items-center gap-2 mb-3">
+              <Utensils className="w-4 h-4 text-[#FFCC02]" />
+              <h2 className="text-[12px] font-bold uppercase tracking-[0.1em] text-foreground">Swipe mode</h2>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {SWIPE_MODES.map((mode) => {
+                const active = swipeMode === mode.id;
+                return (
+                  <motion.button
+                    key={mode.id}
+                    whileTap={{ scale: 0.93 }}
+                    onClick={() => setSwipeMode(mode.id as "restaurant" | "menu")}
+                    data-testid={`chip-group-mode-${mode.id}`}
+                    className={`flex flex-col items-start gap-0.5 py-3 px-3 rounded-2xl text-left transition-all duration-200 ${
+                      active ? "bg-foreground text-white" : "bg-white border border-gray-100"
+                    }`}
+                    style={{
+                      boxShadow: active
+                        ? "0 4px 16px rgba(0,0,0,0.15)"
+                        : "0 1px 4px rgba(0,0,0,0.03)",
+                    }}
+                  >
+                    <span className={`text-[12px] font-semibold ${active ? "text-white" : "text-foreground"}`}>{mode.label}</span>
+                    <span className={`text-[10px] ${active ? "text-white/60" : "text-muted-foreground"}`}>{mode.sub}</span>
+                  </motion.button>
+                );
+              })}
+            </div>
           </motion.div>
         </div>
 

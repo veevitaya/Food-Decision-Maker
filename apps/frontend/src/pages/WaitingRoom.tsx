@@ -3,9 +3,8 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useLocation } from "wouter";
 import { BottomNav } from "@/components/BottomNav";
 import mascotImg from "@assets/toast_mascot_nobg.png";
-import { shareMessage, sendGroupInvite, liffUrl } from "@/lib/liff";
+import { sendGroupInvite, liffUrl } from "@/lib/liff";
 import { useLineProfile } from "@/lib/useLineProfile";
-import { apiRequest } from "@/lib/queryClient";
 
 interface SessionMember {
   id: number;
@@ -21,7 +20,7 @@ export default function WaitingRoom() {
   const [, navigate] = useLocation();
   const { profile, loading: profileLoading } = useLineProfile();
   const [members, setMembers] = useState<SessionMember[]>([]);
-  const [nudgedMembers, setNudgedMembers] = useState<Set<string>>(new Set());
+  const [nudgedMembers, setNudgedMembers] = useState<Set<number>>(new Set());
   const [sessionCreated, setSessionCreated] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -85,11 +84,30 @@ export default function WaitingRoom() {
     await sendGroupInvite(sessionId);
   };
 
-  const handleNudgeMember = async (memberName: string) => {
-    setNudgedMembers((prev) => new Set(prev).add(memberName));
+  const handleNudgeMember = async (member: SessionMember) => {
+    if (nudgedMembers.has(member.id)) return;
     const joinUrl = liffUrl("/group/waiting", { session: sessionId });
-    const text = `Hey ${memberName}! We're waiting for you on Toast. Join our food session!\n\n${joinUrl}`;
-    await shareMessage(text);
+    const inviteText = `Hey ${member.name}! We're waiting for you on Toast. Join our food session!\n\n${joinUrl}`;
+    try {
+      const res = await fetch(`/api/group/${sessionId}/nudge`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          memberName: member.name,
+          lineUserId: member.lineUserId || undefined,
+          inviteText,
+        }),
+      });
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({ message: "Failed to send nudge" }));
+        setError(payload.message ?? "Failed to send nudge");
+        return;
+      }
+      setNudgedMembers((prev) => new Set(prev).add(member.id));
+    } catch {
+      setError("Failed to send nudge");
+    }
   };
 
   const memberCount = members.length;
@@ -208,13 +226,33 @@ export default function WaitingRoom() {
                 initial={{ scale: 0 }}
                 animate={{ scale: 1 }}
                 transition={{ type: "spring", damping: 12, stiffness: 300, delay: 0.15 }}
-                className="absolute -bottom-0.5 -right-0.5 w-6 h-6 rounded-full bg-[hsl(160,60%,45%)] flex items-center justify-center border-2 border-white"
+                className={`absolute -bottom-0.5 -right-0.5 w-6 h-6 rounded-full flex items-center justify-center border-2 border-white ${
+                  m.joined ? "bg-[hsl(160,60%,45%)]" : "bg-amber-400"
+                }`}
               >
-                <span className="text-white text-[10px] font-bold">✓</span>
+                <span className="text-white text-[10px] font-bold">{m.joined ? "V" : "!"}</span>
               </motion.div>
             </div>
             <span className="text-sm font-bold">{m.lineUserId === profile?.userId ? "You" : m.name}</span>
-            <span className="text-[11px] font-semibold text-[hsl(160,60%,45%)]">Ready</span>
+            {m.joined ? (
+              <span className="text-[11px] font-semibold text-[hsl(160,60%,45%)]">Ready</span>
+            ) : (
+              <span className="text-[11px] font-semibold text-amber-500">Not joined yet</span>
+            )}
+            {!m.joined && m.lineUserId !== profile?.userId && (
+              <button
+                onClick={() => handleNudgeMember(m)}
+                className={`text-[10px] px-2.5 py-1 rounded-full font-semibold transition-colors ${
+                  nudgedMembers.has(m.id)
+                    ? "bg-gray-100 text-muted-foreground"
+                    : "bg-[#FFCC02]/20 text-[#8a6200] hover:bg-[#FFCC02]/30"
+                }`}
+                disabled={nudgedMembers.has(m.id)}
+                data-testid={`button-nudge-${m.id}`}
+              >
+                {nudgedMembers.has(m.id) ? "Nudged" : "Nudge"}
+              </button>
+            )}
           </motion.div>
         ))}
 

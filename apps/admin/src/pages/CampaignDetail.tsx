@@ -333,7 +333,7 @@ export default function CampaignDetail() {
 
   if (!campaign) {
     return (
-      <div className="w-full min-h-[100dvh] bg-white flex items-center justify-center" data-testid="campaign-not-found">
+      <div className="w-full min-h-[100dvh] bg-[#FCFCFC] flex items-center justify-center" data-testid="campaign-not-found">
         <div className="text-center px-8">
           <p className="text-6xl mb-4">🏷️</p>
           <h2 className="text-xl font-bold mb-2">Deal not found</h2>
@@ -355,7 +355,7 @@ export default function CampaignDetail() {
   const conditions = getConditions(campaign.dealType);
 
   return (
-    <div className="w-full min-h-[100dvh] bg-white pb-40" data-testid="campaign-detail-page">
+    <div className="w-full min-h-[100dvh] bg-[#FCFCFC] pb-40" data-testid="campaign-detail-page">
       <div className="relative w-full h-64 overflow-hidden">
         <img
           src={campaign.restaurantImage}

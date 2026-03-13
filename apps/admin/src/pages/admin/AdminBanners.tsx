@@ -723,9 +723,9 @@ export default function AdminBanners() {
                         className="h-full rounded-full transition-all"
                         style={{
                           width: `${spentPct}%`,
-                          background: spentPct > 80
+                          backgroundColor: spentPct > 80
                             ? "hsl(350, 89%, 60%)"
-                            : "linear-gradient(90deg, hsl(222, 47%, 20%), hsl(222, 47%, 35%))",
+                            : "var(--admin-blue)",
                         }}
                       />
                     </div>

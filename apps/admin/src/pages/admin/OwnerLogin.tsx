@@ -7,16 +7,35 @@ import { Lock, Mail } from "lucide-react";
 
 export default function OwnerLogin() {
   const [, setLocation] = useLocation();
+  const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [restaurantName, setRestaurantName] = useState("");
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    setSuccess("");
     setLoading(true);
     try {
+      if (mode === "register") {
+        await apiRequest("POST", "/api/owners/register", {
+          displayName,
+          email,
+          phone,
+          restaurantName,
+        });
+        setSuccess("Registration submitted. Admin approval is required before login.");
+        setMode("login");
+        setPassword("");
+        return;
+      }
+
       const res = await apiRequest("POST", "/api/admin/owner-login", { email, password });
       const data = await res.json();
       localStorage.setItem(
@@ -54,6 +73,24 @@ export default function OwnerLogin() {
             </div>
 
             <p className="text-sm text-muted-foreground">Sign in to manage your restaurant</p>
+            <div className="w-full flex items-center gap-2 p-1 bg-gray-100 rounded-xl">
+              <button
+                type="button"
+                onClick={() => setMode("login")}
+                className={`flex-1 text-xs font-semibold rounded-lg py-2 ${mode === "login" ? "bg-white text-foreground" : "text-muted-foreground"}`}
+                data-testid="tab-owner-login"
+              >
+                Login
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode("register")}
+                className={`flex-1 text-xs font-semibold rounded-lg py-2 ${mode === "register" ? "bg-white text-foreground" : "text-muted-foreground"}`}
+                data-testid="tab-owner-register"
+              >
+                Register
+              </button>
+            </div>
 
             <button
               type="button"
@@ -65,6 +102,55 @@ export default function OwnerLogin() {
             </button>
 
             <form onSubmit={handleSubmit} className="w-full flex flex-col gap-4">
+              {mode === "register" && (
+                <>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-sm font-medium text-muted-foreground" htmlFor="owner-display-name">
+                      Display Name
+                    </label>
+                    <Input
+                      id="owner-display-name"
+                      type="text"
+                      value={displayName}
+                      onChange={(e) => setDisplayName(e.target.value)}
+                      placeholder="Owner name"
+                      data-testid="input-owner-display-name"
+                      required
+                      className="rounded-xl border-gray-200 dark:border-border focus-visible:ring-foreground/20 focus-visible:border-foreground"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-sm font-medium text-muted-foreground" htmlFor="owner-phone">
+                      Phone
+                    </label>
+                    <Input
+                      id="owner-phone"
+                      type="text"
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value)}
+                      placeholder="+66..."
+                      data-testid="input-owner-phone"
+                      className="rounded-xl border-gray-200 dark:border-border focus-visible:ring-foreground/20 focus-visible:border-foreground"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-sm font-medium text-muted-foreground" htmlFor="owner-restaurant">
+                      Restaurant Name
+                    </label>
+                    <Input
+                      id="owner-restaurant"
+                      type="text"
+                      value={restaurantName}
+                      onChange={(e) => setRestaurantName(e.target.value)}
+                      placeholder="Restaurant name"
+                      data-testid="input-owner-restaurant"
+                      required
+                      className="rounded-xl border-gray-200 dark:border-border focus-visible:ring-foreground/20 focus-visible:border-foreground"
+                    />
+                  </div>
+                </>
+              )}
+
               <div className="flex flex-col gap-1.5">
                 <label className="text-sm font-medium text-muted-foreground" htmlFor="owner-email">
                   Email
@@ -84,28 +170,35 @@ export default function OwnerLogin() {
                 </div>
               </div>
 
-              <div className="flex flex-col gap-1.5">
-                <label className="text-sm font-medium text-muted-foreground" htmlFor="owner-password">
-                  Password
-                </label>
-                <div className="relative">
-                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground/40" />
-                  <Input
-                    id="owner-password"
-                    type="password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Enter password"
-                    data-testid="input-owner-password"
-                    required
-                    className="pl-10 rounded-xl border-gray-200 dark:border-border focus-visible:ring-foreground/20 focus-visible:border-foreground"
-                  />
+              {mode === "login" && (
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-sm font-medium text-muted-foreground" htmlFor="owner-password">
+                    Password
+                  </label>
+                  <div className="relative">
+                    <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground/40" />
+                    <Input
+                      id="owner-password"
+                      type="password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="Enter password"
+                      data-testid="input-owner-password"
+                      required
+                      className="pl-10 rounded-xl border-gray-200 dark:border-border focus-visible:ring-foreground/20 focus-visible:border-foreground"
+                    />
+                  </div>
                 </div>
-              </div>
+              )}
 
               {error && (
                 <p className="text-sm text-red-500" data-testid="text-owner-login-error">
                   {error}
+                </p>
+              )}
+              {success && (
+                <p className="text-sm text-emerald-600" data-testid="text-owner-register-success">
+                  {success}
                 </p>
               )}
 
@@ -115,7 +208,7 @@ export default function OwnerLogin() {
                 className="w-full text-sm font-semibold transition-all disabled:opacity-50 disabled:pointer-events-none bg-foreground hover:bg-foreground/90 text-white rounded-xl px-8 py-3 mt-2 shadow-md shadow-foreground/10"
                 data-testid="button-owner-login"
               >
-                {loading ? "Signing in..." : "Sign In"}
+                {loading ? "Processing..." : mode === "login" ? "Sign In" : "Submit Registration"}
               </button>
             </form>
           </div>

@@ -178,7 +178,7 @@ export default function RestaurantDetail() {
 
   if (!mockRestaurant && isLoading) {
     return (
-      <div className="w-full h-[100dvh] flex items-center justify-center bg-white">
+      <div className="w-full h-[100dvh] flex items-center justify-center bg-[#FCFCFC]">
         <LoadingMascot size="lg" />
       </div>
     );
@@ -186,7 +186,7 @@ export default function RestaurantDetail() {
 
   if (!restaurant || isError) {
     return (
-      <div className="w-full h-[100dvh] flex flex-col items-center justify-center bg-white gap-4">
+      <div className="w-full h-[100dvh] flex flex-col items-center justify-center bg-[#FCFCFC] gap-4">
         <span className="text-4xl">😕</span>
         <p className="text-muted-foreground">Restaurant not found</p>
         <button
@@ -237,7 +237,7 @@ export default function RestaurantDetail() {
   const todayHours = MOCK_HOURS.find((h) => h.day === today);
 
   return (
-    <div className="w-full min-h-[100dvh] bg-white pb-40" data-testid="restaurant-detail-page">
+    <div className="w-full min-h-[100dvh] bg-[#FCFCFC] pb-40" data-testid="restaurant-detail-page">
       <div className="relative w-full h-72 overflow-hidden">
         <div
           ref={scrollRef}

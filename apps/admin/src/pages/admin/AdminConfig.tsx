@@ -355,7 +355,7 @@ export default function AdminConfig() {
           <div className="flex items-center gap-3 mb-1">
             <div
               className="w-10 h-10 rounded-xl flex items-center justify-center"
-              style={{ background: "linear-gradient(135deg, hsl(45,100%,60%) 0%, hsl(40,100%,50%) 100%)" }}
+              style={{ backgroundColor: "var(--admin-blue)" }}
             >
               <Settings2 className="w-5 h-5 text-white" />
             </div>
@@ -482,8 +482,8 @@ export default function AdminConfig() {
                               <div
                                 className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
                                 style={{
-                                  background: feature.enabled
-                                    ? "linear-gradient(135deg, #6C2BD9 0%, #8B5CF6 100%)"
+                                  backgroundColor: feature.enabled
+                                    ? "var(--admin-blue)"
                                     : "hsl(0,0%,92%)",
                                 }}
                               >
@@ -548,9 +548,9 @@ export default function AdminConfig() {
                                 <div
                                   className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
                                   style={{
-                                    background: api.status === "connected"
-                                      ? "linear-gradient(135deg, hsl(142,50%,45%) 0%, hsl(142,50%,35%) 100%)"
-                                      : "linear-gradient(135deg, hsl(222,47%,88%) 0%, hsl(222,47%,80%) 100%)",
+                                    backgroundColor: api.status === "connected"
+                                      ? "#00B14F"
+                                      : "hsl(222,47%,88%)",
                                   }}
                                 >
                                   <api.icon className={`w-4 h-4 ${api.status === "connected" ? "text-white" : "text-foreground/60"}`} />
@@ -637,7 +637,7 @@ export default function AdminConfig() {
                     <div className="flex items-center gap-3 mb-4">
                       <div
                         className="w-9 h-9 rounded-xl flex items-center justify-center"
-                        style={{ background: "linear-gradient(135deg, hsl(142,72%,45%) 0%, hsl(160,60%,38%) 100%)" }}
+                        style={{ backgroundColor: "#00B14F" }}
                       >
                         <MapPin className="w-4 h-4 text-white" />
                       </div>
@@ -819,11 +819,11 @@ export default function AdminConfig() {
                                             className="h-full rounded-full transition-all"
                                             style={{
                                               width: `${place.trendingScore}%`,
-                                              background: place.trendingScore >= 80
-                                                ? "linear-gradient(90deg, hsl(142,50%,45%), hsl(142,50%,55%))"
+                                              backgroundColor: place.trendingScore >= 80
+                                                ? "#00B14F"
                                                 : place.trendingScore >= 50
-                                                  ? "linear-gradient(90deg, hsl(45,90%,50%), hsl(40,90%,55%))"
-                                                  : "linear-gradient(90deg, hsl(0,0%,60%), hsl(0,0%,70%))",
+                                                  ? "#FFCC02"
+                                                  : "hsl(0,0%,65%)",
                                             }}
                                             data-testid={`bar-trending-${idx}`}
                                           />
@@ -1137,7 +1137,7 @@ export default function AdminConfig() {
                   </div>
 
                   <div className="flex-1 p-3 overflow-hidden">
-                    <div className="w-full h-24 rounded-xl mb-2" style={{ background: "linear-gradient(135deg, hsl(200,30%,92%) 0%, hsl(210,25%,88%) 100%)" }}>
+                    <div className="w-full h-24 rounded-xl mb-2" style={{ backgroundColor: "hsl(200,30%,92%)" }}>
                       <div className="flex items-center justify-center h-full">
                         <MapPin className="w-4 h-4 text-muted-foreground/40" />
                       </div>
@@ -1255,7 +1255,7 @@ export default function AdminConfig() {
                         </div>
                       </div>
                       <div className="flex-1 p-2">
-                        <div className="w-full h-16 rounded-lg mb-1.5" style={{ background: "linear-gradient(135deg, hsl(200,30%,92%), hsl(210,25%,88%))" }}>
+                        <div className="w-full h-16 rounded-lg mb-1.5" style={{ backgroundColor: "hsl(200,30%,92%)" }}>
                           <div className="flex items-center justify-center h-full">
                             <MapPin className="w-3 h-3 text-muted-foreground/40" />
                           </div>

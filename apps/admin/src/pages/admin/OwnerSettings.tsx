@@ -34,7 +34,7 @@ function getOwnerHeaders() {
 export default function OwnerSettings() {
   const session = getAdminSession();
   const { toast } = useToast();
-  const [activeTab, setActiveTab] = useState<"profile" | "notifications" | "subscription" | "payments">("profile");
+  const [activeTab, setActiveTab] = useState<"profile" | "notifications" | "subscription" | "payments" | "team">("profile");
 
   const { data: dashData, isLoading } = useQuery<any>({
     queryKey: ["/api/admin/owner/dashboard"],
@@ -91,11 +91,11 @@ export default function OwnerSettings() {
   }
 
   const mockInvoices = [
-    { id: "INV-2024-001", date: "2024-12-01", tier: "Premium", amount: "฿2,490", status: "paid" as string },
-    { id: "INV-2024-002", date: "2024-11-01", tier: "Premium", amount: "฿2,490", status: "paid" as string },
-    { id: "INV-2024-003", date: "2024-10-01", tier: "Basic", amount: "฿990", status: "paid" as string },
-    { id: "INV-2024-004", date: "2024-09-01", tier: "Basic", amount: "฿990", status: "paid" as string },
-    { id: "INV-2024-005", date: "2024-08-01", tier: "Basic", amount: "฿990", status: "failed" as string },
+    { id: "INV-2024-001", date: "2024-12-01", tier: "Premium", amount: "฿2,490", status: "paid" as const },
+    { id: "INV-2024-002", date: "2024-11-01", tier: "Premium", amount: "฿2,490", status: "paid" as const },
+    { id: "INV-2024-003", date: "2024-10-01", tier: "Basic", amount: "฿990", status: "paid" as const },
+    { id: "INV-2024-004", date: "2024-09-01", tier: "Basic", amount: "฿990", status: "paid" as const },
+    { id: "INV-2024-005", date: "2024-08-01", tier: "Basic", amount: "฿990", status: "failed" as const },
   ];
 
   const thaiBanks = [
@@ -112,6 +112,7 @@ export default function OwnerSettings() {
     { key: "notifications" as const, label: "Notifications", icon: Bell },
     { key: "subscription" as const, label: "Subscription", icon: CreditCard },
     { key: "payments" as const, label: "Payments", icon: Wallet },
+    { key: "team" as const, label: "Team", icon: Building },
   ];
 
   const tierInfo: Record<string, { name: string; price: string; features: string[] }> = {
@@ -246,7 +247,7 @@ export default function OwnerSettings() {
 
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6" data-testid="section-security">
             <div className="flex items-center gap-2 mb-4">
-              <div className="w-[3px] h-4 bg-[#3B82F6] rounded-full" />
+              <div className="w-[3px] h-4 bg-[var(--admin-blue)] rounded-full" />
               <h3 className="text-[15px] font-semibold text-gray-800">Security</h3>
             </div>
             <button
@@ -657,7 +658,7 @@ export default function OwnerSettings() {
                         >
                           {inv.status === "paid" && <CheckCircle2 className="w-3 h-3" />}
                           {inv.status === "failed" && <XCircle className="w-3 h-3" />}
-                          {inv.status === "pending" && <Clock className="w-3 h-3" />}
+                          {(inv.status as string) === "pending" && <Clock className="w-3 h-3" />}
                           {inv.status.charAt(0).toUpperCase() + inv.status.slice(1)}
                         </span>
                       </td>
@@ -665,6 +666,74 @@ export default function OwnerSettings() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === "team" && (
+        <div className="space-y-4" data-testid="section-team">
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+            <div className="flex items-center justify-between mb-5">
+              <div className="flex items-center gap-2">
+                <div className="w-[3px] h-4 bg-[#00B14F] rounded-full" />
+                <h3 className="text-[15px] font-semibold text-gray-800">Team Members</h3>
+                <span className="bg-[#00B14F]/10 text-[#00B14F] text-[10px] font-bold rounded-full px-2 py-0.5">3</span>
+              </div>
+              <button
+                onClick={() => toast({ title: "Coming Soon", description: "Team invitations will be available in your next update." })}
+                className="text-xs font-medium bg-[#FFCC02] text-gray-900 rounded-lg px-3 py-1.5 hover:bg-[#FFCC02]/90 transition-colors"
+                data-testid="button-invite-member"
+              >
+                Invite Member
+              </button>
+            </div>
+            <div className="space-y-3">
+              {[
+                { name: owner?.displayName || "Somchai", email: owner?.email || "owner@toastbkk.com", role: "Owner", status: "active", initials: (owner?.displayName || "S").charAt(0) },
+                { name: "Nattaporn K.", email: "nattaporn@jayfai.co.th", role: "Manager", status: "active", initials: "N" },
+                { name: "Wichai S.", email: "wichai@jayfai.co.th", role: "Staff", status: "pending", initials: "W" },
+              ].map((member, i) => (
+                <div key={i} className="flex items-center gap-3 p-3 rounded-xl border border-gray-100" data-testid={`team-member-${i}`}>
+                  <div className="w-10 h-10 rounded-full bg-[#00B14F]/10 flex items-center justify-center text-sm font-bold text-[#00B14F]">
+                    {member.initials}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-gray-800">{member.name}</p>
+                    <p className="text-xs text-gray-400">{member.email}</p>
+                  </div>
+                  <span className={`text-[10px] font-medium rounded-full px-2 py-0.5 ${
+                    member.role === "Owner" ? "bg-[#FFCC02]/15 text-gray-700" :
+                    member.role === "Manager" ? "bg-[var(--admin-blue-10)] text-[var(--admin-blue)]" :
+                    "bg-gray-100 text-gray-500"
+                  }`}>{member.role}</span>
+                  <span className={`text-[10px] font-medium rounded-full px-2 py-0.5 ${
+                    member.status === "active" ? "bg-[#00B14F]/10 text-[#00B14F]" : "bg-amber-50 text-amber-600"
+                  }`}>{member.status === "active" ? "Active" : "Pending"}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+            <div className="flex items-center gap-2 mb-4">
+              <div className="w-[3px] h-4 bg-[var(--admin-blue)] rounded-full" />
+              <h3 className="text-[15px] font-semibold text-gray-800">Roles & Permissions</h3>
+            </div>
+            <div className="space-y-2">
+              {[
+                { role: "Owner", desc: "Full access to all settings, billing, team management", perms: "All" },
+                { role: "Manager", desc: "Menu, promotions, reviews, analytics access", perms: "Most" },
+                { role: "Staff", desc: "View analytics and respond to reviews only", perms: "Limited" },
+              ].map((r, i) => (
+                <div key={i} className="flex items-center gap-3 p-3 rounded-xl border border-gray-50">
+                  <div className="flex-1">
+                    <p className="text-sm font-medium text-gray-700">{r.role}</p>
+                    <p className="text-[11px] text-gray-400">{r.desc}</p>
+                  </div>
+                  <span className="text-[10px] text-gray-400">{r.perms}</span>
+                </div>
+              ))}
             </div>
           </div>
         </div>

@@ -17,6 +17,7 @@ import { SaveBucketPicker } from "@/components/SaveBucketPicker";
 import { FoodIconFromEmoji } from "@/components/FoodIcon";
 import { useSavedRestaurants } from "@/hooks/use-saved-restaurants";
 import { useLineProfile } from "@/lib/useLineProfile";
+import { useSessions } from "@/lib/sessionStore";
 import { trackEvent } from "@/lib/analytics";
 import { useFeatureFlags } from "@/hooks/use-feature-flags";
 import { useBranding } from "@/hooks/use-branding";
@@ -51,22 +52,6 @@ const FILTER_OPTIONS = {
     { value: "5000", label: "< 5 km" },
   ],
 };
-
-const RESTAURANT_PINS = [
-  { id: 201, name: "Thipsamai", emoji: "🍜", category: "Thai", lat: 13.7520, lng: 100.5050, rating: "4.9", price: "฿", imageUrl: "https://images.unsplash.com/photo-1559314809-0d155014e29e?w=600&auto=format&fit=crop&q=60", description: "Famous pad thai since 1966" },
-  { id: 251, name: "Sushi Masato", emoji: "🍣", category: "Sushi", lat: 13.7320, lng: 100.5783, rating: "4.9", price: "฿฿฿", imageUrl: "https://images.unsplash.com/photo-1579871494447-9811cf80d66c?w=600&auto=format&fit=crop&q=60", description: "Intimate 8-seat omakase counter" },
-  { id: 261, name: "Daniel Thaiger", emoji: "🍔", category: "Burgers", lat: 13.7380, lng: 100.5680, rating: "4.5", price: "฿฿", imageUrl: "https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=600&auto=format&fit=crop&q=60", description: "Bangkok's OG food truck burger" },
-  { id: 231, name: "Peppina", emoji: "🍕", category: "Pizza", lat: 13.7310, lng: 100.5690, rating: "4.8", price: "฿฿", imageUrl: "https://images.unsplash.com/photo-1513104890138-7c749659a591?w=600&auto=format&fit=crop&q=60", description: "Neapolitan pizza, wood-fired" },
-  { id: 241, name: "Krua Apsorn", emoji: "🍛", category: "Thai", lat: 13.7620, lng: 100.5100, rating: "4.8", price: "฿", imageUrl: "https://images.unsplash.com/photo-1455619452474-d2be8b1e70cd?w=600&auto=format&fit=crop&q=60", description: "Royal recipe green curry" },
-  { id: 244, name: "Jay Fai", emoji: "🔥", category: "Thai", lat: 13.7560, lng: 100.5018, rating: "4.9", price: "฿฿฿", imageUrl: "https://images.unsplash.com/photo-1569562211093-4ed0d0758f12?w=600&auto=format&fit=crop&q=60", description: "Michelin-starred street food" },
-  { id: 301, name: "Tep Bar", emoji: "🍸", category: "Bars", lat: 13.7280, lng: 100.5130, rating: "4.7", price: "฿฿", imageUrl: "https://images.unsplash.com/photo-1514362545857-3bc16c4c7d1b?w=600&auto=format&fit=crop&q=60", description: "Thai heritage cocktails & live music" },
-  { id: 311, name: "Roots Coffee", emoji: "☕", category: "Cafe", lat: 13.7466, lng: 100.5393, rating: "4.7", price: "฿฿", imageUrl: "https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?w=600&auto=format&fit=crop&q=60", description: "Specialty pour-over coffee" },
-  { id: 321, name: "After You", emoji: "🍰", category: "Desserts", lat: 13.7320, lng: 100.5783, rating: "4.5", price: "฿฿", imageUrl: "https://images.unsplash.com/photo-1551024506-0bccd828d307?w=600&auto=format&fit=crop&q=60", description: "Famous kakigori & honey toast" },
-  { id: 282, name: "Din Tai Fung", emoji: "🥟", category: "Chinese", lat: 13.7466, lng: 100.5393, rating: "4.7", price: "฿฿", imageUrl: "https://images.unsplash.com/photo-1496116218417-1a781b1c416c?w=600&auto=format&fit=crop&q=60", description: "World-famous xiao long bao" },
-  { id: 411, name: "Roast", emoji: "🍳", category: "Breakfast", lat: 13.7320, lng: 100.5783, rating: "4.7", price: "฿฿", imageUrl: "https://images.unsplash.com/photo-1525351484163-7529414344d8?w=600&auto=format&fit=crop&q=60", description: "Bangkok's premier brunch spot" },
-  { id: 461, name: "KOI Th\u00e9", emoji: "🧋", category: "Bubble Tea", lat: 13.7454, lng: 100.5340, rating: "4.5", price: "฿", imageUrl: "https://images.unsplash.com/photo-1541696490-8744a5dc0228?w=600&auto=format&fit=crop&q=60", description: "Taiwan's golden bubble milk tea" },
-  { id: 441, name: "Holey Bakery", emoji: "🥐", category: "Bakery", lat: 13.7310, lng: 100.5690, rating: "4.7", price: "฿฿", imageUrl: "https://images.unsplash.com/photo-1530610476181-d83430b64dcd?w=600&auto=format&fit=crop&q=60", description: "Award-winning French bakery" },
-];
 
 const ALL_SEARCHABLE = [
   { id: 201, name: "Thipsamai", category: "Thai", rating: "4.9", address: "Maha Chai Rd", menus: ["pad thai", "stir fry noodles", "spring rolls", "thai fried rice"] },
@@ -202,6 +187,7 @@ function getContextLine(): string {
 
 export default function Home() {
   const [, navigate] = useLocation();
+  const sessions = useSessions();
   const { isEnabled } = useFeatureFlags();
   const { logoUrl, mascotUrl, heroTitle, heroSubtitle, mascotGreeting, accentColor } = useBranding();
   const { isVibeEnabled } = useVibesConfig();
@@ -212,9 +198,18 @@ export default function Home() {
   const { profile: tasteProfile, getSuggestionTitle, topPreference, getMoodSignal } = useTasteProfile();
   const { recordVibe } = useVibeFrequency();
   const { data: suggestions = [], isLoading: suggestionsLoading } = useSuggestions();
+  const [userLocation, setUserLocation] = useState({ lat: DEFAULT_LAT, lng: DEFAULT_LNG });
   const { data: nearbyRestaurants = [], isLoading: nearbyLoading } = useRestaurants("new");
-  const { data: allRestaurants = [], isLoading: mapLoading } = useRestaurants();
+  const { data: allRestaurants = [], isLoading: mapLoading } = useRestaurants(undefined, {
+    lat: userLocation.lat,
+    lng: userLocation.lng,
+    radius: 5000,
+  });
   const { profile: userProfile } = useLineProfile();
+  const resumableGroupSession = useMemo(() => {
+    const now = Date.now();
+    return sessions.find((session) => session.type === "group" && now - session.startedAt <= 10 * 60 * 1000);
+  }, [sessions]);
 
   const bindDrag = useDrag(
     ({ movement: [, my], velocity: [, vy], last }) => {
@@ -273,7 +268,6 @@ export default function Home() {
   const [activePrices, setActivePrices] = useState<string[]>([]);
   const [activeDietary, setActiveDietary] = useState<string[]>([]);
   const [activeDistance, setActiveDistance] = useState<string | null>(null);
-  const [userLocation, setUserLocation] = useState({ lat: DEFAULT_LAT, lng: DEFAULT_LNG });
 
   const inputRef = useRef<HTMLInputElement>(null);
   const filterRef = useRef<HTMLDivElement>(null);
@@ -321,7 +315,6 @@ export default function Home() {
   const getPriceLabel = (level: number) => "฿".repeat(Math.max(1, Math.min(4, level || 1)));
 
   const restaurantPins = useMemo(() => {
-    if (allRestaurants.length === 0) return RESTAURANT_PINS;
     return allRestaurants
       .filter((r) => Number.isFinite(Number(r.lat)) && Number.isFinite(Number(r.lng)))
       .map((r) => ({
@@ -1117,6 +1110,30 @@ export default function Home() {
             category="New"
           />
 
+          {resumableGroupSession && (
+            <div className="px-6 pt-5 pb-0">
+              <div
+                className="rounded-2xl px-5 py-4 flex items-center justify-between gap-3 bg-white border border-gray-100"
+                style={{ boxShadow: "0 2px 12px -3px rgba(0,0,0,0.05)" }}
+                data-testid="card-continue-session"
+              >
+                <div className="min-w-0">
+                  <p className="text-[15px] font-bold text-foreground truncate">Continue session</p>
+                  <p className="text-xs text-muted-foreground truncate">
+                    {resumableGroupSession.id} · {resumableGroupSession.memberCount ?? 0} members
+                  </p>
+                </div>
+                <button
+                  onClick={() => navigate(resumableGroupSession.route)}
+                  className="px-4 py-2 rounded-xl bg-[#FFCC02] text-[#2d2000] text-xs font-bold whitespace-nowrap"
+                  data-testid="button-continue-session"
+                >
+                  Continue
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="px-6 pt-5 pb-2">
             <motion.div
               initial={{ opacity: 0, y: 8 }}
@@ -1438,3 +1455,4 @@ export default function Home() {
     </div>
   );
 }
+

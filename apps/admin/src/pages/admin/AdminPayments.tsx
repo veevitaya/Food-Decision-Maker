@@ -20,14 +20,14 @@ const revenueKpis = [
     value: "฿1,248,500",
     delta: "+18.2%",
     icon: DollarSign,
-    iconBg: "#3B82F6",
+    iconBg: "var(--admin-blue)",
   },
   {
     label: "Active Subscriptions",
     value: "342",
     delta: "+12",
     icon: Users,
-    iconBg: "#EC4899",
+    iconBg: "var(--admin-pink)",
   },
   {
     label: "MRR",
@@ -41,7 +41,7 @@ const revenueKpis = [
     value: "2.1%",
     delta: "-0.3%",
     icon: AlertCircle,
-    iconBg: "#3B82F6",
+    iconBg: "var(--admin-cyan)",
   },
 ];
 
@@ -58,8 +58,8 @@ const transactions = [
 
 const subscriptionTiers = [
   { tier: "Free", count: 128, color: "#94A3B8", pct: 27 },
-  { tier: "Basic", count: 156, color: "#3B82F6", pct: 33 },
-  { tier: "Premium", count: 132, color: "#EC4899", pct: 28 },
+  { tier: "Basic", count: 156, color: "var(--admin-blue)", pct: 33 },
+  { tier: "Premium", count: 132, color: "var(--admin-pink)", pct: 28 },
   { tier: "Enterprise", count: 54, color: "#FFCC02", pct: 12 },
 ];
 
@@ -118,7 +118,7 @@ export default function AdminPayments() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5" data-testid="gateway-status-card">
           <h3 className="text-sm font-semibold text-gray-800 mb-4 flex items-center gap-2">
-            <CreditCard className="w-4 h-4" style={{ color: "#3B82F6" }} />
+            <CreditCard className="w-4 h-4" style={{ color: "var(--admin-blue)" }} />
             Payment Gateway
           </h3>
           <div className="space-y-3">
@@ -146,7 +146,7 @@ export default function AdminPayments() {
 
         <div className="lg:col-span-2 bg-white rounded-2xl border border-gray-100 shadow-sm p-5" data-testid="subscription-breakdown-card">
           <h3 className="text-sm font-semibold text-gray-800 mb-4 flex items-center gap-2">
-            <BarChart3 className="w-4 h-4" style={{ color: "#EC4899" }} />
+            <BarChart3 className="w-4 h-4" style={{ color: "var(--admin-pink)" }} />
             Subscription Breakdown
           </h3>
           <div className="flex items-end gap-1 h-32 mb-4">
@@ -179,7 +179,7 @@ export default function AdminPayments() {
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm" data-testid="transactions-table-card">
         <div className="flex items-center justify-between gap-3 flex-wrap p-5 pb-3">
           <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-2">
-            <DollarSign className="w-4 h-4" style={{ color: "#3B82F6" }} />
+            <DollarSign className="w-4 h-4" style={{ color: "var(--admin-blue)" }} />
             Recent Transactions
           </h3>
           <span className="text-xs text-gray-400">{transactions.length} transactions</span>
@@ -233,7 +233,7 @@ export default function AdminPayments() {
 
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5" data-testid="payout-settings-card">
         <h3 className="text-sm font-semibold text-gray-800 mb-4 flex items-center gap-2">
-          <Building2 className="w-4 h-4" style={{ color: "#EC4899" }} />
+          <Building2 className="w-4 h-4" style={{ color: "var(--admin-pink)" }} />
           Payout Settings
         </h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -267,14 +267,14 @@ export default function AdminPayments() {
               </div>
               <div className="flex justify-between">
                 <span className="text-sm text-gray-500">Pending Amount</span>
-                <span className="text-sm font-semibold" style={{ color: "#3B82F6" }} data-testid="text-payout-pending">฿186,400</span>
+                <span className="text-sm font-semibold" style={{ color: "var(--admin-blue)" }} data-testid="text-payout-pending">฿186,400</span>
               </div>
             </div>
           </div>
         </div>
         <button
           className="mt-4 text-sm font-medium px-4 py-2 rounded-xl text-white transition-colors"
-          style={{ backgroundColor: "#3B82F6" }}
+          style={{ backgroundColor: "var(--admin-blue)" }}
           data-testid="button-edit-payout"
         >
           Edit Payout Settings

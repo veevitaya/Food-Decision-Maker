@@ -18,6 +18,8 @@ import {
   TrendingUp,
   Bell,
   CreditCard,
+  Lightbulb,
+  HelpCircle,
 } from "lucide-react";
 import toastLogo from "@assets/toast_logo_nobg.png";
 
@@ -54,9 +56,11 @@ const adminNavGroups: NavGroup[] = [
     ],
   },
   {
-    label: "Content",
+    label: "Management",
     items: [
+      { label: "Owners", icon: ShieldCheck, href: "/admin/owners" },
       { label: "Restaurants", icon: Utensils, href: "/admin/restaurants" },
+      { label: "Menus", icon: UtensilsCrossed, href: "/admin/menus" },
       { label: "Campaigns", icon: Megaphone, href: "/admin/campaigns" },
       { label: "Banners", icon: ImageIcon, href: "/admin/banners" },
     ],
@@ -71,12 +75,22 @@ const adminNavGroups: NavGroup[] = [
     label: "Insights",
     items: [
       { label: "Analytics", icon: BarChart3, href: "/admin/analytics" },
+      { label: "Food Trends", icon: TrendingUp, href: "/admin/food-trends" },
+      { label: "Geography", icon: Users, href: "/admin/geography" },
+      { label: "Swipe Sessions", icon: Users, href: "/admin/swipe-sessions" },
+      { label: "Predictions", icon: Lightbulb, href: "/admin/predictive-intelligence" },
+      { label: "Partner Clickouts", icon: ExternalLink, href: "/admin/partner-clickouts" },
+      { label: "Audit Logs", icon: ShieldCheck, href: "/admin/audit-logs" },
     ],
   },
   {
     label: "Settings",
     items: [
       { label: "Payments", icon: CreditCard, href: "/admin/payments" },
+      { label: "Integrations", icon: Settings2, href: "/admin/integrations" },
+      { label: "Data Ops", icon: Settings2, href: "/admin/data-ops" },
+      { label: "Reports", icon: BarChart3, href: "/admin/reports" },
+      { label: "Coming Soon", icon: Lightbulb, href: "/admin/coming-soon" },
       { label: "App Config", icon: Settings2, href: "/admin/config" },
     ],
   },
@@ -101,7 +115,23 @@ const ownerNavGroups: NavGroup[] = [
     label: "Insights",
     items: [
       { label: "Performance", icon: TrendingUp, href: "/admin/owner/performance" },
+      { label: "AI Insights", icon: Lightbulb, href: "/admin/owner/insights" },
+      { label: "Customer Insights", icon: Users, href: "/admin/owner/customer-insights" },
+      { label: "Decision Intel", icon: Lightbulb, href: "/admin/owner/decision-intelligence" },
+      { label: "Delivery Conversions", icon: TrendingUp, href: "/admin/owner/delivery-conversions" },
       { label: "Notifications", icon: Bell, href: "/admin/owner/notifications" },
+    ],
+  },
+  {
+    label: "Billing",
+    items: [
+      { label: "Subscription", icon: CreditCard, href: "/admin/owner/billing" },
+    ],
+  },
+  {
+    label: "Help",
+    items: [
+      { label: "Support", icon: HelpCircle, href: "/admin/owner/support" },
     ],
   },
   {

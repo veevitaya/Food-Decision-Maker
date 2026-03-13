@@ -30,11 +30,96 @@ export const restaurants = pgTable("restaurants", {
   phone: text("phone"),
   openingHours: jsonb("opening_hours").$type<RestaurantOpeningHour[]>(),
   reviews: jsonb("reviews").$type<RestaurantReview[]>(),
+  isSponsored: boolean("is_sponsored").notNull().default(false),
+  sponsoredUntil: text("sponsored_until"),
 });
 
 export const insertRestaurantSchema = createInsertSchema(restaurants).omit({ id: true });
 export type Restaurant = typeof restaurants.$inferSelect;
 export type InsertRestaurant = typeof restaurants.$inferInsert;
+
+export const menus = pgTable("menus", {
+  id: serial("id").primaryKey(),
+  restaurantId: integer("restaurant_id").notNull().references(() => restaurants.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  description: text("description"),
+  imageUrl: text("image_url"),
+  priceApprox: integer("price_approx"),
+  tags: text("tags").array().default([]),
+  dietFlags: text("diet_flags").array().default([]),
+  isActive: boolean("is_active").notNull().default(true),
+  isSponsored: boolean("is_sponsored").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  restaurantIdIdx: index("menus_restaurant_id_idx").on(t.restaurantId),
+  nameIdx: index("menus_name_idx").on(t.name),
+}));
+
+export const insertMenuSchema = createInsertSchema(menus).omit({ id: true, createdAt: true });
+export type Menu = typeof menus.$inferSelect;
+export type InsertMenu = z.infer<typeof insertMenuSchema>;
+
+export const promotions = pgTable("promotions", {
+  id: serial("id").primaryKey(),
+  restaurantId: integer("restaurant_id").notNull().references(() => restaurants.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  description: text("description"),
+  imageUrl: text("image_url"),
+  startDate: text("start_date"),
+  endDate: text("end_date"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  restaurantIdIdx: index("promotions_restaurant_id_idx").on(t.restaurantId),
+  isActiveIdx: index("promotions_is_active_idx").on(t.isActive),
+}));
+
+export const insertPromotionSchema = createInsertSchema(promotions).omit({ id: true, createdAt: true });
+export type Promotion = typeof promotions.$inferSelect;
+export type InsertPromotion = z.infer<typeof insertPromotionSchema>;
+
+export const restaurantOwners = pgTable("restaurant_owners", {
+  id: serial("id").primaryKey(),
+  restaurantId: integer("restaurant_id").notNull().references(() => restaurants.id, { onDelete: "cascade" }),
+  lineUserId: text("line_user_id"),
+  displayName: text("display_name").notNull(),
+  email: text("email").notNull().unique(),
+  phone: text("phone"),
+  isVerified: boolean("is_verified").notNull().default(false),
+  verificationStatus: text("verification_status").notNull().default("pending"),
+  subscriptionTier: text("subscription_tier").notNull().default("free"),
+  subscriptionExpiry: text("subscription_expiry"),
+  paymentConnected: boolean("payment_connected").notNull().default(false),
+  paymentMethod: text("payment_method"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  restaurantIdIdx: index("restaurant_owners_restaurant_id_idx").on(t.restaurantId),
+  emailIdx: index("restaurant_owners_email_idx").on(t.email),
+}));
+
+export const insertRestaurantOwnerSchema = createInsertSchema(restaurantOwners).omit({ id: true, createdAt: true });
+export type RestaurantOwnerRow = typeof restaurantOwners.$inferSelect;
+export type InsertRestaurantOwner = z.infer<typeof insertRestaurantOwnerSchema>;
+
+export const restaurantClaims = pgTable("restaurant_claims", {
+  id: serial("id").primaryKey(),
+  restaurantId: integer("restaurant_id").notNull().references(() => restaurants.id, { onDelete: "cascade" }),
+  ownerId: integer("owner_id").notNull().references(() => restaurantOwners.id, { onDelete: "cascade" }),
+  ownershipType: text("ownership_type").default("single_location"),
+  status: text("status").notNull().default("pending"),
+  submittedAt: timestamp("submitted_at").defaultNow().notNull(),
+  reviewNotes: text("review_notes"),
+  proofDocuments: text("proof_documents").array().default([]),
+  verificationChecklist: jsonb("verification_checklist").$type<Record<string, boolean>>().default({}),
+}, (t) => ({
+  restaurantIdIdx: index("restaurant_claims_restaurant_id_idx").on(t.restaurantId),
+  ownerIdIdx: index("restaurant_claims_owner_id_idx").on(t.ownerId),
+  statusIdx: index("restaurant_claims_status_idx").on(t.status),
+}));
+
+export const insertRestaurantClaimSchema = createInsertSchema(restaurantClaims).omit({ id: true, submittedAt: true });
+export type RestaurantClaimRow = typeof restaurantClaims.$inferSelect;
+export type InsertRestaurantClaim = z.infer<typeof insertRestaurantClaimSchema>;
 
 export const userPreferences = pgTable("user_preferences", {
   id: serial("id").primaryKey(),
@@ -73,6 +158,7 @@ export const groupSessions = pgTable("group_sessions", {
   code: text("code").notNull().unique(),
   status: text("status").notNull().default("active"),
   settings: jsonb("settings").$type<{
+    mode?: "restaurant" | "menu";
     locations?: string[];
     budget?: string;
     diet?: string[];
@@ -265,6 +351,26 @@ export const insertAnalyticsDailyRollupSchema = createInsertSchema(analyticsDail
 export type AnalyticsDailyRollup = typeof analyticsDailyRollups.$inferSelect;
 export type InsertAnalyticsDailyRollup = z.infer<typeof insertAnalyticsDailyRollupSchema>;
 
+export const notificationLogs = pgTable("notification_logs", {
+  id: serial("id").primaryKey(),
+  channel: text("channel").notNull().default("line"), // "line" | "internal"
+  type: text("type").notNull(), // "campaign", "nudge", "group_result"
+  recipientId: text("recipient_id"), // LINE userId or group member name
+  campaignId: integer("campaign_id"),
+  sessionCode: text("session_code"),
+  messageText: text("message_text").notNull(),
+  status: text("status").notNull().default("sent"), // "sent" | "failed" | "skipped"
+  sentBy: text("sent_by"), // admin username or "system"
+  sentAt: timestamp("sent_at").defaultNow().notNull(),
+}, (t) => ({
+  typeIdx: index("notification_logs_type_idx").on(t.type),
+  sentAtIdx: index("notification_logs_sent_at_idx").on(t.sentAt),
+}));
+
+export const insertNotificationLogSchema = createInsertSchema(notificationLogs).omit({ id: true, sentAt: true });
+export type NotificationLog = typeof notificationLogs.$inferSelect;
+export type InsertNotificationLog = z.infer<typeof insertNotificationLogSchema>;
+
 // UI compatibility types for admin modules
 export type AnalyticsEvent = {
   id: number;
@@ -342,3 +448,41 @@ export type AdminUser = {
   updatedAt?: string;
   passwordHash?: string;
 };
+
+export const adminUsers = pgTable("admin_users", {
+  id: serial("id").primaryKey(),
+  username: text("username").notNull().unique(),
+  email: text("email").notNull().unique(),
+  passwordHash: text("password_hash").notNull(),
+  role: text("role").notNull().default("admin"),
+  permissions: jsonb("permissions").$type<AdminPermission[]>().default([]),
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  emailIdx: index("admin_users_email_idx").on(t.email),
+}));
+
+export const insertAdminUserSchema = createInsertSchema(adminUsers).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertAdminUser = z.infer<typeof insertAdminUserSchema>;
+
+export const sponsoredRequests = pgTable("sponsored_requests", {
+  id: serial("id").primaryKey(),
+  restaurantId: integer("restaurant_id").notNull().references(() => restaurants.id, { onDelete: "cascade" }),
+  ownerId: integer("owner_id").notNull().references(() => restaurantOwners.id, { onDelete: "cascade" }),
+  status: text("status").notNull().default("pending"),
+  requestedStartDate: text("requested_start_date"),
+  requestedEndDate: text("requested_end_date"),
+  notes: text("notes"),
+  reviewNotes: text("review_notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  reviewedAt: timestamp("reviewed_at"),
+}, (t) => ({
+  restaurantIdIdx: index("sponsored_requests_restaurant_id_idx").on(t.restaurantId),
+  ownerIdIdx: index("sponsored_requests_owner_id_idx").on(t.ownerId),
+  statusIdx: index("sponsored_requests_status_idx").on(t.status),
+}));
+
+export const insertSponsoredRequestSchema = createInsertSchema(sponsoredRequests).omit({ id: true, createdAt: true, reviewedAt: true });
+export type SponsoredRequest = typeof sponsoredRequests.$inferSelect;
+export type InsertSponsoredRequest = z.infer<typeof insertSponsoredRequestSchema>;

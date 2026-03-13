@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useLocation } from "wouter";
 import {
   Search, X, MapPin, ArrowRight, ChevronDown,
-  Sparkles, SlidersHorizontal, Users, Navigation, Grid3X3,
+  Sparkles, SlidersHorizontal, Users, Navigation,
 } from "lucide-react";
 import { BottomNav } from "@/components/BottomNav";
 import { SessionBar } from "@/components/SessionBar";
@@ -13,12 +13,14 @@ import { useTasteProfile } from "@/hooks/use-taste-profile";
 import { useRestaurants, useSuggestions } from "@/hooks/use-restaurants";
 import { useVibeFrequency } from "@/hooks/use-vibe-frequency";
 import { SaveBucketPicker } from "@/components/SaveBucketPicker";
-import { FoodIconFromEmoji } from "@/components/FoodIcon";
+import { FoodIconFromEmoji, FoodIcon, emojiToIconName, getAnimClass } from "@/components/FoodIcon";
 import { useSavedRestaurants } from "@/hooks/use-saved-restaurants";
 import { useLineProfile } from "@/lib/useLineProfile";
-import { trackEvent } from "@/lib/analytics";
+import { MODE_TO_VIBE } from "@shared/vibeConfig";
 import toastLogoPath from "@assets/toast_logo_nobg.png";
 import mascotPath from "@assets/toast_mascot_nobg.png";
+import toastCharPath from "@assets/IMG_9345_1772899599160.png";
+import toastWafflePath from "@assets/IMG_9677_1772904144672.jpeg";
 
 const FILTER_OPTIONS = {
   sortBy: [
@@ -26,7 +28,7 @@ const FILTER_OPTIONS = {
     { value: "distance", label: "Nearest" },
     { value: "price_low", label: "Price: Low" },
     { value: "price_high", label: "Price: High" },
-    { value: "trending", label: "Trending" },
+    { value: "trending", label: "Popular" },
   ],
   priceRange: [
     { value: "1", label: "฿" },
@@ -49,19 +51,19 @@ const FILTER_OPTIONS = {
 };
 
 const RESTAURANT_PINS = [
-  { id: 201, name: "Thipsamai", emoji: "🍜", category: "Thai", lat: 13.7520, lng: 100.5050, rating: "4.9", price: "฿", imageUrl: "https://images.unsplash.com/photo-1559314809-0d155014e29e?w=600&auto=format&fit=crop&q=60", description: "Famous pad thai since 1966" },
-  { id: 251, name: "Sushi Masato", emoji: "🍣", category: "Sushi", lat: 13.7320, lng: 100.5783, rating: "4.9", price: "฿฿฿", imageUrl: "https://images.unsplash.com/photo-1579871494447-9811cf80d66c?w=600&auto=format&fit=crop&q=60", description: "Intimate 8-seat omakase counter" },
-  { id: 261, name: "Daniel Thaiger", emoji: "🍔", category: "Burgers", lat: 13.7380, lng: 100.5680, rating: "4.5", price: "฿฿", imageUrl: "https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=600&auto=format&fit=crop&q=60", description: "Bangkok's OG food truck burger" },
-  { id: 231, name: "Peppina", emoji: "🍕", category: "Pizza", lat: 13.7310, lng: 100.5690, rating: "4.8", price: "฿฿", imageUrl: "https://images.unsplash.com/photo-1513104890138-7c749659a591?w=600&auto=format&fit=crop&q=60", description: "Neapolitan pizza, wood-fired" },
-  { id: 241, name: "Krua Apsorn", emoji: "🍛", category: "Thai", lat: 13.7620, lng: 100.5100, rating: "4.8", price: "฿", imageUrl: "https://images.unsplash.com/photo-1455619452474-d2be8b1e70cd?w=600&auto=format&fit=crop&q=60", description: "Royal recipe green curry" },
-  { id: 244, name: "Jay Fai", emoji: "🔥", category: "Thai", lat: 13.7560, lng: 100.5018, rating: "4.9", price: "฿฿฿", imageUrl: "https://images.unsplash.com/photo-1569562211093-4ed0d0758f12?w=600&auto=format&fit=crop&q=60", description: "Michelin-starred street food" },
-  { id: 301, name: "Tep Bar", emoji: "🍸", category: "Bars", lat: 13.7280, lng: 100.5130, rating: "4.7", price: "฿฿", imageUrl: "https://images.unsplash.com/photo-1514362545857-3bc16c4c7d1b?w=600&auto=format&fit=crop&q=60", description: "Thai heritage cocktails & live music" },
-  { id: 311, name: "Roots Coffee", emoji: "☕", category: "Cafe", lat: 13.7466, lng: 100.5393, rating: "4.7", price: "฿฿", imageUrl: "https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?w=600&auto=format&fit=crop&q=60", description: "Specialty pour-over coffee" },
-  { id: 321, name: "After You", emoji: "🍰", category: "Desserts", lat: 13.7320, lng: 100.5783, rating: "4.5", price: "฿฿", imageUrl: "https://images.unsplash.com/photo-1551024506-0bccd828d307?w=600&auto=format&fit=crop&q=60", description: "Famous kakigori & honey toast" },
-  { id: 282, name: "Din Tai Fung", emoji: "🥟", category: "Chinese", lat: 13.7466, lng: 100.5393, rating: "4.7", price: "฿฿", imageUrl: "https://images.unsplash.com/photo-1496116218417-1a781b1c416c?w=600&auto=format&fit=crop&q=60", description: "World-famous xiao long bao" },
-  { id: 411, name: "Roast", emoji: "🍳", category: "Breakfast", lat: 13.7320, lng: 100.5783, rating: "4.7", price: "฿฿", imageUrl: "https://images.unsplash.com/photo-1525351484163-7529414344d8?w=600&auto=format&fit=crop&q=60", description: "Bangkok's premier brunch spot" },
-  { id: 461, name: "KOI Th\u00e9", emoji: "🧋", category: "Bubble Tea", lat: 13.7454, lng: 100.5340, rating: "4.5", price: "฿", imageUrl: "https://images.unsplash.com/photo-1541696490-8744a5dc0228?w=600&auto=format&fit=crop&q=60", description: "Taiwan's golden bubble milk tea" },
-  { id: 441, name: "Holey Bakery", emoji: "🥐", category: "Bakery", lat: 13.7310, lng: 100.5690, rating: "4.7", price: "฿฿", imageUrl: "https://images.unsplash.com/photo-1530610476181-d83430b64dcd?w=600&auto=format&fit=crop&q=60", description: "Award-winning French bakery" },
+  { id: 201, name: "Thipsamai", emoji: "🍜", category: "Thai", lat: 13.7520, lng: 100.5050, rating: "4.9", price: "฿", imageUrl: "https://images.unsplash.com/photo-1559314809-0d155014e29e?w=600&auto=format&fit=crop&q=60", description: "Famous pad thai since 1966", address: "Maha Chai Rd" },
+  { id: 251, name: "Sushi Masato", emoji: "🍣", category: "Sushi", lat: 13.7320, lng: 100.5783, rating: "4.9", price: "฿฿฿", imageUrl: "https://images.unsplash.com/photo-1579871494447-9811cf80d66c?w=600&auto=format&fit=crop&q=60", description: "Intimate 8-seat omakase counter", address: "Phrom Phong" },
+  { id: 261, name: "Daniel Thaiger", emoji: "🍔", category: "Burgers", lat: 13.7380, lng: 100.5680, rating: "4.5", price: "฿฿", imageUrl: "https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=600&auto=format&fit=crop&q=60", description: "Bangkok's OG food truck burger", address: "Sukhumvit 38" },
+  { id: 231, name: "Peppina", emoji: "🍕", category: "Pizza", lat: 13.7310, lng: 100.5690, rating: "4.8", price: "฿฿", imageUrl: "https://images.unsplash.com/photo-1513104890138-7c749659a591?w=600&auto=format&fit=crop&q=60", description: "Neapolitan pizza, wood-fired", address: "Sukhumvit 33" },
+  { id: 241, name: "Krua Apsorn", emoji: "🍛", category: "Thai", lat: 13.7620, lng: 100.5100, rating: "4.8", price: "฿", imageUrl: "https://images.unsplash.com/photo-1455619452474-d2be8b1e70cd?w=600&auto=format&fit=crop&q=60", description: "Royal recipe green curry", address: "Samsen Rd" },
+  { id: 244, name: "Jay Fai", emoji: "🔥", category: "Thai", lat: 13.7560, lng: 100.5018, rating: "4.9", price: "฿฿฿", imageUrl: "https://images.unsplash.com/photo-1569562211093-4ed0d0758f12?w=600&auto=format&fit=crop&q=60", description: "Michelin-starred street food", address: "Maha Chai Rd" },
+  { id: 301, name: "Tep Bar", emoji: "🍸", category: "Bars", lat: 13.7280, lng: 100.5130, rating: "4.7", price: "฿฿", imageUrl: "https://images.unsplash.com/photo-1514362545857-3bc16c4c7d1b?w=600&auto=format&fit=crop&q=60", description: "Thai heritage cocktails & live music", address: "Charoen Krung Soi 32" },
+  { id: 311, name: "Roots Coffee", emoji: "☕", category: "Cafe", lat: 13.7466, lng: 100.5393, rating: "4.7", price: "฿฿", imageUrl: "https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?w=600&auto=format&fit=crop&q=60", description: "Specialty pour-over coffee", address: "Ari" },
+  { id: 321, name: "After You", emoji: "🍰", category: "Desserts", lat: 13.7320, lng: 100.5783, rating: "4.5", price: "฿฿", imageUrl: "https://images.unsplash.com/photo-1551024506-0bccd828d307?w=600&auto=format&fit=crop&q=60", description: "Famous kakigori & honey toast", address: "Thonglor" },
+  { id: 282, name: "Din Tai Fung", emoji: "🥟", category: "Chinese", lat: 13.7466, lng: 100.5393, rating: "4.7", price: "฿฿", imageUrl: "https://images.unsplash.com/photo-1496116218417-1a781b1c416c?w=600&auto=format&fit=crop&q=60", description: "World-famous xiao long bao", address: "Central World" },
+  { id: 411, name: "Roast", emoji: "🍳", category: "Breakfast", lat: 13.7320, lng: 100.5783, rating: "4.7", price: "฿฿", imageUrl: "https://images.unsplash.com/photo-1525351484163-7529414344d8?w=600&auto=format&fit=crop&q=60", description: "Bangkok's premier brunch spot", address: "The Commons, Thonglor" },
+  { id: 461, name: "KOI Th\u00e9", emoji: "🧋", category: "Bubble Tea", lat: 13.7454, lng: 100.5340, rating: "4.5", price: "฿", imageUrl: "https://images.unsplash.com/photo-1541696490-8744a5dc0228?w=600&auto=format&fit=crop&q=60", description: "Taiwan's golden bubble milk tea", address: "Siam Paragon" },
+  { id: 441, name: "Holey Bakery", emoji: "🥐", category: "Bakery", lat: 13.7310, lng: 100.5690, rating: "4.7", price: "฿฿", imageUrl: "https://images.unsplash.com/photo-1530610476181-d83430b64dcd?w=600&auto=format&fit=crop&q=60", description: "Award-winning French bakery", address: "Sukhumvit 49" },
 ];
 
 const ALL_SEARCHABLE = [
@@ -130,7 +132,7 @@ const DEFAULT_LAT = 13.7420;
 const DEFAULT_LNG = 100.5400;
 
 const VIBE_TILES_MAIN = [
-  { mode: "trending", label: "Trending", emoji: "🔥", bg: "hsl(45, 55%, 94%)" },
+  { mode: "trending", label: "Popular", emoji: "🔥", bg: "hsl(45, 55%, 94%)" },
   { mode: "hot", label: "Spicy", emoji: "🌶️", bg: "hsl(15, 65%, 94%)" },
   { mode: "drinks", label: "Drinks", emoji: "🍸", bg: "hsl(280, 40%, 95%)" },
   { mode: "cheap", label: "Budget", emoji: "💰", bg: "hsl(160, 40%, 94%)" },
@@ -151,16 +153,16 @@ const VIBE_TILES_EXTRA = [
 ];
 
 const BANGKOK_LOCATIONS = [
-  { name: "Sukhumvit", lat: 13.7420, lng: 100.5400 },
-  { name: "Silom", lat: 13.7285, lng: 100.5310 },
-  { name: "Siam", lat: 13.7454, lng: 100.5341 },
-  { name: "Thonglor", lat: 13.7320, lng: 100.5783 },
-  { name: "Ekkamai", lat: 13.7310, lng: 100.5690 },
   { name: "Ari", lat: 13.7710, lng: 100.5450 },
   { name: "Chinatown", lat: 13.7410, lng: 100.5100 },
+  { name: "Ekkamai", lat: 13.7310, lng: 100.5690 },
   { name: "Old Town", lat: 13.7560, lng: 100.5018 },
-  { name: "Sathorn", lat: 13.7220, lng: 100.5290 },
   { name: "Riverside", lat: 13.7230, lng: 100.5130 },
+  { name: "Sathorn", lat: 13.7220, lng: 100.5290 },
+  { name: "Siam", lat: 13.7454, lng: 100.5341 },
+  { name: "Silom", lat: 13.7285, lng: 100.5310 },
+  { name: "Sukhumvit", lat: 13.7420, lng: 100.5400 },
+  { name: "Thonglor", lat: 13.7320, lng: 100.5783 },
 ];
 
 interface PersonalizedRec {
@@ -242,9 +244,11 @@ export default function Home() {
 
   const [drawerOpen, setDrawerOpen] = useState(true);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [showMapCards, setShowMapCards] = useState(false);
   const [moreVibesOpen, setMoreVibesOpen] = useState(false);
   const [locationPickerOpen, setLocationPickerOpen] = useState(false);
-  const [currentLocationName, setCurrentLocationName] = useState("Sukhumvit");
+  const [currentLocationName, setCurrentLocationName] = useState("Current");
+  const [actualGpsLocation, setActualGpsLocation] = useState<[number, number]>([DEFAULT_LAT, DEFAULT_LNG]);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [showFilters, setShowFilters] = useState(false);
@@ -261,9 +265,6 @@ export default function Home() {
   const activeFilterCount = (activePrices.length > 0 ? 1 : 0) + (activeDietary.length > 0 ? 1 : 0) + (activeDistance ? 1 : 0) + (activeSort !== "trending" ? 1 : 0);
   const togglePrice = (v: string) => setActivePrices(prev => prev.includes(v) ? prev.filter(p => p !== v) : [...prev, v]);
   const toggleDietary = (v: string) => setActiveDietary(prev => prev.includes(v) ? prev.filter(d => d !== v) : [...prev, v]);
-  const trackFilterChange = useCallback((name: string, value: unknown) => {
-    trackEvent("filter", { metadata: { name, value } });
-  }, []);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -271,6 +272,17 @@ export default function Home() {
       setSearchOpen(true);
       setTimeout(() => inputRef.current?.focus(), 300);
       window.history.replaceState({}, "", "/");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          setActualGpsLocation([pos.coords.latitude, pos.coords.longitude]);
+        },
+        () => {}
+      );
     }
   }, []);
 
@@ -287,14 +299,22 @@ export default function Home() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  useEffect(() => {
-    const query = searchQuery.trim();
-    if (!query) return;
-    const timer = setTimeout(() => {
-      trackEvent("search", { metadata: { query } });
-    }, 350);
-    return () => clearTimeout(timer);
+  const locationSearchResults = useMemo(() => {
+    if (!searchQuery.trim()) return [];
+    const q = searchQuery.toLowerCase();
+    return BANGKOK_LOCATIONS.filter(loc => loc.name.toLowerCase().includes(q));
   }, [searchQuery]);
+
+  const getRestaurantsNearLocation = useCallback((lat: number, lng: number) => {
+    return ALL_SEARCHABLE
+      .filter(r => {
+        const pin = RESTAURANT_PINS.find(p => p.id === r.id);
+        if (!pin) return false;
+        const dist = Math.sqrt((pin.lat - lat) ** 2 + (pin.lng - lng) ** 2);
+        return dist < 0.015;
+      })
+      .slice(0, 8);
+  }, []);
 
   const searchResults = useMemo(() => {
     if (!searchQuery.trim()) return [];
@@ -303,10 +323,12 @@ export default function Home() {
     const categoryMatches: typeof ALL_SEARCHABLE = [];
     const menuMatches: typeof ALL_SEARCHABLE = [];
     const seen = new Set<number>();
+    const addressMatches: typeof ALL_SEARCHABLE = [];
     for (const r of ALL_SEARCHABLE) { if (r.name.toLowerCase().includes(q)) { nameMatches.push(r); seen.add(r.id); } }
     for (const r of ALL_SEARCHABLE) { if (seen.has(r.id)) continue; if (r.category.toLowerCase().includes(q)) { categoryMatches.push(r); seen.add(r.id); } }
+    for (const r of ALL_SEARCHABLE) { if (seen.has(r.id)) continue; if (r.address.toLowerCase().includes(q)) { addressMatches.push(r); seen.add(r.id); } }
     for (const r of ALL_SEARCHABLE) { if (seen.has(r.id)) continue; if (r.menus.some(m => m.includes(q))) { menuMatches.push(r); seen.add(r.id); } }
-    return [...nameMatches.slice(0, 5), ...categoryMatches.slice(0, 4), ...menuMatches.slice(0, 6)].slice(0, 10);
+    return [...nameMatches.slice(0, 5), ...categoryMatches.slice(0, 4), ...addressMatches.slice(0, 4), ...menuMatches.slice(0, 5)].slice(0, 12);
   }, [searchQuery]);
 
   const mapCenter = useMemo<[number, number]>(() => [userLocation.lat, userLocation.lng], [userLocation]);
@@ -329,29 +351,44 @@ export default function Home() {
 
   const handleVibeClick = useCallback((mode: string) => {
     recordVibe(mode);
-    trackEvent("filter", { metadata: { name: "vibe_mode", value: mode } });
-    const p = new URLSearchParams();
-    switch (mode) {
-      case "cheap": p.set("budget", "Cheap"); break;
-      case "nearby": p.set("locations", "Near BTS"); break;
-      case "trending": p.set("interests", "Popular spots"); p.set("locations", "Trendy spots"); break;
-      case "hot": p.set("interests", "Popular spots,Hot & spicy"); break;
-      case "late": p.set("locations", "Late night"); break;
-      case "outdoor": p.set("interests", "Outdoor dining"); p.set("locations", "Rooftops,By the river"); break;
-      case "healthy": p.set("diet", "Vegetarian,Vegan"); p.set("interests", "Healthy"); break;
-      case "drinks": p.set("interests", "Drinks"); break;
-      case "partner": p.set("interests", "Fine dining,Romantic"); break;
-      case "delivery": p.set("interests", "Delivery"); p.set("locations", "Delivery"); break;
-      case "sweet": p.set("interests", "Desserts,Sweets"); break;
-      case "brunch": p.set("interests", "Brunch,Breakfast"); break;
-      case "streetfood": p.set("interests", "Street food"); break;
-      case "rooftop": p.set("interests", "Rooftop dining"); p.set("locations", "Rooftops"); break;
-      case "family": p.set("interests", "Family friendly"); break;
-      case "cafe": p.set("interests", "Coffee,Cafe"); break;
+    const vibeTag = mode === "trending" ? "popular" : MODE_TO_VIBE[mode];
+    if (vibeTag) {
+      navigate(`/solo/results?vibe=${vibeTag}`);
+    } else {
+      navigate("/solo/results");
     }
-    const qs = p.toString();
-    navigate(`/solo/results${qs ? `?${qs}` : ""}`);
   }, [navigate, recordVibe]);
+
+  const vibeClickPending = useRef(false);
+  const handleVibeClickAnimated = useCallback((mode: string, emoji: string, buttonEl: HTMLElement | null) => {
+    if (vibeClickPending.current) return;
+    vibeClickPending.current = true;
+    if (buttonEl) {
+      const iconName = emojiToIconName(emoji);
+      if (iconName) {
+        const iconSpan = buttonEl.querySelector("span[data-anim-class]") as HTMLElement | null;
+        if (iconSpan) {
+          const animClass = getAnimClass(iconName);
+          iconSpan.classList.add(animClass);
+          const onEnd = () => {
+            iconSpan.removeEventListener("animationend", onEnd);
+            iconSpan.classList.remove(animClass);
+            handleVibeClick(mode);
+          };
+          iconSpan.addEventListener("animationend", onEnd);
+          setTimeout(() => {
+            iconSpan.removeEventListener("animationend", onEnd);
+            iconSpan.classList.remove(animClass);
+            vibeClickPending.current = false;
+            handleVibeClick(mode);
+          }, 600);
+          return;
+        }
+      }
+    }
+    handleVibeClick(mode);
+    vibeClickPending.current = false;
+  }, [handleVibeClick]);
 
   const topMatch = personalizedRecs.length > 0 ? personalizedRecs[0] : FALLBACK_RECOMMENDATIONS[0];
 
@@ -363,11 +400,9 @@ export default function Home() {
           center={mapCenter}
           zoom={14}
           selectedPinId={null}
-          onPinSelect={(id) => {
-            trackEvent("view_detail", { restaurantId: id, metadata: { source: "map_pin" } });
-            navigate(`/restaurant/${id}`);
-          }}
+          onPinSelect={(id) => navigate(`/restaurant/${id}`)}
           filteredCategory={selectedCategory}
+          userLocation={actualGpsLocation}
         />
       </div>
 
@@ -378,11 +413,7 @@ export default function Home() {
             style={{ boxShadow: "0 4px 20px rgba(0,0,0,0.08), 0 1px 3px rgba(0,0,0,0.04)" }}
           >
             <button
-              onClick={() => {
-                trackEvent("search", { metadata: { source: "home_search_open" } });
-                setSearchOpen(true);
-                setTimeout(() => inputRef.current?.focus(), 150);
-              }}
+              onClick={() => { setSearchOpen(true); setTimeout(() => inputRef.current?.focus(), 150); }}
               className="flex items-center gap-2.5 flex-1 min-w-0"
               data-testid="button-open-search"
             >
@@ -394,18 +425,13 @@ export default function Home() {
               className="flex items-center gap-1 flex-shrink-0 px-2 py-1 rounded-full bg-gray-50 border border-gray-100"
               data-testid="button-map-location"
             >
-              <MapPin className="w-3 h-3 text-[#FFCC02]" />
+              <MapPin className="w-3 h-3 text-[#E53935]" />
               <span className="text-[11px] font-medium text-foreground max-w-[70px] truncate">{currentLocationName}</span>
               <ChevronDown className={`w-2.5 h-2.5 text-muted-foreground transition-transform ${locationPickerOpen ? "rotate-180" : ""}`} />
             </button>
             <div ref={filterRef} className="relative flex-shrink-0">
               <button
-                onClick={() => {
-                  const next = !showFilters;
-                  trackEvent("filter", { metadata: { action: "toggle_map_filters", open: next } });
-                  setShowFilters(next);
-                  setLocationPickerOpen(false);
-                }}
+                onClick={() => { setShowFilters(!showFilters); setLocationPickerOpen(false); }}
                 className="w-7 h-7 rounded-lg bg-gray-100 flex items-center justify-center relative active:scale-95 transition-transform"
                 data-testid="button-filter-map"
               >
@@ -430,7 +456,7 @@ export default function Home() {
                         <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-2">Sort by</p>
                         <div className="flex flex-wrap gap-1.5">
                           {FILTER_OPTIONS.sortBy.map(o => (
-                            <button key={o.value} onClick={() => { setActiveSort(o.value); trackFilterChange("sort", o.value); }} data-testid={`map-filter-sort-${o.value}`}
+                            <button key={o.value} onClick={() => setActiveSort(o.value)} data-testid={`map-filter-sort-${o.value}`}
                               className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors ${activeSort === o.value ? "bg-foreground text-white" : "bg-gray-100 text-foreground/70"}`}
                             >{o.label}</button>
                           ))}
@@ -440,7 +466,7 @@ export default function Home() {
                         <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-2">Price range</p>
                         <div className="flex gap-1.5">
                           {FILTER_OPTIONS.priceRange.map(o => (
-                            <button key={o.value} onClick={() => { togglePrice(o.value); trackFilterChange("price", o.value); }} data-testid={`map-filter-price-${o.value}`}
+                            <button key={o.value} onClick={() => togglePrice(o.value)} data-testid={`map-filter-price-${o.value}`}
                               className={`px-3 py-1 rounded-full text-[11px] font-medium transition-colors ${activePrices.includes(o.value) ? "bg-foreground text-white" : "bg-gray-100 text-foreground/70"}`}
                             >{o.label}</button>
                           ))}
@@ -450,7 +476,7 @@ export default function Home() {
                         <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-2">Dietary</p>
                         <div className="flex flex-wrap gap-1.5">
                           {FILTER_OPTIONS.dietary.map(o => (
-                            <button key={o.value} onClick={() => { toggleDietary(o.value); trackFilterChange("dietary", o.value); }} data-testid={`map-filter-dietary-${o.value}`}
+                            <button key={o.value} onClick={() => toggleDietary(o.value)} data-testid={`map-filter-dietary-${o.value}`}
                               className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors ${activeDietary.includes(o.value) ? "bg-foreground text-white" : "bg-gray-100 text-foreground/70"}`}
                             >{o.label}</button>
                           ))}
@@ -460,7 +486,7 @@ export default function Home() {
                         <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-2">Distance</p>
                         <div className="flex flex-wrap gap-1.5">
                           {FILTER_OPTIONS.distance.map(o => (
-                            <button key={o.value} onClick={() => { setActiveDistance(activeDistance === o.value ? null : o.value); trackFilterChange("distance", o.value); }} data-testid={`map-filter-distance-${o.value}`}
+                            <button key={o.value} onClick={() => setActiveDistance(activeDistance === o.value ? null : o.value)} data-testid={`map-filter-distance-${o.value}`}
                               className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors ${activeDistance === o.value ? "bg-foreground text-white" : "bg-gray-100 text-foreground/70"}`}
                             >{o.label}</button>
                           ))}
@@ -487,28 +513,29 @@ export default function Home() {
                 <div className="py-2 max-h-[280px] overflow-y-auto">
                   <button
                     onClick={() => {
+                      setCurrentLocationName("Current");
+                      setLocationPickerOpen(false);
+                      setDrawerOpen(false);
                       if (navigator.geolocation) {
                         navigator.geolocation.getCurrentPosition(
                           (pos) => {
-                            trackEvent("filter", { metadata: { name: "location", value: "current_location" } });
-                            setCurrentLocationName("Current Location");
                             setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-                            setLocationPickerOpen(false);
+                            setActualGpsLocation([pos.coords.latitude, pos.coords.longitude]);
                           },
-                          () => { setLocationPickerOpen(false); }
+                          () => {}
                         );
                       }
                     }}
                     className={`w-full flex items-center gap-2.5 px-4 py-2.5 text-left ${
-                      currentLocationName === "Current Location" ? "bg-gray-50" : ""
+                      currentLocationName === "Current" ? "bg-gray-50" : ""
                     }`}
                     data-testid="location-option-current"
                   >
                     <div className="w-5 h-5 rounded-full bg-blue-500/10 flex items-center justify-center flex-shrink-0">
                       <Navigation className="w-3 h-3 text-blue-500" />
                     </div>
-                    <span className={`text-sm font-medium ${currentLocationName === "Current Location" ? "text-foreground" : "text-blue-500"}`}>Current Location</span>
-                    {currentLocationName === "Current Location" && (
+                    <span className={`text-sm font-medium ${currentLocationName === "Current" ? "text-foreground" : "text-blue-500"}`}>Current</span>
+                    {currentLocationName === "Current" && (
                       <span className="ml-auto w-1.5 h-1.5 rounded-full bg-blue-500" />
                     )}
                   </button>
@@ -518,20 +545,20 @@ export default function Home() {
                     <button
                       key={loc.name}
                       onClick={() => {
-                        trackEvent("filter", { metadata: { name: "location", value: loc.name } });
                         setCurrentLocationName(loc.name);
                         setUserLocation({ lat: loc.lat, lng: loc.lng });
                         setLocationPickerOpen(false);
+                        setDrawerOpen(false);
                       }}
                       className={`w-full flex items-center gap-2.5 px-4 py-2.5 text-left ${
                         currentLocationName === loc.name ? "bg-gray-50" : ""
                       }`}
                       data-testid={`location-option-${loc.name.toLowerCase().replace(/\s+/g, "-")}`}
                     >
-                      <MapPin className={`w-3.5 h-3.5 flex-shrink-0 ${currentLocationName === loc.name ? "text-[#FFCC02]" : "text-muted-foreground/40"}`} />
+                      <MapPin className={`w-3.5 h-3.5 flex-shrink-0 ${currentLocationName === loc.name ? "text-[#E53935]" : "text-muted-foreground/40"}`} />
                       <span className={`text-sm font-medium ${currentLocationName === loc.name ? "text-foreground" : "text-muted-foreground"}`}>{loc.name}</span>
                       {currentLocationName === loc.name && (
-                        <span className="ml-auto w-1.5 h-1.5 rounded-full bg-[#FFCC02]" />
+                        <span className="ml-auto w-1.5 h-1.5 rounded-full bg-[#E53935]" />
                       )}
                     </button>
                   ))}
@@ -552,7 +579,7 @@ export default function Home() {
             >
               <div className="flex gap-2 overflow-x-auto hide-scrollbar pb-1" data-testid="map-category-chips">
                 <button
-                  onClick={() => { setSelectedCategory(null); trackFilterChange("map_category", "all"); }}
+                  onClick={() => { setSelectedCategory(null); setShowMapCards(false); }}
                   className={`flex-shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-full text-xs font-semibold transition-all ${
                     selectedCategory === null
                       ? "bg-foreground text-white shadow-md"
@@ -566,11 +593,7 @@ export default function Home() {
                 {MAP_CATEGORIES.map(cat => (
                   <button
                     key={cat.label}
-                    onClick={() => {
-                      const next = selectedCategory === cat.label ? null : cat.label;
-                      setSelectedCategory(next);
-                      trackFilterChange("map_category", next ?? "all");
-                    }}
+                    onClick={() => { const newCat = selectedCategory === cat.label ? null : cat.label; setSelectedCategory(newCat); setShowMapCards(newCat !== null); }}
                     className={`flex-shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-full text-xs font-semibold transition-all ${
                       selectedCategory === cat.label
                         ? "bg-foreground text-white shadow-md"
@@ -590,16 +613,26 @@ export default function Home() {
       </div>
 
       <AnimatePresence>
-        {!drawerOpen && (
+        {!drawerOpen && showMapCards && selectedCategory && filteredMapCards.length > 0 && (
           <motion.div
             initial={{ opacity: 0, y: 30 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 30 }}
             transition={{ type: "spring", damping: 24, stiffness: 260 }}
             className="absolute left-0 right-0 z-30"
-            style={{ bottom: "210px" }}
+            style={{ bottom: "250px" }}
             data-testid="map-restaurant-cards"
           >
+            <div className="flex justify-end px-4 mb-2">
+              <button
+                onClick={() => setShowMapCards(false)}
+                className="w-8 h-8 rounded-full bg-white/90 backdrop-blur-sm border border-gray-200/60 flex items-center justify-center"
+                style={{ boxShadow: "0 2px 8px rgba(0,0,0,0.1)" }}
+                data-testid="button-close-map-cards"
+              >
+                <X className="w-4 h-4 text-foreground/70" />
+              </button>
+            </div>
             <div
               ref={scrollContainerRef}
               className="flex gap-3 overflow-x-auto hide-scrollbar pb-2 snap-x snap-mandatory px-4"
@@ -609,11 +642,11 @@ export default function Home() {
                   key={pin.id}
                   whileTap={{ scale: 0.96 }}
                   onClick={() => navigate(`/restaurant/${pin.id}`)}
-                  className="flex-shrink-0 w-[260px] snap-start bg-white rounded-2xl overflow-hidden border border-gray-100"
+                  className="flex-shrink-0 w-[300px] snap-start bg-white rounded-2xl overflow-hidden border border-gray-100"
                   style={{ boxShadow: "0 6px 24px -4px rgba(0,0,0,0.12), 0 2px 6px rgba(0,0,0,0.04)" }}
                   data-testid={`map-card-${pin.id}`}
                 >
-                  <div className="relative h-[110px] w-full">
+                  <div className="relative h-[130px] w-full">
                     <img src={pin.imageUrl} alt={pin.name} className="w-full h-full object-cover" />
                     <div className="absolute top-2 left-2 bg-white/90 backdrop-blur-sm rounded-full px-2 py-0.5 text-[10px] font-bold text-foreground flex items-center gap-1">
                       <FoodIconFromEmoji emoji={pin.emoji} size={14} /> {pin.category}
@@ -622,12 +655,13 @@ export default function Home() {
                       {pin.price}
                     </div>
                   </div>
-                  <div className="px-3.5 py-2.5">
+                  <div className="px-3.5 py-3 text-left">
                     <div className="flex items-center justify-between">
-                      <p className="text-sm font-bold text-foreground truncate">{pin.name}</p>
+                      <p className="text-sm font-bold text-foreground truncate text-left">{pin.name}</p>
                       <span className="text-xs font-semibold text-muted-foreground ml-2 flex-shrink-0">{pin.rating}</span>
                     </div>
-                    <p className="text-[11px] text-muted-foreground mt-0.5 truncate">{pin.description}</p>
+                    <p className="text-[11px] text-muted-foreground mt-0.5 text-left truncate">{pin.description}</p>
+                    <p className="text-[10px] text-muted-foreground/70 mt-0.5 text-left truncate">{pin.address}</p>
                   </div>
                 </motion.button>
               ))}
@@ -637,7 +671,7 @@ export default function Home() {
       </AnimatePresence>
 
       <motion.div
-        animate={{ bottom: drawerOpen ? "0px" : "0px", height: drawerOpen ? "82%" : "200px" }}
+        animate={{ bottom: drawerOpen ? "0px" : "0px", height: drawerOpen ? "82%" : "240px" }}
         transition={{ type: "spring", damping: 26, stiffness: 240, mass: 1 }}
         className="absolute left-0 right-0 rounded-t-[28px] z-50 flex flex-col gpu-accelerated"
         style={{
@@ -665,7 +699,7 @@ export default function Home() {
               >
                 <div className="px-5 pb-6 pt-1">
                   <div className="flex items-center gap-3 mb-3">
-                    <img src={toastLogoPath} alt="Toast" className="h-9 w-auto" data-testid="img-collapsed-logo" />
+                    <img src={toastLogoPath} alt="Toast" className="h-10 w-auto" data-testid="img-collapsed-logo" />
                     <div className="flex-1" />
                     <button
                       onClick={(e) => { e.stopPropagation(); setDrawerOpen(true); }}
@@ -678,25 +712,27 @@ export default function Home() {
                   <div className="grid grid-cols-2 gap-2.5">
                     <button
                       onClick={(e) => { e.stopPropagation(); navigate("/solo/quiz"); }}
-                      className="relative overflow-hidden bg-white rounded-xl px-4 py-3 border border-gray-100 text-left"
-                      style={{ boxShadow: "0 2px 8px rgba(0,0,0,0.04)" }}
+                      className="flex items-center justify-center gap-2 rounded-2xl bg-white px-3 h-[72px] border border-gray-100 shadow-md"
                       data-testid="button-solo-collapsed"
                     >
-                      <div className="absolute top-0 left-0 right-0 h-[2px]" style={{ background: "#FFCC02" }} />
-                      <span className="absolute top-0 right-2 text-[32px] font-bold select-none pointer-events-none" style={{ color: "rgba(0,0,0,0.04)" }}>1</span>
-                      <p className="text-sm font-bold text-foreground leading-tight">Solo</p>
-                      <p className="text-[10px] text-muted-foreground">Just you</p>
+                      <img src={toastCharPath} alt="" className="w-[52px] h-[52px] object-contain flex-shrink-0" />
+                      <div className="min-w-0">
+                        <p className="text-[14px] font-bold text-foreground leading-tight">Solo</p>
+                        <p className="text-[10px] text-muted-foreground whitespace-nowrap">Just for you</p>
+                      </div>
                     </button>
                     <button
                       onClick={(e) => { e.stopPropagation(); navigate("/group/setup"); }}
-                      className="relative overflow-hidden bg-white rounded-xl px-4 py-3 border border-gray-100 text-left"
-                      style={{ boxShadow: "0 2px 8px rgba(0,0,0,0.04)" }}
+                      className="flex items-center justify-center rounded-2xl bg-white h-[72px] border border-gray-100 shadow-md overflow-hidden"
                       data-testid="button-group-collapsed"
                     >
-                      <div className="absolute top-0 left-0 right-0 h-[2px]" style={{ background: "#00B14F" }} />
-                      <span className="absolute top-0 right-2 text-[32px] font-bold select-none pointer-events-none" style={{ color: "rgba(0,0,0,0.04)" }}>2+</span>
-                      <p className="text-sm font-bold text-foreground leading-tight">Group</p>
-                      <p className="text-[10px] text-muted-foreground">With others</p>
+                      <div className="flex items-center gap-1 px-1">
+                        <img src={toastWafflePath} alt="" className="w-[80px] h-[64px] object-contain flex-shrink-0 -my-2 -ml-2" style={{ mixBlendMode: "multiply" }} />
+                        <div>
+                          <p className="text-[14px] font-bold text-foreground leading-tight">Group</p>
+                          <p className="text-[10px] text-muted-foreground whitespace-nowrap">With friends</p>
+                        </div>
+                      </div>
                     </button>
                   </div>
                 </div>
@@ -706,10 +742,7 @@ export default function Home() {
         </div>
 
         <div className="flex-1 overflow-y-auto hide-scrollbar pb-24 relative" style={{ overscrollBehavior: "contain" }}>
-          <div className="px-6 pt-1 pb-1 flex items-center justify-between">
-            <img src={toastLogoPath} alt="Toast" className="h-9 w-auto" data-testid="img-home-logo" />
-          </div>
-          <div className="px-6 pt-1 pb-3">
+          <div className="px-6 pt-2 pb-3">
             <motion.p
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -720,13 +753,13 @@ export default function Home() {
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
               {getContextLine()}
             </motion.p>
-            <div className="flex items-end justify-between gap-3">
+            <div className="flex items-start justify-between gap-3">
               <div className="flex-1">
                 <motion.h1
                   initial={{ opacity: 0, y: 8 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: 0.15, type: "spring", stiffness: 300, damping: 25 }}
-                  className="text-[26px] font-bold text-foreground leading-[1.15] tracking-tight"
+                  className="text-[22px] font-bold text-foreground leading-[1.15] tracking-tight"
                   data-testid="text-greeting"
                 >
                   Hey there,<br />{getGreeting()}
@@ -751,10 +784,10 @@ export default function Home() {
                 initial={{ opacity: 0, scale: 0.8 }}
                 animate={{ opacity: 1, scale: 1 }}
                 transition={{ delay: 0.2, type: "spring", stiffness: 260, damping: 20 }}
-                src={mascotPath}
-                alt="Toast mascot"
-                className="w-20 h-20 object-contain flex-shrink-0"
-                data-testid="img-hero-mascot"
+                src={toastLogoPath}
+                alt="Toast"
+                className="h-12 w-auto flex-shrink-0 mt-[30px]"
+                data-testid="img-hero-logo"
               />
             </div>
           </div>
@@ -778,30 +811,12 @@ export default function Home() {
                 whileTap={{ scale: 0.97 }}
                 onClick={() => navigate("/solo/quiz")}
                 data-testid="button-solo"
-                className="relative overflow-hidden rounded-[20px] text-left bg-white border border-gray-100"
-                style={{
-                  boxShadow: "0 4px 20px -4px rgba(0,0,0,0.06), 0 1px 4px rgba(0,0,0,0.03), inset 0 1px 0 rgba(255,255,255,0.9)",
-                }}
+                className="flex items-center rounded-[20px] bg-white pl-3 pr-5 h-[100px] border border-gray-100 shadow-md"
               >
-                <div className="absolute top-0 left-0 right-0 h-[3px] rounded-t-[20px]" style={{ background: "linear-gradient(90deg, #FFCC02, hsl(40, 75%, 68%))" }} />
-                <div className="relative pt-5 px-5 pb-5">
-                  <span
-                    className="absolute top-2 left-4 text-[72px] font-bold leading-none select-none pointer-events-none"
-                    style={{ color: "rgba(0,0,0,0.04)" }}
-                  >
-                    1
-                  </span>
-                  <div className="relative z-10 pt-12">
-                    <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-muted-foreground/70 flex items-center gap-1.5 mb-1.5">
-                      <span className="w-1.5 h-1.5 rounded-full bg-[#FFCC02]" /> Just you
-                    </p>
-                    <p
-                      className="text-[24px] font-bold text-foreground leading-tight"
-                    >
-                      Solo
-                    </p>
-                    <p className="text-[13px] text-muted-foreground mt-2 leading-snug">Two options face off until one wins</p>
-                  </div>
+                <img src={toastCharPath} alt="" className="w-[80px] h-[80px] object-contain flex-shrink-0" />
+                <div className="ml-2 min-w-0">
+                  <p className="text-[20px] font-bold text-foreground leading-tight">Solo</p>
+                  <p className="text-[12px] text-muted-foreground mt-0.5 whitespace-nowrap">Just for you</p>
                 </div>
               </motion.button>
 
@@ -813,34 +828,13 @@ export default function Home() {
                 whileTap={{ scale: 0.97 }}
                 onClick={() => navigate("/group/setup")}
                 data-testid="button-group"
-                className="relative overflow-hidden rounded-[20px] text-left bg-white border border-gray-100"
-                style={{
-                  boxShadow: "0 4px 20px -4px rgba(0,0,0,0.06), 0 1px 4px rgba(0,0,0,0.03), inset 0 1px 0 rgba(255,255,255,0.9)",
-                }}
+                className="flex items-center justify-center rounded-[20px] bg-white h-[100px] border border-gray-100 shadow-md overflow-hidden"
               >
-                <div className="absolute top-0 left-0 right-0 h-[3px] rounded-t-[20px]" style={{ background: "linear-gradient(90deg, #00B14F, #00C300)" }} />
-                <div className="relative pt-5 px-5 pb-5">
-                  <span
-                    className="absolute top-2 left-4 text-[72px] font-bold leading-none select-none pointer-events-none"
-                    style={{ color: "rgba(0,0,0,0.04)" }}
-                  >
-                    2+
-                  </span>
-                  <div className="absolute top-4 right-4">
-                    <span className="text-[10px] font-semibold bg-emerald-50 text-emerald-600 rounded-full px-2 py-0.5 flex items-center gap-1 border border-emerald-100">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> 4 live
-                    </span>
-                  </div>
-                  <div className="relative z-10 pt-12">
-                    <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-muted-foreground/70 flex items-center gap-1.5 mb-1.5">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> With others
-                    </p>
-                    <p
-                      className="text-[24px] font-bold text-foreground leading-tight"
-                    >
-                      Group
-                    </p>
-                    <p className="text-[13px] text-muted-foreground mt-2 leading-snug">Everyone swipes, the match wins</p>
+                <div className="flex items-center gap-1 px-2">
+                  <img src={toastWafflePath} alt="" className="w-[110px] h-[88px] object-contain flex-shrink-0 -my-3 -ml-3" style={{ mixBlendMode: "multiply" }} />
+                  <div>
+                    <p className="text-[20px] font-bold text-foreground leading-tight">Group</p>
+                    <p className="text-[12px] text-muted-foreground mt-0.5 whitespace-nowrap">With friends</p>
                   </div>
                 </div>
               </motion.button>
@@ -870,12 +864,9 @@ export default function Home() {
             >
               <div className="absolute top-0 left-0 right-0 h-1" style={{ background: "linear-gradient(90deg, #FFCC02, hsl(45, 90%, 65%))" }} />
               <div className="flex items-start justify-between mb-3">
-                <div className="flex items-center gap-3">
-                  <img src={mascotPath} alt="" className="w-10 h-10 object-contain" />
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 bg-emerald-50 rounded-full px-2.5 py-1 flex items-center gap-1.5 border border-emerald-100">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> Just for you
-                  </span>
-                </div>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 bg-emerald-50 rounded-full px-2.5 py-1 flex items-center gap-1.5 border border-emerald-100">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> Just for you
+                </span>
                 <motion.button
                   whileHover={{ scale: 1.08 }}
                   whileTap={{ scale: 0.9 }}
@@ -961,7 +952,7 @@ export default function Home() {
                     transition={{ delay: 0.35 + idx * 0.04, type: "spring", stiffness: 320, damping: 22 }}
                     whileHover={{ scale: 1.06, y: -3 }}
                     whileTap={{ scale: 0.9 }}
-                    onClick={() => handleVibeClick(vibe.mode)}
+                    onClick={(e) => handleVibeClickAnimated(vibe.mode, vibe.emoji, e.currentTarget)}
                     className="flex flex-col items-center gap-2 py-4 rounded-2xl bg-white border border-gray-100/80"
                     style={{ boxShadow: "0 2px 12px -3px rgba(0,0,0,0.05), 0 1px 3px rgba(0,0,0,0.02)" }}
                     data-testid={`vibe-${vibe.mode}`}
@@ -994,7 +985,7 @@ export default function Home() {
                   whileTap={{ rotate: -12, scale: 1.2 }}
                   transition={{ type: "spring", stiffness: 400, damping: 15 }}
                 >
-                  <Grid3X3 className="w-6 h-6 text-muted-foreground" />
+                  <FoodIcon name="more" size={38} />
                 </motion.div>
                 <span className="text-[11px] font-semibold text-foreground">More</span>
               </motion.button>
@@ -1055,7 +1046,7 @@ export default function Home() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.15 }}
-            className="fixed inset-0 z-[100] bg-[#FAF7F2]"
+            className="fixed inset-0 z-[100] bg-[#FCFCFC]"
             data-testid="search-overlay"
           >
             <div className="safe-top px-4 pt-3 pb-2">
@@ -1067,7 +1058,7 @@ export default function Home() {
                 <input
                   ref={inputRef}
                   type="text"
-                  placeholder="What are you craving?"
+                  placeholder="Search food, restaurants, or areas..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="bg-transparent border-none outline-none text-foreground font-medium w-full placeholder:text-muted-foreground text-sm"
@@ -1084,11 +1075,7 @@ export default function Home() {
                 )}
                 <div ref={filterRef} className="relative">
                   <button
-                    onClick={() => {
-                      const next = !showFilters;
-                      trackEvent("filter", { metadata: { action: "toggle_search_filters", open: next } });
-                      setShowFilters(next);
-                    }}
+                    onClick={() => setShowFilters(!showFilters)}
                     className="w-8 h-8 rounded-xl bg-gray-100 flex items-center justify-center flex-shrink-0 relative active:scale-95 transition-transform"
                     data-testid="button-filter"
                   >
@@ -1112,7 +1099,7 @@ export default function Home() {
                             <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-2">Sort by</p>
                             <div className="flex flex-wrap gap-1.5">
                               {FILTER_OPTIONS.sortBy.map(o => (
-                                <button key={o.value} onClick={() => { setActiveSort(o.value); trackFilterChange("sort", o.value); }} data-testid={`filter-sort-${o.value}`}
+                                <button key={o.value} onClick={() => setActiveSort(o.value)} data-testid={`filter-sort-${o.value}`}
                                   className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors ${activeSort === o.value ? "bg-foreground text-white" : "bg-gray-100 text-foreground/70"}`}
                                 >{o.label}</button>
                               ))}
@@ -1122,7 +1109,7 @@ export default function Home() {
                             <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-2">Price range</p>
                             <div className="flex gap-1.5">
                               {FILTER_OPTIONS.priceRange.map(o => (
-                                <button key={o.value} onClick={() => { togglePrice(o.value); trackFilterChange("price", o.value); }} data-testid={`filter-price-${o.value}`}
+                                <button key={o.value} onClick={() => togglePrice(o.value)} data-testid={`filter-price-${o.value}`}
                                   className={`px-3 py-1 rounded-full text-[11px] font-medium transition-colors ${activePrices.includes(o.value) ? "bg-foreground text-white" : "bg-gray-100 text-foreground/70"}`}
                                 >{o.label}</button>
                               ))}
@@ -1132,7 +1119,7 @@ export default function Home() {
                             <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-2">Dietary</p>
                             <div className="flex flex-wrap gap-1.5">
                               {FILTER_OPTIONS.dietary.map(o => (
-                                <button key={o.value} onClick={() => { toggleDietary(o.value); trackFilterChange("dietary", o.value); }} data-testid={`filter-dietary-${o.value}`}
+                                <button key={o.value} onClick={() => toggleDietary(o.value)} data-testid={`filter-dietary-${o.value}`}
                                   className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors ${activeDietary.includes(o.value) ? "bg-foreground text-white" : "bg-gray-100 text-foreground/70"}`}
                                 >{o.label}</button>
                               ))}
@@ -1142,7 +1129,7 @@ export default function Home() {
                             <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-2">Distance</p>
                             <div className="flex flex-wrap gap-1.5">
                               {FILTER_OPTIONS.distance.map(o => (
-                                <button key={o.value} onClick={() => { setActiveDistance(activeDistance === o.value ? null : o.value); trackFilterChange("distance", o.value); }} data-testid={`filter-distance-${o.value}`}
+                                <button key={o.value} onClick={() => setActiveDistance(activeDistance === o.value ? null : o.value)} data-testid={`filter-distance-${o.value}`}
                                   className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors ${activeDistance === o.value ? "bg-foreground text-white" : "bg-gray-100 text-foreground/70"}`}
                                 >{o.label}</button>
                               ))}
@@ -1168,8 +1155,8 @@ export default function Home() {
                 <div>
                   <div className="flex items-center justify-between mb-4">
                     <p className="text-sm font-bold text-foreground">
-                      {searchResults.length > 0
-                        ? `${searchResults.length} results for "${searchQuery}"`
+                      {(searchResults.length + locationSearchResults.length) > 0
+                        ? `${searchResults.length + locationSearchResults.length} results for "${searchQuery}"`
                         : `No results for "${searchQuery}"`
                       }
                     </p>
@@ -1181,38 +1168,82 @@ export default function Home() {
                       Clear
                     </button>
                   </div>
-                  {searchResults.length > 0 ? (
-                    <div className="space-y-2">
-                      {searchResults.map((r, idx) => {
-                        const isNameMatch = r.name.toLowerCase().includes(searchQuery.toLowerCase());
-                        return (
-                          <button
-                            key={`${r.id}-${idx}`}
-                            onClick={() => {
-                              trackEvent("view_detail", { restaurantId: r.id, metadata: { source: "search_results", query: searchQuery.trim() } });
-                              setSearchOpen(false);
-                              navigate(`/restaurant/${r.id}`);
-                            }}
-                            className="w-full flex items-center gap-3 px-4 py-3 bg-white rounded-2xl border border-gray-100/80 hover:bg-gray-50 active:scale-[0.97] transition-all duration-150 text-left"
-                            style={{ boxShadow: "0 2px 8px -2px rgba(0,0,0,0.06)" }}
-                            data-testid={`drawer-search-result-${r.id}`}
-                          >
-                            <div className="w-10 h-10 rounded-full bg-gray-50 flex items-center justify-center text-lg flex-shrink-0">
-                              {isNameMatch ? "📍" : "🏷️"}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <p className="text-sm font-semibold text-foreground truncate">{r.name}</p>
-                              <p className="text-[11px] text-muted-foreground truncate">★ {r.rating} · {r.category} · {r.address}</p>
-                            </div>
-                            {!isNameMatch && (
-                              <span className="text-[9px] text-muted-foreground/60 bg-gray-100 px-2 py-0.5 rounded-full flex-shrink-0">Similar</span>
-                            )}
-                            <span className="text-muted-foreground/40 text-xs">&#8250;</span>
-                          </button>
-                        );
-                      })}
+
+                  {locationSearchResults.length > 0 && (
+                    <div className="mb-4">
+                      <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-2">Locations</p>
+                      <div className="space-y-2">
+                        {locationSearchResults.map((loc) => {
+                          const nearby = getRestaurantsNearLocation(loc.lat, loc.lng);
+                          return (
+                            <button
+                              key={loc.name}
+                              onClick={() => {
+                                setCurrentLocationName(loc.name);
+                                setUserLocation({ lat: loc.lat, lng: loc.lng });
+                                setSearchOpen(false);
+                                setSearchQuery("");
+                                setDrawerOpen(false);
+                              }}
+                              className="w-full flex items-center gap-3 px-4 py-3 bg-white rounded-2xl border border-gray-100/80 hover:bg-gray-50 active:scale-[0.97] transition-all duration-150 text-left"
+                              style={{ boxShadow: "0 2px 8px -2px rgba(0,0,0,0.06)" }}
+                              data-testid={`search-location-${loc.name.toLowerCase()}`}
+                            >
+                              <div className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center flex-shrink-0">
+                                <MapPin className="w-5 h-5 text-[#E53935]" />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-semibold text-foreground">{loc.name}</p>
+                                <p className="text-[11px] text-muted-foreground truncate">
+                                  {nearby.length > 0
+                                    ? `${nearby.length} restaurants nearby · ${nearby.slice(0, 2).map(r => r.name).join(", ")}...`
+                                    : "Bangkok area"
+                                  }
+                                </p>
+                              </div>
+                              <span className="text-muted-foreground/40 text-xs">&#8250;</span>
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
-                  ) : (
+                  )}
+
+                  {searchResults.length > 0 && (
+                    <>
+                      {locationSearchResults.length > 0 && (
+                        <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-2">Restaurants</p>
+                      )}
+                      <div className="space-y-2">
+                        {searchResults.map((r, idx) => {
+                          const isNameMatch = r.name.toLowerCase().includes(searchQuery.toLowerCase());
+                          return (
+                            <button
+                              key={`${r.id}-${idx}`}
+                              onClick={() => { setSearchOpen(false); navigate(`/restaurant/${r.id}`); }}
+                              className="w-full flex items-center gap-3 px-4 py-3 bg-white rounded-2xl border border-gray-100/80 hover:bg-gray-50 active:scale-[0.97] transition-all duration-150 text-left"
+                              style={{ boxShadow: "0 2px 8px -2px rgba(0,0,0,0.06)" }}
+                              data-testid={`drawer-search-result-${r.id}`}
+                            >
+                              <div className="w-10 h-10 rounded-full bg-gray-50 flex items-center justify-center text-lg flex-shrink-0">
+                                {isNameMatch ? "📍" : "🏷️"}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-semibold text-foreground truncate">{r.name}</p>
+                                <p className="text-[11px] text-muted-foreground truncate">★ {r.rating} · {r.category} · {r.address}</p>
+                              </div>
+                              {!isNameMatch && (
+                                <span className="text-[9px] text-muted-foreground/60 bg-gray-100 px-2 py-0.5 rounded-full flex-shrink-0">Similar</span>
+                              )}
+                              <span className="text-muted-foreground/40 text-xs">&#8250;</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </>
+                  )}
+
+                  {searchResults.length === 0 && locationSearchResults.length === 0 && (
                     <div className="flex flex-col items-center justify-center py-12 gap-3">
                       <span className="text-4xl">🔍</span>
                       <p className="text-sm text-muted-foreground">Try a different search term</p>
@@ -1231,11 +1262,7 @@ export default function Home() {
                     {suggestions.slice(0, 6).map((r) => (
                       <button
                         key={r.id}
-                        onClick={() => {
-                          trackEvent("view_detail", { restaurantId: r.id, metadata: { source: "search_suggestions" } });
-                          setSearchOpen(false);
-                          navigate(`/restaurant/${r.id}`);
-                        }}
+                        onClick={() => { setSearchOpen(false); navigate(`/restaurant/${r.id}`); }}
                         className="w-full flex items-center gap-3 px-4 py-3 bg-white rounded-2xl border border-gray-100/80 hover:bg-gray-50 active:scale-[0.97] transition-all duration-150 text-left"
                         style={{ boxShadow: "0 2px 8px -2px rgba(0,0,0,0.06)" }}
                         data-testid={`search-suggestion-${r.id}`}
@@ -1295,7 +1322,7 @@ export default function Home() {
                       <motion.button
                         key={vibe.mode}
                         whileTap={{ scale: 0.9 }}
-                        onClick={() => { setMoreVibesOpen(false); handleVibeClick(vibe.mode); }}
+                        onClick={(e) => { setMoreVibesOpen(false); handleVibeClickAnimated(vibe.mode, vibe.emoji, e.currentTarget); }}
                         className="flex flex-col items-center gap-1.5 py-3 rounded-2xl bg-gray-50 border border-gray-100/80"
                         data-testid={`more-vibe-${vibe.mode}`}
                       >
@@ -1315,7 +1342,7 @@ export default function Home() {
                       <motion.button
                         key={vibe.mode}
                         whileTap={{ scale: 0.9 }}
-                        onClick={() => { setMoreVibesOpen(false); handleVibeClick(vibe.mode); }}
+                        onClick={(e) => { setMoreVibesOpen(false); handleVibeClickAnimated(vibe.mode, vibe.emoji, e.currentTarget); }}
                         className="flex flex-col items-center gap-1.5 py-3 rounded-2xl bg-gray-50 border border-gray-100/80"
                         data-testid={`more-vibe-${vibe.mode}`}
                       >

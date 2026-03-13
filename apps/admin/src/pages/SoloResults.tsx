@@ -1,9 +1,12 @@
 import { useState, useMemo, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useLocation } from "wouter";
+import { useQuery } from "@tanstack/react-query";
 import { BottomNav } from "@/components/BottomNav";
 import { Sparkles, Clock, Wallet, TrendingUp, MapPin, Search, UtensilsCrossed, X, Check } from "lucide-react";
 import { useTasteProfile } from "@/hooks/use-taste-profile";
+import { VIBE_LABELS, VIBE_EMOJI } from "@shared/vibeConfig";
+import type { VibeTag } from "@shared/vibeConfig";
 import mascotPath from "@assets/image_1772011321697.png";
 import drunkToastPath from "@assets/drunk_toast_nobg.png";
 
@@ -48,7 +51,7 @@ const ALL_MENUS = [
 
 type MenuItem = typeof ALL_MENUS[0];
 
-function parseQuizParams(): { cuisines: string[]; diet: string[]; locations: string[]; budget: string[]; interests: string[] } {
+function parseQuizParams(): { cuisines: string[]; diet: string[]; locations: string[]; budget: string[]; interests: string[]; vibe: string | null } {
   const params = new URLSearchParams(window.location.search);
   return {
     cuisines: params.get("cuisines")?.split(",").filter(Boolean) || [],
@@ -56,6 +59,7 @@ function parseQuizParams(): { cuisines: string[]; diet: string[]; locations: str
     locations: params.get("locations")?.split(",").filter(Boolean) || [],
     budget: params.get("budget")?.split(",").filter(Boolean) || [],
     interests: params.get("interests")?.split(",").filter(Boolean) || [],
+    vibe: params.get("vibe") || null,
   };
 }
 
@@ -290,17 +294,80 @@ function getPersonalizedThinkingSteps(
   ];
 }
 
+interface VibeRestaurant {
+  id: number;
+  name: string;
+  description: string;
+  imageUrl: string;
+  lat: number;
+  lng: number;
+  category: string;
+  priceLevel: number;
+  rating: number;
+  address: string;
+  vibeMatch?: number;
+}
+
+function mapVibeRestaurantToMenuItem(r: VibeRestaurant, index: number): MenuItem {
+  const budgetMap: Record<number, string> = { 1: "Cheap", 2: "Moderate", 3: "Expensive", 4: "Fancy" };
+  return {
+    id: r.id || 1000 + index,
+    name: r.name,
+    type: r.category,
+    tags: [r.category, budgetMap[r.priceLevel] || "Moderate"].filter(Boolean),
+    restaurantCount: 1,
+    imageUrl: r.imageUrl || "https://images.unsplash.com/photo-1559314809-0d155014e29e?w=600&auto=format&fit=crop&q=60",
+    budget: budgetMap[r.priceLevel] || "Moderate",
+    interests: [],
+    dietary: [],
+    setting: [],
+  };
+}
+
 export default function SoloResults() {
   const [, navigate] = useLocation();
   const { topPreference } = useTasteProfile();
 
   const quizAnswers = useMemo(() => parseQuizParams(), []);
-  const filteredMenus = useMemo(() => filterMenus(quizAnswers), [quizAnswers]);
-  const isDrinksMode = quizAnswers.interests.includes("Drinks");
+  const vibeParam = quizAnswers.vibe;
 
-  const hasFilters = quizAnswers.cuisines.length || quizAnswers.diet.length || quizAnswers.locations.length || quizAnswers.budget.length || quizAnswers.interests.length;
+  const { data: vibeRestaurants, isLoading: vibeLoading } = useQuery<VibeRestaurant[]>({
+    queryKey: ["/api/restaurants/by-vibe", vibeParam],
+    queryFn: async () => {
+      const res = await fetch("/api/restaurants/by-vibe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ vibe: vibeParam }),
+      });
+      if (!res.ok) throw new Error("Failed to fetch vibe restaurants");
+      return res.json();
+    },
+    enabled: !!vibeParam,
+  });
+
+  const vibeMenuItems = useMemo(() => {
+    if (!vibeRestaurants || vibeRestaurants.length === 0) return null;
+    return vibeRestaurants.map((r, i) => mapVibeRestaurantToMenuItem(r, i));
+  }, [vibeRestaurants]);
+
+  const filteredMenus = useMemo(() => {
+    if (vibeParam) {
+      if (vibeMenuItems && vibeMenuItems.length >= 2) return vibeMenuItems;
+      if (vibeMenuItems && vibeMenuItems.length > 0) return vibeMenuItems;
+      return [];
+    }
+    return filterMenus(quizAnswers);
+  }, [quizAnswers, vibeMenuItems, vibeParam]);
+
+  const isDrinksMode = vibeParam === "drinks" || quizAnswers.interests.includes("Drinks");
+
+  const hasFilters = vibeParam || quizAnswers.cuisines.length || quizAnswers.diet.length || quizAnswers.locations.length || quizAnswers.budget.length || quizAnswers.interests.length;
+
+  const vibeLabel = vibeParam && (VIBE_LABELS as Record<string, string>)[vibeParam];
+  const vibeEmoji = vibeParam && (VIBE_EMOJI as Record<string, string>)[vibeParam];
 
   const allFilterChips = [
+    ...(vibeParam ? [{ label: `${vibeEmoji || ""} ${vibeLabel || vibeParam}`.trim(), type: "vibe" as const }] : []),
     ...quizAnswers.cuisines.map((c) => ({ label: c, type: "cuisine" })),
     ...quizAnswers.budget.map((b) => ({ label: b, type: "budget" })),
     ...quizAnswers.diet.map((d) => ({ label: d, type: "diet" })),
@@ -313,6 +380,16 @@ export default function SoloResults() {
   const [leftOption, setLeftOption] = useState(filteredMenus[0] || ALL_MENUS[0]);
   const [rightOption, setRightOption] = useState(filteredMenus[1] || ALL_MENUS[1]);
   const [round, setRound] = useState(1);
+
+  useEffect(() => {
+    if (vibeMenuItems && vibeMenuItems.length >= 2) {
+      setLeftOption(vibeMenuItems[0]);
+      setRightOption(vibeMenuItems[1]);
+      setUsedIds(new Set([vibeMenuItems[0].id, vibeMenuItems[1].id]));
+      setCurrentChoice(null);
+      setRound(1);
+    }
+  }, [vibeMenuItems]);
   const [animating, setAnimating] = useState(false);
   const [selectedSide, setSelectedSide] = useState<"left" | "right" | null>(null);
   const [replacingSide, setReplacingSide] = useState<"left" | "right" | null>(null);
@@ -523,8 +600,8 @@ export default function SoloResults() {
   };
 
   return (
-    <div className="w-full min-h-[100dvh] bg-white flex flex-col items-center pt-10 px-6 pb-32" data-testid="solo-results-page">
-      {hasFilters > 0 && (
+    <div className="w-full min-h-[100dvh] bg-[#FCFCFC] flex flex-col items-center pt-10 px-6 pb-32" data-testid="solo-results-page">
+      {!!hasFilters && (
         <motion.div
           initial={{ opacity: 0, y: -10 }}
           animate={{ opacity: 1, y: 0 }}
@@ -539,6 +616,7 @@ export default function SoloResults() {
               <span
                 key={`${chip.type}-${chip.label}`}
                 className={`text-[10px] font-medium rounded-full px-2.5 py-1 ${
+                  chip.type === "vibe" ? "bg-yellow-50 text-yellow-800 border border-yellow-300" :
                   chip.type === "cuisine" ? "bg-orange-50 text-orange-700 border border-orange-200" :
                   chip.type === "budget" ? "bg-emerald-50 text-emerald-700 border border-emerald-200" :
                   chip.type === "diet" ? "bg-purple-50 text-purple-700 border border-purple-200" :
@@ -628,7 +706,7 @@ export default function SoloResults() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[100] bg-white dark:bg-background flex flex-col"
+            className="fixed inset-0 z-[100] bg-[#FCFCFC] dark:bg-background flex flex-col"
             data-testid="decide-for-me-screen"
           >
             <button

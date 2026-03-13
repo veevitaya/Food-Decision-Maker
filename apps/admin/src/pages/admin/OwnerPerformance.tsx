@@ -34,9 +34,9 @@ const PEAK_HOURS = [
 
 const TOP_SOURCES = [
   { source: "Vibe Browse", pct: 35, color: "#FFCC02" },
-  { source: "Search", pct: 25, color: "#6C2BD9" },
+  { source: "Search", pct: 25, color: "var(--admin-blue)" },
   { source: "Trending Feed", pct: 20, color: "#00B14F" },
-  { source: "Recommendations", pct: 12, color: "#3B82F6" },
+  { source: "Recommendations", pct: 12, color: "var(--admin-blue)" },
   { source: "Direct Link", pct: 8, color: "#94A3B8" },
 ];
 
@@ -136,7 +136,7 @@ export default function OwnerPerformance() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6" data-testid="section-peak-hours">
           <div className="flex items-center gap-2 mb-5">
-            <div className="w-[3px] h-4 bg-[#6C2BD9] rounded-full" />
+            <div className="w-[3px] h-4 bg-[var(--admin-blue)] rounded-full" />
             <h3 className="text-[15px] font-semibold text-gray-800">Peak Hours</h3>
           </div>
           <div className="space-y-2">
@@ -145,7 +145,7 @@ export default function OwnerPerformance() {
                 <span className="text-xs text-gray-400 w-10 shrink-0">{h.hour}</span>
                 <div className="flex-1 h-5 bg-gray-50 rounded-full overflow-hidden">
                   <div
-                    className="h-full rounded-full bg-[#6C2BD9]/60 transition-all"
+                    className="h-full rounded-full bg-[var(--admin-blue-90)] transition-all"
                     style={{ width: `${(h.visitors / maxVisitors) * 100}%` }}
                   />
                 </div>
@@ -189,7 +189,7 @@ export default function OwnerPerformance() {
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div className="p-4 rounded-xl bg-gray-50 border border-gray-100">
             <div className="flex items-center gap-2 mb-2">
-              <Users className="w-4 h-4 text-[#6C2BD9]" />
+              <Users className="w-4 h-4 text-[var(--admin-blue)]" />
               <span className="text-xs font-medium text-gray-500">Conversion Rate</span>
             </div>
             <p className="text-lg font-bold text-gray-800">

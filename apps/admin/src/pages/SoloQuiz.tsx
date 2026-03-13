@@ -140,7 +140,7 @@ export default function SoloQuiz() {
   const config = STEP_CONFIG[step];
 
   return (
-    <div className="w-full h-[100dvh] bg-white flex flex-col" data-testid="solo-quiz-page">
+    <div className="w-full h-[100dvh] bg-[#FCFCFC] flex flex-col" data-testid="solo-quiz-page">
       <div className="flex items-center justify-end px-6 pt-14 pb-3">
         <button onClick={handleNext} className="text-muted-foreground font-medium text-sm px-3 py-1.5 rounded-full hover:bg-gray-50 transition-colors active:scale-95" data-testid="button-quiz-skip">
           Skip

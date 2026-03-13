@@ -5,10 +5,12 @@ import { useLineProfile } from "@/hooks/use-line-profile";
 import { sendGroupInvite } from "@/lib/liff";
 import { BottomNav } from "@/components/BottomNav";
 import { useSavedRestaurants } from "@/hooks/use-saved-restaurants";
-import { ChevronRight, UserPlus, Unlink, LogIn, LogOut, X, Store, User, Star, TrendingUp, Image, Sparkles, Plus, Check, Crown, Eye, ExternalLink, MapPin, Clock, BarChart3, ArrowUpRight, ArrowDownRight, Utensils, Zap, Calendar, Megaphone, Tag, Percent, Trash2, Send, Users, Target, Search } from "lucide-react";
+import { ChevronRight, UserPlus, Unlink, LogIn, LogOut, X, Store, User, Star, TrendingUp, Image, Sparkles, Plus, Check, Crown, Eye, ExternalLink, MapPin, Clock, BarChart3, ArrowUpRight, ArrowDownRight, Utensils, Zap, Calendar, Megaphone, Tag, Percent, Trash2, Send, Users, Target, Search, Shield, AlertTriangle, Upload, FileText, Building2, Phone, Mail, ChevronDown, ShieldCheck, Globe } from "lucide-react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { RestaurantResponse } from "@shared/routes";
+import { useLanguage } from "@/i18n/LanguageProvider";
+import type { LanguagePreference } from "@/i18n/index";
 
 const DIETARY_OPTIONS = [
   { value: "halal", label: "Halal", emoji: "🕌" },
@@ -33,7 +35,7 @@ const CUISINE_OPTIONS = [
   { value: "french", label: "French", emoji: "🇫🇷" },
   { value: "vietnamese", label: "Vietnamese", emoji: "🇻🇳" },
   { value: "middle_eastern", label: "Middle Eastern", emoji: "🧆" },
-  { value: "street_food", label: "Street Food", emoji: "🛒" },
+  { value: "street_food", label: "Street Food", emoji: "🍢" },
 ];
 
 const BUDGET_OPTIONS = [
@@ -117,7 +119,7 @@ const RESTAURANT_CATEGORIES = [
 ];
 
 const RESTAURANT_TAGS = [
-  { value: "street_food", label: "Street Food", emoji: "🛒" },
+  { value: "street_food", label: "Street Food", emoji: "🍢" },
   { value: "family_friendly", label: "Family Friendly", emoji: "👨‍👩‍👧" },
   { value: "date_night", label: "Date Night", emoji: "💕" },
   { value: "late_night", label: "Late Night", emoji: "🌙" },
@@ -150,6 +152,11 @@ interface OwnerProfile {
   address: string;
   activePackages: string[];
   campaigns: Campaign[];
+  photos?: string[];
+  ownerName?: string;
+  ownerContact?: string;
+  phone?: string;
+  documents?: { businessReg?: string; ownershipProof?: string; photoId?: string };
 }
 
 function getStoredProfile(): LocalProfile {
@@ -235,14 +242,60 @@ async function fetchFromServer(lineUserId: string): Promise<Partial<LocalProfile
 
 const springConfig = { type: "spring" as const, damping: 26, stiffness: 260, mass: 0.8 };
 
+const LANGUAGE_OPTIONS: { value: LanguagePreference; labelKey: string; flag: string }[] = [
+  { value: "auto", labelKey: "profile.language_auto", flag: "🌐" },
+  { value: "en", labelKey: "profile.language_english", flag: "🇬🇧" },
+  { value: "th", labelKey: "profile.language_thai", flag: "🇹🇭" },
+];
+
 export default function Profile() {
   const [, navigate] = useLocation();
   const { profile: lineProfile, liffAvailable, login: lineLogin, logout: lineLogout } = useLineProfile();
+  const { locale, preference: languagePreference, setLanguage, t } = useLanguage();
   const [localProfile, setLocalProfile] = useState<LocalProfile>(getStoredProfile);
   const [showPartnerModal, setShowPartnerModal] = useState(false);
   const [partnerInput, setPartnerInput] = useState("");
   const [activeSection, setActiveSection] = useState<string | null>(null);
   const [isOwnerMode, setIsOwnerMode] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [onboardingStep, setOnboardingStep] = useState<"choice" | "profile" | "register" | "claim" | "claim-confirm" | "documents" | "submitted">("choice");
+  const [ownerName, setOwnerName] = useState("");
+  const [ownerContact, setOwnerContact] = useState("");
+  const [newRestaurantName, setNewRestaurantName] = useState("");
+  const [newRestaurantCategory, setNewRestaurantCategory] = useState("");
+  const [newRestaurantAddress, setNewRestaurantAddress] = useState("");
+  const [newRestaurantPhone, setNewRestaurantPhone] = useState("");
+  const [claimSearchQuery, setClaimSearchQuery] = useState("");
+  const [selectedClaimRestaurant, setSelectedClaimRestaurant] = useState<any>(null);
+  const [claimConfirmText, setClaimConfirmText] = useState("");
+  const [onboardingPath, setOnboardingPath] = useState<"register" | "claim">("register");
+  const [docBusinessReg, setDocBusinessReg] = useState("");
+  const [docOwnershipProof, setDocOwnershipProof] = useState("");
+  const [docPhotoId, setDocPhotoId] = useState("");
+
+  const ONBOARDING_STATUS_KEY = "toast_owner_onboarding_status";
+
+  const ownerOnboardingStatus = (() => {
+    try {
+      const stored = localStorage.getItem(ONBOARDING_STATUS_KEY);
+      if (stored) return JSON.parse(stored) as { status: "pending" | "approved" | "rejected"; restaurantName: string };
+    } catch {}
+    return null;
+  })();
+
+  const ownerOnboarded = (() => {
+    const status = ownerOnboardingStatus?.status;
+    if (status === "approved") return true;
+    try {
+      const stored = localStorage.getItem(OWNER_STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        const hasName = !!(parsed.restaurantName && parsed.restaurantName.trim());
+        return hasName && status === "approved";
+      }
+    } catch {}
+    return false;
+  })();
 
   useEffect(() => {
     if (lineProfile) {
@@ -301,37 +354,16 @@ export default function Profile() {
   const pictureUrl = localProfile.pictureUrl || lineProfile?.pictureUrl || "";
 
   return (
-    <div className="w-full min-h-[100dvh] bg-white dark:bg-background" data-testid="profile-page">
+    <div className="w-full min-h-[100dvh] bg-[#FCFCFC] dark:bg-background" data-testid="profile-page">
       <div className="px-6 pt-14 pb-6">
         <div className="flex items-center justify-between mb-8">
           <p
             className="text-[11px] font-bold uppercase tracking-[0.2em] text-muted-foreground/40"
             data-testid="text-profile-label"
           >
-            {isOwnerMode ? "Business" : "Profile"}
+            {isOwnerMode ? t("profile.business") : t("profile.title")}
           </p>
-          <div className="flex items-center gap-2">
-            {!isOwnerMode && !lineProfile && liffAvailable && (
-              <button
-                onClick={lineLogin}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#06C755] text-white text-xs font-semibold active:scale-95 transition-transform"
-                style={{ boxShadow: "0 3px 12px rgba(6,199,85,0.3)" }}
-                data-testid="button-line-login"
-              >
-                <LogIn className="w-3.5 h-3.5" />
-                LINE
-              </button>
-            )}
-            {!isOwnerMode && lineProfile && (
-              <button
-                onClick={lineLogout}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-gray-100 dark:bg-muted text-muted-foreground text-xs font-medium active:scale-95 transition-transform"
-                data-testid="button-line-logout"
-              >
-                <LogOut className="w-3.5 h-3.5" />
-              </button>
-            )}
-          </div>
+          <div className="flex items-center gap-2" />
         </div>
 
         <div className="flex flex-col items-center text-center mb-6">
@@ -366,36 +398,38 @@ export default function Profile() {
             )}
           </div>
           {isOwnerMode ? (
-            <p className="text-[22px] font-bold tracking-tight">Business Dashboard</p>
+            <p className="text-[22px] font-bold tracking-tight">{t("profile.business_dashboard")}</p>
           ) : (
             <>
               <input
                 type="text"
                 value={localProfile.displayName}
                 onChange={(e) => updateProfile({ displayName: e.target.value })}
-                placeholder="Your name"
+                placeholder={t("profile.your_name")}
                 className="text-[22px] font-bold bg-transparent border-none outline-none text-center w-full placeholder:text-muted-foreground/30 tracking-tight"
                 data-testid="input-display-name"
               />
               {!liffAvailable && !lineProfile && (
-                <p className="text-[11px] text-muted-foreground/50 mt-1">Open in LINE for full features</p>
+                <p className="text-[11px] text-muted-foreground/50 mt-1">{t("profile.open_in_line")}</p>
               )}
               {lineProfile && (
                 <p className="text-[11px] text-[#06C755] font-medium mt-1.5 flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-[#06C755] inline-block" />
-                  Connected via LINE
+                  {t("profile.connected_via_line")}
                 </p>
               )}
             </>
           )}
         </div>
 
-        <ProfileToggle isOwnerMode={isOwnerMode} onToggle={setIsOwnerMode} />
+        {ownerOnboarded && (
+          <ProfileToggle isOwnerMode={isOwnerMode} onToggle={setIsOwnerMode} />
+        )}
       </div>
 
       <div className="px-5 pb-32">
         <AnimatePresence mode="wait" initial={false}>
-          {isOwnerMode ? (
+          {isOwnerMode && ownerOnboarded ? (
             <motion.div
               key="owner"
               initial={{ opacity: 0, x: 20 }}
@@ -413,29 +447,11 @@ export default function Profile() {
               exit={{ opacity: 0, x: 20 }}
               transition={springConfig}
             >
-              <StatsRow />
+              <StatsRow t={t} />
 
-              <div className="mb-3">
-                <div
-                  className="bg-white dark:bg-card rounded-2xl overflow-hidden border border-gray-100 dark:border-border"
-                >
-                  <PartnerRow
-                    profile={localProfile}
-                    onInvite={invitePartnerViaLine}
-                    onManualAdd={() => setShowPartnerModal(true)}
-                    onUnlink={unlinkPartner}
-                  />
-                </div>
-              </div>
-
-              <div className="mb-3">
-                <SavedSection />
-              </div>
-
-              <div className="mb-3">
-                <div
-                  className="bg-white dark:bg-card rounded-2xl overflow-hidden border border-gray-100 dark:border-border"
-                >
+              <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-muted-foreground/40 mb-2 mt-2 px-1">{t("profile.section_food")}</p>
+              <div className="mb-5">
+                <div className="bg-white dark:bg-card rounded-2xl overflow-hidden border border-gray-100 dark:border-border" style={{ boxShadow: "0 1px 3px rgba(0,0,0,0.04)" }}>
                   <button
                     onClick={() => setActiveSection(activeSection === "dietary" ? null : "dietary")}
                     className="w-full px-5 py-4 flex items-center gap-4 active:bg-gray-50/50 dark:active:bg-muted/50 transition-colors"
@@ -445,11 +461,11 @@ export default function Profile() {
                       🥗
                     </div>
                     <div className="flex-1 text-left">
-                      <p className="font-bold text-[15px]">Dietary</p>
+                      <p className="font-bold text-[15px]">{t("profile.dietary_title")}</p>
                       <p className="text-[11px] text-muted-foreground mt-0.5">
                         {localProfile.dietaryRestrictions.length > 0
-                          ? localProfile.dietaryRestrictions.map(v => DIETARY_OPTIONS.find(o => o.value === v)?.label).filter(Boolean).join(", ")
-                          : "No restrictions"}
+                          ? localProfile.dietaryRestrictions.map(v => t(`profile.${v === "shellfish_free" ? "no_shellfish" : v}`)).filter(Boolean).join(", ")
+                          : t("profile.no_restrictions")}
                       </p>
                     </div>
                     <ChevronRight className={`w-4 h-4 text-muted-foreground/40 transition-transform duration-300 ${activeSection === "dietary" ? "rotate-90" : ""}`} />
@@ -478,7 +494,7 @@ export default function Profile() {
                                 style={localProfile.dietaryRestrictions.includes(opt.value) ? { boxShadow: "0 2px 8px rgba(0,0,0,0.15)" } : {}}
                               >
                                 <span className="text-sm">{opt.emoji}</span>
-                                {opt.label}
+                                {t(`profile.${opt.value === "shellfish_free" ? "no_shellfish" : opt.value}`)}
                               </button>
                             ))}
                           </div>
@@ -498,11 +514,11 @@ export default function Profile() {
                       🍜
                     </div>
                     <div className="flex-1 text-left">
-                      <p className="font-bold text-[15px]">Cuisines</p>
+                      <p className="font-bold text-[15px]">{t("profile.cuisine_title")}</p>
                       <p className="text-[11px] text-muted-foreground mt-0.5">
                         {localProfile.cuisinePreferences.length > 0
                           ? localProfile.cuisinePreferences.map(v => CUISINE_OPTIONS.find(o => o.value === v)?.emoji).filter(Boolean).join("  ")
-                          : "All cuisines"}
+                          : t("profile.all_cuisines")}
                       </p>
                     </div>
                     <ChevronRight className={`w-4 h-4 text-muted-foreground/40 transition-transform duration-300 ${activeSection === "cuisines" ? "rotate-90" : ""}`} />
@@ -531,7 +547,7 @@ export default function Profile() {
                                 style={localProfile.cuisinePreferences.includes(opt.value) ? { boxShadow: "0 2px 8px rgba(0,0,0,0.15)" } : {}}
                               >
                                 <span className="text-lg">{opt.emoji}</span>
-                                {opt.label}
+                                {t(`cuisine.${opt.value}`)}
                               </button>
                             ))}
                           </div>
@@ -539,25 +555,21 @@ export default function Profile() {
                       </motion.div>
                     )}
                   </AnimatePresence>
-                </div>
-              </div>
 
-              <div className="mb-3">
-                <div
-                  className="bg-white dark:bg-card rounded-2xl overflow-hidden border border-gray-100 dark:border-border"
-                >
+                  <div className="mx-5 h-px bg-gray-100 dark:bg-border" />
+
                   <button
                     onClick={() => setActiveSection(activeSection === "defaults" ? null : "defaults")}
                     className="w-full px-5 py-4 flex items-center gap-4 active:bg-gray-50/50 dark:active:bg-muted/50 transition-colors"
                     data-testid="button-defaults-section"
                   >
-                    <div className="w-11 h-11 rounded-2xl flex items-center justify-center text-xl" style={{ background: "linear-gradient(135deg, hsl(45,55%,92%) 0%, hsl(40,50%,85%) 100%)" }}>
-                      ⚙️
+                    <div className="w-11 h-11 rounded-2xl flex items-center justify-center text-xl" style={{ background: "linear-gradient(135deg, hsl(220,50%,92%) 0%, hsl(230,45%,85%) 100%)" }}>
+                      🎯
                     </div>
                     <div className="flex-1 text-left">
-                      <p className="font-bold text-[15px]">Settings</p>
+                      <p className="font-bold text-[15px]">{t("profile.budget_level")} & {t("profile.search_radius")}</p>
                       <p className="text-[11px] text-muted-foreground mt-0.5">
-                        {"฿".repeat(localProfile.defaultBudget)} · {localProfile.defaultDistance}
+                        {"฿".repeat(localProfile.defaultBudget)} · {localProfile.defaultDistance === "any" ? t("profile.anywhere") : localProfile.defaultDistance}
                       </p>
                     </div>
                     <ChevronRight className={`w-4 h-4 text-muted-foreground/40 transition-transform duration-300 ${activeSection === "defaults" ? "rotate-90" : ""}`} />
@@ -573,29 +585,32 @@ export default function Profile() {
                       >
                         <div className="px-5 pb-5 space-y-5">
                           <div>
-                            <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">Budget Level</p>
+                            <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">{t("profile.budget_level")}</p>
                             <div className="grid grid-cols-4 gap-2">
-                              {BUDGET_OPTIONS.map(opt => (
-                                <button
-                                  key={opt.value}
-                                  onClick={() => updateProfile({ defaultBudget: opt.value })}
-                                  data-testid={`button-budget-${opt.value}`}
-                                  className={`relative py-3.5 rounded-2xl text-center transition-all duration-200 active:scale-95 border overflow-hidden ${
-                                    localProfile.defaultBudget === opt.value
-                                      ? "bg-foreground text-white border-foreground font-bold"
-                                      : "bg-white dark:bg-muted text-foreground/50 border-gray-100 dark:border-border"
-                                  }`}
-                                  style={localProfile.defaultBudget === opt.value ? { boxShadow: "0 4px 12px rgba(0,0,0,0.15)" } : {}}
-                                >
-                                  <p className="text-sm font-semibold">{opt.label}</p>
-                                  <p className={`text-[8px] mt-0.5 ${localProfile.defaultBudget === opt.value ? "text-white/60" : "text-muted-foreground/50"}`}>{opt.description}</p>
-                                </button>
-                              ))}
+                              {BUDGET_OPTIONS.map(opt => {
+                                const descKey = `profile.budget_${opt.value === 1 ? "budget" : opt.value === 2 ? "moderate" : opt.value === 3 ? "upscale" : "fine"}`;
+                                return (
+                                  <button
+                                    key={opt.value}
+                                    onClick={() => updateProfile({ defaultBudget: opt.value })}
+                                    data-testid={`button-budget-${opt.value}`}
+                                    className={`relative py-3.5 rounded-2xl text-center transition-all duration-200 active:scale-95 border overflow-hidden ${
+                                      localProfile.defaultBudget === opt.value
+                                        ? "bg-foreground text-white border-foreground font-bold"
+                                        : "bg-white dark:bg-muted text-foreground/50 border-gray-100 dark:border-border"
+                                    }`}
+                                    style={localProfile.defaultBudget === opt.value ? { boxShadow: "0 4px 12px rgba(0,0,0,0.15)" } : {}}
+                                  >
+                                    <p className="text-sm font-semibold">{opt.label}</p>
+                                    <p className={`text-[8px] mt-0.5 ${localProfile.defaultBudget === opt.value ? "text-white/60" : "text-muted-foreground/50"}`}>{t(descKey)}</p>
+                                  </button>
+                                );
+                              })}
                             </div>
                           </div>
 
                           <div>
-                            <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">Search Radius</p>
+                            <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">{t("profile.search_radius")}</p>
                             <div className="flex gap-2">
                               {DISTANCE_OPTIONS.map(opt => (
                                 <button
@@ -609,7 +624,7 @@ export default function Profile() {
                                   }`}
                                   style={localProfile.defaultDistance === opt.value ? { boxShadow: "0 2px 8px rgba(0,0,0,0.15)" } : {}}
                                 >
-                                  {opt.label}
+                                  {opt.value === "any" ? t("profile.anywhere") : opt.label}
                                 </button>
                               ))}
                             </div>
@@ -619,6 +634,238 @@ export default function Profile() {
                     )}
                   </AnimatePresence>
                 </div>
+              </div>
+
+              <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-muted-foreground/40 mb-2 px-1">{t("profile.section_app")}</p>
+              <div className="mb-5">
+                <div className="bg-white dark:bg-card rounded-2xl overflow-hidden border border-gray-100 dark:border-border" style={{ boxShadow: "0 1px 3px rgba(0,0,0,0.04)" }}>
+                  <button
+                    onClick={() => setActiveSection(activeSection === "language" ? null : "language")}
+                    className="w-full px-5 py-4 flex items-center gap-4 active:bg-gray-50/50 dark:active:bg-muted/50 transition-colors"
+                    data-testid="button-language-section"
+                  >
+                    <div className="w-11 h-11 rounded-2xl flex items-center justify-center text-xl" style={{ background: "linear-gradient(135deg, hsl(270,50%,92%) 0%, hsl(280,45%,85%) 100%)" }}>
+                      🌐
+                    </div>
+                    <div className="flex-1 text-left">
+                      <p className="font-bold text-[15px]">{t("profile.language_title")}</p>
+                      <p className="text-[11px] text-muted-foreground mt-0.5">
+                        {languagePreference === "auto" ? t("profile.language_auto") : languagePreference === "th" ? "ไทย" : "English"}
+                      </p>
+                    </div>
+                    <ChevronRight className={`w-4 h-4 text-muted-foreground/40 transition-transform duration-300 ${activeSection === "language" ? "rotate-90" : ""}`} />
+                  </button>
+                  <AnimatePresence initial={false}>
+                    {activeSection === "language" && (
+                      <motion.div
+                        initial={{ height: 0 }}
+                        animate={{ height: "auto" }}
+                        exit={{ height: 0 }}
+                        transition={springConfig}
+                        className="overflow-hidden"
+                      >
+                        <div className="px-5 pb-5">
+                          <div className="flex gap-2">
+                            {LANGUAGE_OPTIONS.map(opt => (
+                              <button
+                                key={opt.value}
+                                onClick={() => setLanguage(opt.value)}
+                                data-testid={`button-language-${opt.value}`}
+                                className={`flex-1 py-3 rounded-xl text-[12px] font-medium transition-all duration-200 active:scale-95 border ${
+                                  languagePreference === opt.value
+                                    ? "bg-foreground text-white border-foreground"
+                                    : "bg-white dark:bg-muted text-foreground/50 border-gray-100 dark:border-border"
+                                }`}
+                                style={languagePreference === opt.value ? { boxShadow: "0 2px 8px rgba(0,0,0,0.15)" } : {}}
+                              >
+                                <span className="mr-1">{opt.flag}</span> {t(opt.labelKey)}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  <div className="mx-5 h-px bg-gray-100 dark:bg-border" />
+
+                  <button
+                    className="w-full px-5 py-4 flex items-center gap-4 active:bg-gray-50/50 dark:active:bg-muted/50 transition-colors"
+                    data-testid="button-notifications-section"
+                  >
+                    <div className="w-11 h-11 rounded-2xl flex items-center justify-center text-xl" style={{ background: "linear-gradient(135deg, hsl(40,60%,92%) 0%, hsl(35,50%,85%) 100%)" }}>
+                      🔔
+                    </div>
+                    <div className="flex-1 text-left">
+                      <p className="font-bold text-[15px]">{t("profile.notifications")}</p>
+                      <p className="text-[11px] text-muted-foreground mt-0.5">{t("profile.notifications_desc")}</p>
+                    </div>
+                    <ChevronRight className="w-4 h-4 text-muted-foreground/40" />
+                  </button>
+
+                  <div className="mx-5 h-px bg-gray-100 dark:bg-border" />
+
+                  <button
+                    className="w-full px-5 py-4 flex items-center gap-4 active:bg-gray-50/50 dark:active:bg-muted/50 transition-colors"
+                    data-testid="button-contact-support"
+                  >
+                    <div className="w-11 h-11 rounded-2xl flex items-center justify-center text-xl" style={{ background: "linear-gradient(135deg, hsl(340,50%,92%) 0%, hsl(350,45%,85%) 100%)" }}>
+                      💬
+                    </div>
+                    <div className="flex-1 text-left">
+                      <p className="font-bold text-[15px]">{t("profile.contact_support")}</p>
+                    </div>
+                    <ChevronRight className="w-4 h-4 text-muted-foreground/40" />
+                  </button>
+
+                  <div className="mx-5 h-px bg-gray-100 dark:bg-border" />
+
+                  <button
+                    onClick={() => {
+                      if (window.confirm(t("profile.clear_data_confirm"))) {
+                        localStorage.removeItem(PROFILE_STORAGE_KEY);
+                        localStorage.removeItem("toast_taste_profile");
+                        localStorage.removeItem("toast_saved_restaurants");
+                        setLocalProfile(getStoredProfile());
+                      }
+                    }}
+                    className="w-full px-5 py-4 flex items-center gap-4 active:bg-gray-50/50 dark:active:bg-muted/50 transition-colors"
+                    data-testid="button-clear-data"
+                  >
+                    <div className="w-11 h-11 rounded-2xl flex items-center justify-center text-xl" style={{ background: "linear-gradient(135deg, hsl(0,50%,92%) 0%, hsl(350,45%,85%) 100%)" }}>
+                      🗑️
+                    </div>
+                    <div className="flex-1 text-left">
+                      <p className="font-bold text-[15px] text-red-500">{t("profile.clear_data")}</p>
+                      <p className="text-[11px] text-muted-foreground mt-0.5">{t("profile.clear_data_desc")}</p>
+                    </div>
+                  </button>
+                </div>
+              </div>
+
+              <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-muted-foreground/40 mb-2 px-1">{t("profile.section_account")}</p>
+              <div className="mb-5">
+                <div className="bg-white dark:bg-card rounded-2xl overflow-hidden border border-gray-100 dark:border-border" style={{ boxShadow: "0 1px 3px rgba(0,0,0,0.04)" }}>
+                  {lineProfile ? (
+                    <div className="px-5 py-4 flex items-center gap-4">
+                      <div className="w-11 h-11 rounded-2xl flex items-center justify-center" style={{ background: "#06C755" }}>
+                        <span className="text-white text-[11px] font-bold">LINE</span>
+                      </div>
+                      <div className="flex-1 text-left">
+                        <p className="font-bold text-[15px]">LINE</p>
+                        <p className="text-[11px] text-[#06C755] font-medium mt-0.5 flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-[#06C755] inline-block" />
+                          {t("profile.connected_via_line")}
+                        </p>
+                      </div>
+                      <button
+                        onClick={lineLogout}
+                        className="px-3 py-2 rounded-xl bg-gray-100 dark:bg-muted text-muted-foreground text-xs font-medium active:scale-95 transition-transform"
+                        data-testid="button-line-logout-section"
+                      >
+                        <LogOut className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={liffAvailable ? lineLogin : undefined}
+                      className="w-full px-5 py-4 flex items-center gap-4 active:bg-gray-50/50 transition-colors"
+                      data-testid="button-line-connect"
+                    >
+                      <div className="w-11 h-11 rounded-2xl flex items-center justify-center" style={{ background: "#06C755" }}>
+                        <span className="text-white text-[11px] font-bold">LINE</span>
+                      </div>
+                      <div className="flex-1 text-left">
+                        <p className="font-bold text-[15px]">{t("profile.login_line")}</p>
+                        <p className="text-[11px] text-muted-foreground mt-0.5">{t("profile.open_in_line")}</p>
+                      </div>
+                      <ChevronRight className="w-4 h-4 text-muted-foreground/40" />
+                    </button>
+                  )}
+
+                  <div className="mx-5 h-px bg-gray-100 dark:bg-border" />
+
+                  <PartnerRow
+                    profile={localProfile}
+                    onInvite={invitePartnerViaLine}
+                    onManualAdd={() => setShowPartnerModal(true)}
+                    onUnlink={unlinkPartner}
+                    t={t}
+                  />
+
+                  <div className="mx-5 h-px bg-gray-100 dark:bg-border" />
+
+                  <SavedSection t={t} />
+                </div>
+              </div>
+
+              <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-muted-foreground/40 mb-2 px-1">{t("profile.section_about")}</p>
+              <div className="mb-5">
+                <div className="bg-white dark:bg-card rounded-2xl overflow-hidden border border-gray-100 dark:border-border" style={{ boxShadow: "0 1px 3px rgba(0,0,0,0.04)" }}>
+                  <button
+                    className="w-full px-5 py-4 flex items-center gap-4 active:bg-gray-50/50 dark:active:bg-muted/50 transition-colors"
+                    data-testid="button-privacy-policy"
+                  >
+                    <div className="w-11 h-11 rounded-2xl flex items-center justify-center text-xl" style={{ background: "linear-gradient(135deg, hsl(200,50%,92%) 0%, hsl(210,45%,85%) 100%)" }}>
+                      🔒
+                    </div>
+                    <div className="flex-1 text-left">
+                      <p className="font-bold text-[15px]">{t("profile.privacy_policy")}</p>
+                    </div>
+                    <ChevronRight className="w-4 h-4 text-muted-foreground/40" />
+                  </button>
+
+                  <div className="mx-5 h-px bg-gray-100 dark:bg-border" />
+
+                  <button
+                    className="w-full px-5 py-4 flex items-center gap-4 active:bg-gray-50/50 dark:active:bg-muted/50 transition-colors"
+                    data-testid="button-terms-of-service"
+                  >
+                    <div className="w-11 h-11 rounded-2xl flex items-center justify-center text-xl" style={{ background: "linear-gradient(135deg, hsl(160,50%,92%) 0%, hsl(170,45%,85%) 100%)" }}>
+                      📄
+                    </div>
+                    <div className="flex-1 text-left">
+                      <p className="font-bold text-[15px]">{t("profile.terms_of_service")}</p>
+                    </div>
+                    <ChevronRight className="w-4 h-4 text-muted-foreground/40" />
+                  </button>
+
+                  <div className="mx-5 h-px bg-gray-100 dark:bg-border" />
+
+                  <button
+                    className="w-full px-5 py-4 flex items-center gap-4 active:bg-gray-50/50 dark:active:bg-muted/50 transition-colors"
+                    data-testid="button-about-app"
+                  >
+                    <div className="w-11 h-11 rounded-2xl flex items-center justify-center text-xl" style={{ background: "linear-gradient(135deg, hsl(45,60%,92%) 0%, hsl(40,55%,85%) 100%)" }}>
+                      🍞
+                    </div>
+                    <div className="flex-1 text-left">
+                      <p className="font-bold text-[15px]">{t("profile.about_app")}</p>
+                      <p className="text-[11px] text-muted-foreground mt-0.5">{t("profile.about_app_desc")}</p>
+                    </div>
+                    <ChevronRight className="w-4 h-4 text-muted-foreground/40" />
+                  </button>
+
+                  <div className="mx-5 h-px bg-gray-100 dark:bg-border" />
+
+                  <button
+                    className="w-full px-5 py-4 flex items-center gap-4 active:bg-gray-50/50 dark:active:bg-muted/50 transition-colors"
+                    data-testid="button-rate-app"
+                  >
+                    <div className="w-11 h-11 rounded-2xl flex items-center justify-center text-xl" style={{ background: "linear-gradient(135deg, hsl(50,65%,92%) 0%, hsl(45,55%,85%) 100%)" }}>
+                      ⭐
+                    </div>
+                    <div className="flex-1 text-left">
+                      <p className="font-bold text-[15px]">{t("profile.rate_app")}</p>
+                    </div>
+                    <ChevronRight className="w-4 h-4 text-muted-foreground/40" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="text-center py-4 mb-4">
+                <p className="text-[10px] text-muted-foreground/40">Toast {t("profile.app_version")} 1.0.0</p>
+                <p className="text-[10px] text-muted-foreground/30 mt-1">{t("profile.about_app_desc")}</p>
               </div>
             </motion.div>
           )}
@@ -649,8 +896,8 @@ export default function Profile() {
                   💕
                 </div>
                 <div>
-                  <h3 className="text-lg font-semibold tracking-tight">Link Partner</h3>
-                  <p className="text-xs text-muted-foreground">Enter their display name</p>
+                  <h3 className="text-lg font-semibold tracking-tight">{t("profile.link_partner")}</h3>
+                  <p className="text-xs text-muted-foreground">{t("profile.enter_display_name")}</p>
                 </div>
               </div>
 
@@ -658,7 +905,7 @@ export default function Profile() {
                 type="text"
                 value={partnerInput}
                 onChange={(e) => setPartnerInput(e.target.value)}
-                placeholder="Partner's name"
+                placeholder={t("profile.partner_name_placeholder")}
                 className="w-full px-5 py-3.5 rounded-2xl bg-gray-50 dark:bg-muted border border-transparent focus:border-gray-200 dark:focus:border-border outline-none text-foreground font-medium placeholder:text-muted-foreground/40 mb-5 transition-colors"
                 data-testid="input-partner-name"
                 autoFocus
@@ -670,7 +917,7 @@ export default function Profile() {
                   className="flex-1 py-3.5 rounded-2xl bg-gray-100 dark:bg-muted text-foreground font-semibold text-sm active:scale-[0.97] transition-transform"
                   data-testid="button-cancel-partner"
                 >
-                  Cancel
+                  {t("common.cancel")}
                 </button>
                 <button
                   onClick={linkPartner}
@@ -679,9 +926,520 @@ export default function Profile() {
                   style={{ boxShadow: "0 4px 14px rgba(0,0,0,0.15)" }}
                   data-testid="button-confirm-partner"
                 >
-                  Link
+                  {t("common.link")}
                 </button>
               </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {!ownerOnboarded && !isOwnerMode && !ownerOnboardingStatus && (
+        <motion.button
+          initial={{ y: 20, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          transition={{ delay: 0.3 }}
+          onClick={() => { setShowOnboarding(true); setOnboardingStep("choice"); }}
+          className="fixed bottom-24 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 px-5 py-3 rounded-full bg-white border border-gray-100 text-sm font-semibold text-foreground active:scale-[0.96] transition-transform"
+          style={{ boxShadow: "0 4px 20px rgba(0,0,0,0.08)" }}
+          data-testid="button-owner-onboarding"
+        >
+          <Store className="w-4 h-4 text-[#00B14F]" />
+          {t("profile.become_owner")}
+        </motion.button>
+      )}
+
+      {ownerOnboardingStatus?.status === "pending" && !isOwnerMode && (
+        <motion.div
+          initial={{ y: 20, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          transition={{ delay: 0.3 }}
+          className="fixed bottom-24 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 px-5 py-3 rounded-full bg-amber-50 border border-amber-200 text-sm font-semibold text-amber-800"
+          style={{ boxShadow: "0 4px 20px rgba(0,0,0,0.08)" }}
+          data-testid="badge-pending-approval"
+        >
+          <Clock className="w-4 h-4 text-amber-500 animate-pulse-soft" />
+          {t("profile.claim_pending")} — {ownerOnboardingStatus.restaurantName}
+        </motion.div>
+      )}
+
+      <AnimatePresence>
+        {showOnboarding && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 bg-black/40 flex items-end justify-center"
+            onClick={(e) => { if (e.target === e.currentTarget) setShowOnboarding(false); }}
+          >
+            <motion.div
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: "spring", damping: 28, stiffness: 300 }}
+              className="w-full max-w-lg bg-white rounded-t-3xl p-6 pb-24 max-h-[85vh] overflow-y-auto"
+              data-testid="modal-owner-onboarding"
+            >
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  {onboardingStep !== "choice" && onboardingStep !== "submitted" && (
+                    <button
+                      onClick={() => {
+                        if (onboardingStep === "profile") setOnboardingStep("choice");
+                        else if (onboardingStep === "register") setOnboardingStep("profile");
+                        else if (onboardingStep === "claim") setOnboardingStep("profile");
+                        else if (onboardingStep === "claim-confirm") setOnboardingStep("claim");
+                        else if (onboardingStep === "documents") setOnboardingStep(onboardingPath === "claim" ? "claim-confirm" : "register");
+                      }}
+                      className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center"
+                      data-testid="button-back-onboarding"
+                    >
+                      <ChevronRight className="w-4 h-4 rotate-180" />
+                    </button>
+                  )}
+                  <h2 className="text-lg font-bold">
+                    {onboardingStep === "choice" && t("profile.become_owner_title")}
+                    {onboardingStep === "profile" && t("profile.your_info")}
+                    {onboardingStep === "register" && t("profile.restaurant_details")}
+                    {onboardingStep === "claim" && t("profile.find_restaurant")}
+                    {onboardingStep === "claim-confirm" && t("profile.confirm_ownership")}
+                    {onboardingStep === "documents" && t("profile.verification_docs")}
+                    {onboardingStep === "submitted" && t("profile.submitted_review")}
+                  </h2>
+                </div>
+                <button
+                  onClick={() => setShowOnboarding(false)}
+                  className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center"
+                  data-testid="button-close-onboarding"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {onboardingStep !== "choice" && onboardingStep !== "submitted" && (
+                <div className="flex gap-1 mb-5">
+                  {(onboardingPath === "register" ? ["profile", "register", "documents"] : ["profile", "claim", "claim-confirm", "documents"]).map((step, i, arr) => (
+                    <div
+                      key={step}
+                      className="flex-1 h-1 rounded-full"
+                      style={{
+                        backgroundColor: arr.indexOf(onboardingStep) >= i ? "#00B14F" : "#e5e7eb"
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
+
+              {onboardingStep === "choice" && (
+                <div className="space-y-3">
+                  <p className="text-sm text-muted-foreground mb-4">
+                    Get your restaurant on Toast and reach thousands of diners in Bangkok.
+                  </p>
+                  <button
+                    onClick={() => { setOnboardingPath("register"); setOnboardingStep("profile"); }}
+                    className="w-full flex items-center gap-4 p-4 rounded-2xl border border-gray-100 active:scale-[0.98] transition-all"
+                    style={{ boxShadow: "0 2px 8px rgba(0,0,0,0.04)" }}
+                    data-testid="button-register-new"
+                  >
+                    <div className="w-12 h-12 rounded-xl bg-[#00B14F]/10 flex items-center justify-center flex-shrink-0">
+                      <Plus className="w-6 h-6 text-[#00B14F]" />
+                    </div>
+                    <div className="text-left flex-1">
+                      <p className="font-bold text-sm">Register New Restaurant</p>
+                      <p className="text-xs text-muted-foreground">Add your restaurant to Toast</p>
+                    </div>
+                    <ChevronRight className="w-4 h-4 text-muted-foreground/40" />
+                  </button>
+                  <button
+                    onClick={() => { setOnboardingPath("claim"); setOnboardingStep("profile"); }}
+                    className="w-full flex items-center gap-4 p-4 rounded-2xl border border-gray-100 active:scale-[0.98] transition-all"
+                    style={{ boxShadow: "0 2px 8px rgba(0,0,0,0.04)" }}
+                    data-testid="button-claim-existing"
+                  >
+                    <div className="w-12 h-12 rounded-xl bg-[#FFCC02]/10 flex items-center justify-center flex-shrink-0">
+                      <Search className="w-6 h-6 text-[#FFCC02]" />
+                    </div>
+                    <div className="text-left flex-1">
+                      <p className="font-bold text-sm">Claim Existing Restaurant</p>
+                      <p className="text-xs text-muted-foreground">Already listed? Take ownership</p>
+                    </div>
+                    <ChevronRight className="w-4 h-4 text-muted-foreground/40" />
+                  </button>
+                </div>
+              )}
+
+              {onboardingStep === "profile" && (
+                <div className="space-y-4">
+                  <p className="text-sm text-muted-foreground">Tell us about yourself so we can verify your ownership.</p>
+                  <div>
+                    <label className="text-xs font-semibold text-muted-foreground mb-1.5 block">Full Name</label>
+                    <div className="relative">
+                      <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground/40" />
+                      <input
+                        type="text"
+                        value={ownerName}
+                        onChange={(e) => setOwnerName(e.target.value)}
+                        placeholder="Your full name"
+                        className="w-full pl-10 pr-4 py-3 rounded-xl bg-gray-50 border border-transparent focus:border-gray-200 outline-none text-sm font-medium"
+                        data-testid="input-owner-name"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-muted-foreground mb-1.5 block">Contact Email or Phone</label>
+                    <div className="relative">
+                      <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground/40" />
+                      <input
+                        type="text"
+                        value={ownerContact}
+                        onChange={(e) => setOwnerContact(e.target.value)}
+                        placeholder="email@example.com or +66..."
+                        className="w-full pl-10 pr-4 py-3 rounded-xl bg-gray-50 border border-transparent focus:border-gray-200 outline-none text-sm font-medium"
+                        data-testid="input-owner-contact"
+                      />
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setOnboardingStep(onboardingPath === "register" ? "register" : "claim")}
+                    disabled={!ownerName.trim() || !ownerContact.trim()}
+                    className="w-full py-3.5 rounded-xl bg-[#00B14F] text-white font-bold text-sm active:scale-[0.97] transition-transform disabled:opacity-40"
+                    style={{ boxShadow: "0 4px 16px rgba(0,177,79,0.25)" }}
+                    data-testid="button-continue-profile"
+                  >
+                    Continue
+                  </button>
+                </div>
+              )}
+
+              {onboardingStep === "register" && (
+                <div className="space-y-4">
+                  <p className="text-sm text-muted-foreground">Enter your restaurant's details.</p>
+                  <div>
+                    <label className="text-xs font-semibold text-muted-foreground mb-1.5 block">Restaurant Name</label>
+                    <input
+                      type="text"
+                      value={newRestaurantName}
+                      onChange={(e) => setNewRestaurantName(e.target.value)}
+                      placeholder="e.g. Jay Fai, Gaggan, Sorn"
+                      className="w-full px-4 py-3 rounded-xl bg-gray-50 border border-transparent focus:border-gray-200 outline-none text-sm font-medium"
+                      data-testid="input-register-name"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-muted-foreground mb-1.5 block">Category</label>
+                    <select
+                      value={newRestaurantCategory}
+                      onChange={(e) => setNewRestaurantCategory(e.target.value)}
+                      className="w-full px-4 py-3 rounded-xl bg-gray-50 border border-transparent focus:border-gray-200 outline-none text-sm font-medium"
+                      data-testid="select-register-category"
+                    >
+                      <option value="">Select category</option>
+                      {RESTAURANT_CATEGORIES.map((c) => (
+                        <option key={c.value} value={c.value}>{c.emoji} {c.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-muted-foreground mb-1.5 block">Address</label>
+                    <div className="relative">
+                      <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground/40" />
+                      <input
+                        type="text"
+                        value={newRestaurantAddress}
+                        onChange={(e) => setNewRestaurantAddress(e.target.value)}
+                        placeholder="Street address in Bangkok"
+                        className="w-full pl-10 pr-4 py-3 rounded-xl bg-gray-50 border border-transparent focus:border-gray-200 outline-none text-sm font-medium"
+                        data-testid="input-register-address"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-muted-foreground mb-1.5 block">Phone Number</label>
+                    <div className="relative">
+                      <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground/40" />
+                      <input
+                        type="text"
+                        value={newRestaurantPhone}
+                        onChange={(e) => setNewRestaurantPhone(e.target.value)}
+                        placeholder="+66..."
+                        className="w-full pl-10 pr-4 py-3 rounded-xl bg-gray-50 border border-transparent focus:border-gray-200 outline-none text-sm font-medium"
+                        data-testid="input-register-phone"
+                      />
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setOnboardingStep("documents")}
+                    disabled={!newRestaurantName.trim() || !newRestaurantAddress.trim()}
+                    className="w-full py-3.5 rounded-xl bg-[#00B14F] text-white font-bold text-sm active:scale-[0.97] transition-transform disabled:opacity-40"
+                    style={{ boxShadow: "0 4px 16px rgba(0,177,79,0.25)" }}
+                    data-testid="button-continue-register"
+                  >
+                    Continue to Verification
+                  </button>
+                </div>
+              )}
+
+              {onboardingStep === "claim" && (
+                <div className="space-y-4">
+                  <p className="text-sm text-muted-foreground">Search for the restaurant you own or manage.</p>
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground/40" />
+                    <input
+                      type="text"
+                      value={claimSearchQuery}
+                      onChange={(e) => setClaimSearchQuery(e.target.value)}
+                      placeholder="Search for your restaurant..."
+                      className="w-full pl-10 pr-4 py-3 rounded-xl bg-gray-50 border border-transparent focus:border-gray-200 outline-none text-sm font-medium"
+                      data-testid="input-claim-search"
+                    />
+                  </div>
+                  <ClaimSearchResults
+                    query={claimSearchQuery}
+                    onSelect={(restaurant: any) => {
+                      setSelectedClaimRestaurant(restaurant);
+                      setClaimConfirmText("");
+                      setOnboardingStep("claim-confirm");
+                    }}
+                  />
+                </div>
+              )}
+
+              {onboardingStep === "claim-confirm" && selectedClaimRestaurant && (
+                <div className="space-y-4">
+                  <div className="rounded-2xl border border-gray-100 overflow-hidden" style={{ boxShadow: "0 2px 12px rgba(0,0,0,0.06)" }}>
+                    <div className="h-32 bg-gray-100 relative">
+                      {selectedClaimRestaurant.imageUrl ? (
+                        <img src={selectedClaimRestaurant.imageUrl} alt={selectedClaimRestaurant.name} className="w-full h-full object-cover" />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-3xl">🍽️</div>
+                      )}
+                      {selectedClaimRestaurant.ownerClaimStatus === "verified" && (
+                        <div className="absolute top-2 right-2 bg-red-500 text-white text-[10px] font-bold px-2 py-1 rounded-full flex items-center gap-1">
+                          <Shield className="w-3 h-3" />
+                          Already Claimed
+                        </div>
+                      )}
+                    </div>
+                    <div className="p-4">
+                      <h3 className="font-bold text-base mb-1" data-testid="text-claim-restaurant-name">{selectedClaimRestaurant.name}</h3>
+                      <p className="text-xs text-muted-foreground flex items-center gap-1 mb-1">
+                        <MapPin className="w-3 h-3" /> {selectedClaimRestaurant.address || "Bangkok"}
+                      </p>
+                      <p className="text-xs text-muted-foreground flex items-center gap-1 mb-1">
+                        <Utensils className="w-3 h-3" /> {selectedClaimRestaurant.category || "Restaurant"}
+                      </p>
+                      {selectedClaimRestaurant.rating && (
+                        <p className="text-xs text-muted-foreground flex items-center gap-1">
+                          <Star className="w-3 h-3 fill-amber-400 text-amber-400" /> {selectedClaimRestaurant.rating}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  {selectedClaimRestaurant.ownerClaimStatus === "verified" ? (
+                    <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-center">
+                      <Shield className="w-8 h-8 text-red-400 mx-auto mb-2" />
+                      <p className="text-sm font-semibold text-red-700 mb-1">This restaurant has already been claimed</p>
+                      <p className="text-xs text-red-500">If you believe this is an error, please contact support.</p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-start gap-2">
+                        <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 flex-shrink-0" />
+                        <div>
+                          <p className="text-xs font-semibold text-amber-700">Is this your restaurant?</p>
+                          <p className="text-[11px] text-amber-600 mt-0.5">Fraudulent claims may result in account suspension.</p>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="text-xs font-semibold text-muted-foreground mb-1.5 block">
+                          Type "<span className="text-foreground">{selectedClaimRestaurant.name}</span>" to confirm
+                        </label>
+                        <input
+                          type="text"
+                          value={claimConfirmText}
+                          onChange={(e) => setClaimConfirmText(e.target.value)}
+                          placeholder={`Type: ${selectedClaimRestaurant.name}`}
+                          className="w-full px-4 py-3 rounded-xl bg-gray-50 border border-transparent focus:border-gray-200 outline-none text-sm font-medium"
+                          data-testid="input-claim-confirm-name"
+                        />
+                      </div>
+
+                      <button
+                        onClick={() => setOnboardingStep("documents")}
+                        disabled={claimConfirmText.trim().toLowerCase() !== selectedClaimRestaurant.name.trim().toLowerCase()}
+                        className="w-full py-3.5 rounded-xl bg-[#00B14F] text-white font-bold text-sm active:scale-[0.97] transition-transform disabled:opacity-40"
+                        style={{ boxShadow: "0 4px 16px rgba(0,177,79,0.25)" }}
+                        data-testid="button-confirm-claim"
+                      >
+                        Yes, This is My Restaurant
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {onboardingStep === "documents" && (
+                <div className="space-y-4">
+                  <p className="text-sm text-muted-foreground">
+                    Upload documents to verify your ownership. This helps us keep the platform trustworthy.
+                  </p>
+
+                  <div className="space-y-3">
+                    <div>
+                      <label className="text-xs font-semibold text-muted-foreground mb-1.5 flex items-center gap-1.5">
+                        <FileText className="w-3.5 h-3.5" />
+                        Business Registration / License
+                      </label>
+                      <div
+                        className="w-full px-4 py-4 rounded-xl bg-gray-50 border-2 border-dashed border-gray-200 text-center cursor-pointer hover:border-[#00B14F]/40 transition-colors"
+                        onClick={() => {
+                          const url = prompt("Paste a link to your business registration document (Google Drive, Dropbox, etc.):");
+                          if (url) setDocBusinessReg(url);
+                        }}
+                        data-testid="upload-business-reg"
+                      >
+                        {docBusinessReg ? (
+                          <div className="flex items-center gap-2 justify-center text-[#00B14F]">
+                            <Check className="w-4 h-4" />
+                            <span className="text-sm font-medium">Document linked</span>
+                          </div>
+                        ) : (
+                          <div className="flex flex-col items-center gap-1 text-muted-foreground">
+                            <Upload className="w-5 h-5" />
+                            <span className="text-xs">Tap to add link</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-semibold text-muted-foreground mb-1.5 flex items-center gap-1.5">
+                        <Building2 className="w-3.5 h-3.5" />
+                        Proof of Ownership (lease, utility bill, etc.)
+                      </label>
+                      <div
+                        className="w-full px-4 py-4 rounded-xl bg-gray-50 border-2 border-dashed border-gray-200 text-center cursor-pointer hover:border-[#00B14F]/40 transition-colors"
+                        onClick={() => {
+                          const url = prompt("Paste a link to your ownership proof document:");
+                          if (url) setDocOwnershipProof(url);
+                        }}
+                        data-testid="upload-ownership-proof"
+                      >
+                        {docOwnershipProof ? (
+                          <div className="flex items-center gap-2 justify-center text-[#00B14F]">
+                            <Check className="w-4 h-4" />
+                            <span className="text-sm font-medium">Document linked</span>
+                          </div>
+                        ) : (
+                          <div className="flex flex-col items-center gap-1 text-muted-foreground">
+                            <Upload className="w-5 h-5" />
+                            <span className="text-xs">Tap to add link</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-semibold text-muted-foreground mb-1.5 flex items-center gap-1.5">
+                        <User className="w-3.5 h-3.5" />
+                        Photo ID (optional)
+                      </label>
+                      <div
+                        className="w-full px-4 py-4 rounded-xl bg-gray-50 border-2 border-dashed border-gray-200 text-center cursor-pointer hover:border-[#00B14F]/40 transition-colors"
+                        onClick={() => {
+                          const url = prompt("Paste a link to your photo ID:");
+                          if (url) setDocPhotoId(url);
+                        }}
+                        data-testid="upload-photo-id"
+                      >
+                        {docPhotoId ? (
+                          <div className="flex items-center gap-2 justify-center text-[#00B14F]">
+                            <Check className="w-4 h-4" />
+                            <span className="text-sm font-medium">Document linked</span>
+                          </div>
+                        ) : (
+                          <div className="flex flex-col items-center gap-1 text-muted-foreground">
+                            <Upload className="w-5 h-5" />
+                            <span className="text-xs">Tap to add link (optional)</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      const restaurantName = onboardingPath === "claim"
+                        ? selectedClaimRestaurant?.name || ""
+                        : newRestaurantName.trim();
+
+                      const ownerProfile = getStoredOwnerProfile();
+                      const updated = {
+                        ...ownerProfile,
+                        restaurantName,
+                        ownerName: ownerName.trim(),
+                        ownerContact: ownerContact.trim(),
+                        category: onboardingPath === "register" ? newRestaurantCategory : (selectedClaimRestaurant?.category || ""),
+                        address: onboardingPath === "register" ? newRestaurantAddress.trim() : (selectedClaimRestaurant?.address || ""),
+                        phone: newRestaurantPhone.trim(),
+                        documents: {
+                          businessReg: docBusinessReg,
+                          ownershipProof: docOwnershipProof,
+                          photoId: docPhotoId,
+                        },
+                      };
+                      localStorage.setItem(OWNER_STORAGE_KEY, JSON.stringify(updated));
+
+                      localStorage.setItem(ONBOARDING_STATUS_KEY, JSON.stringify({
+                        status: "pending",
+                        restaurantName,
+                        path: onboardingPath,
+                        restaurantId: onboardingPath === "claim" ? selectedClaimRestaurant?.id : null,
+                        submittedAt: new Date().toISOString(),
+                      }));
+
+                      setOnboardingStep("submitted");
+                    }}
+                    disabled={!docBusinessReg && !docOwnershipProof}
+                    className="w-full py-3.5 rounded-xl bg-[#00B14F] text-white font-bold text-sm active:scale-[0.97] transition-transform disabled:opacity-40"
+                    style={{ boxShadow: "0 4px 16px rgba(0,177,79,0.25)" }}
+                    data-testid="button-submit-documents"
+                  >
+                    Submit for Review
+                  </button>
+
+                  <p className="text-[11px] text-center text-muted-foreground">
+                    At least one document is required. Reviews typically take 1-2 business days.
+                  </p>
+                </div>
+              )}
+
+              {onboardingStep === "submitted" && (
+                <div className="text-center py-4">
+                  <div className="w-16 h-16 rounded-full bg-amber-50 flex items-center justify-center mx-auto mb-4">
+                    <Clock className="w-8 h-8 text-amber-500" />
+                  </div>
+                  <p className="font-bold text-lg mb-2">Submitted for Review</p>
+                  <p className="text-sm text-muted-foreground mb-2">
+                    {onboardingPath === "claim"
+                      ? `Your claim for "${selectedClaimRestaurant?.name}" has been submitted.`
+                      : `Your registration for "${newRestaurantName}" has been submitted.`}
+                  </p>
+                  <p className="text-xs text-muted-foreground mb-6">
+                    Our team will review your documents and notify you once approved. This usually takes 1-2 business days.
+                  </p>
+                  <button
+                    onClick={() => setShowOnboarding(false)}
+                    className="w-full py-3.5 rounded-xl bg-foreground text-white font-bold text-sm active:scale-[0.97] transition-transform"
+                    style={{ boxShadow: "0 4px 16px rgba(0,0,0,0.15)" }}
+                    data-testid="button-close-submitted"
+                  >
+                    Got It
+                  </button>
+                </div>
+              )}
             </motion.div>
           </motion.div>
         )}
@@ -692,7 +1450,69 @@ export default function Profile() {
   );
 }
 
+function ClaimSearchResults({ query, onSelect }: { query: string; onSelect: (restaurant: any) => void }) {
+  const { data: restaurants } = useQuery<any[]>({
+    queryKey: ["/api/restaurants"],
+    enabled: true,
+  });
+
+  const filtered = useMemo(() => {
+    if (!restaurants || !query.trim()) return [];
+    const q = query.toLowerCase();
+    return restaurants.filter((r: any) =>
+      r.name?.toLowerCase().includes(q) || r.category?.toLowerCase().includes(q) || r.address?.toLowerCase().includes(q)
+    ).slice(0, 6);
+  }, [restaurants, query]);
+
+  if (!query.trim()) {
+    return <p className="text-sm text-muted-foreground text-center py-4">Start typing to search for your restaurant</p>;
+  }
+
+  if (filtered.length === 0) {
+    return <p className="text-sm text-muted-foreground text-center py-4">No restaurants found matching "{query}"</p>;
+  }
+
+  return (
+    <div className="space-y-2">
+      {filtered.map((r: any) => (
+        <button
+          key={r.id}
+          onClick={() => onSelect(r)}
+          className="w-full flex items-center gap-3 p-3 rounded-xl border border-gray-100 active:scale-[0.98] transition-all text-left"
+          data-testid={`claim-restaurant-${r.id}`}
+        >
+          <div className="w-12 h-12 rounded-lg overflow-hidden bg-gray-100 flex-shrink-0">
+            {r.imageUrl ? (
+              <img src={r.imageUrl} alt={r.name} className="w-full h-full object-cover" />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center text-lg">🍽️</div>
+            )}
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-1.5">
+              <p className="font-semibold text-sm truncate">{r.name}</p>
+              {r.ownerClaimStatus === "verified" && (
+                <span className="text-[9px] font-bold bg-red-100 text-red-600 px-1.5 py-0.5 rounded-full whitespace-nowrap">Claimed</span>
+              )}
+              {r.ownerClaimStatus === "pending" && (
+                <span className="text-[9px] font-bold bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded-full whitespace-nowrap">Pending</span>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground truncate">{r.category || "Restaurant"}</p>
+            <p className="text-[11px] text-muted-foreground/60 truncate flex items-center gap-1">
+              <MapPin className="w-2.5 h-2.5" /> {r.address || "Bangkok"}
+              {r.rating && <><Star className="w-2.5 h-2.5 fill-amber-400 text-amber-400 ml-1" /> {r.rating}</>}
+            </p>
+          </div>
+          <ChevronRight className="w-4 h-4 text-muted-foreground/40 flex-shrink-0" />
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function ProfileToggle({ isOwnerMode, onToggle }: { isOwnerMode: boolean; onToggle: (v: boolean) => void }) {
+  const { t } = useLanguage();
   return (
     <div
       className="relative flex items-center bg-gray-100 dark:bg-muted rounded-2xl p-1 mb-2"
@@ -711,7 +1531,7 @@ function ProfileToggle({ isOwnerMode, onToggle }: { isOwnerMode: boolean; onTogg
         data-testid="button-user-mode"
       >
         <User className="w-4 h-4" />
-        Diner
+        {t("profile.diner")}
       </button>
       <button
         onClick={() => onToggle(true)}
@@ -720,7 +1540,7 @@ function ProfileToggle({ isOwnerMode, onToggle }: { isOwnerMode: boolean; onTogg
         data-testid="button-owner-mode"
       >
         <Store className="w-4 h-4" />
-        Owner
+        {t("profile.owner")}
       </button>
     </div>
   );
@@ -977,175 +1797,289 @@ function OwnerDashboard() {
   const hourlyValues = insights.hourlyData.map(d => d.value);
   const maxHourly = Math.max(...hourlyValues);
 
+  const onboardingStatus = (() => {
+    try {
+      const stored = localStorage.getItem("toast_owner_onboarding_status");
+      if (stored) return JSON.parse(stored);
+    } catch {}
+    return null;
+  })();
+  const isVerified = onboardingStatus?.status === "approved";
+  const isPending = onboardingStatus?.status === "pending";
+
+  const weeklyStats = useMemo(() => ({
+    views: Math.floor(Math.random() * 2000) + 500,
+    likes: Math.floor(Math.random() * 300) + 50,
+    saves: Math.floor(Math.random() * 100) + 10,
+  }), [ownerKey]);
+
   return (
     <div>
       <div className="mb-4">
         <div className="bg-white dark:bg-card rounded-2xl overflow-hidden border border-gray-100 dark:border-border">
-          <div className="px-5 py-4">
-            <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">Restaurant Setup</p>
-
-            <input
-              type="text"
-              value={ownerProfile.restaurantName}
-              onChange={(e) => updateOwner({ restaurantName: e.target.value })}
-              placeholder="Restaurant name"
-              className="w-full text-[17px] font-bold bg-transparent border-none outline-none placeholder:text-muted-foreground/30 tracking-tight mb-4"
-              data-testid="input-restaurant-name"
-            />
-
-            <p className="text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-widest mb-2">Category</p>
-            <div ref={categoryRef} className="relative mb-4" data-testid="input-restaurant-category">
-              {selectedCategoryObj ? (
-                <div className="flex items-center gap-2">
-                  <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-gray-50 dark:bg-muted flex-1">
-                    <span className="text-sm">{selectedCategoryObj.emoji}</span>
-                    <span className="text-sm font-medium">{selectedCategoryObj.label}</span>
-                  </div>
-                  <button
-                    onClick={() => updateOwner({ category: "" })}
-                    className="w-9 h-9 rounded-xl bg-gray-50 dark:bg-muted flex items-center justify-center text-muted-foreground/60 active:scale-90 transition-transform"
-                    data-testid="button-clear-category"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-              ) : (
-                <>
-                  <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-gray-50 dark:bg-muted">
-                    <Search className="w-4 h-4 text-muted-foreground/40 flex-shrink-0" />
-                    <input
-                      type="text"
-                      value={categorySearch}
-                      onChange={(e) => { setCategorySearch(e.target.value); setCategoryDropdownOpen(true); }}
-                      onFocus={() => setCategoryDropdownOpen(true)}
-                      placeholder="Search category..."
-                      className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/40"
-                      data-testid="input-category-search"
-                    />
-                  </div>
-                  <AnimatePresence>
-                    {categoryDropdownOpen && (
-                      <motion.div
-                        initial={{ opacity: 0, y: -4 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -4 }}
-                        transition={{ duration: 0.15 }}
-                        className="absolute z-20 left-0 right-0 mt-1.5 bg-white dark:bg-card rounded-xl border border-gray-100 dark:border-border overflow-hidden"
-                        style={{ boxShadow: "0 8px 32px -8px rgba(0,0,0,0.12)" }}
-                      >
-                        <div className="max-h-48 overflow-y-auto py-1">
-                          {filteredCategories.length === 0 ? (
-                            <p className="px-4 py-3 text-sm text-muted-foreground text-center">No matches</p>
-                          ) : (
-                            filteredCategories.map((cat) => (
-                              <button
-                                key={cat.value}
-                                onClick={() => {
-                                  updateOwner({ category: cat.value });
-                                  setCategorySearch("");
-                                  setCategoryDropdownOpen(false);
-                                }}
-                                className="w-full px-4 py-2.5 flex items-center gap-3 text-left transition-colors hover:bg-gray-50 dark:hover:bg-muted active:bg-gray-100"
-                                data-testid={`category-${cat.value}`}
-                              >
-                                <span className="text-base">{cat.emoji}</span>
-                                <span className="text-[13px] font-medium">{cat.label}</span>
-                              </button>
-                            ))
-                          )}
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </>
-              )}
-            </div>
-
-            <p className="text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-widest mb-2">Tags</p>
-            <div ref={tagRef} className="relative mb-4" data-testid="input-restaurant-tags">
-              {(ownerProfile.tags || []).length > 0 && (
-                <div className="flex flex-wrap gap-1.5 mb-2">
-                  {(ownerProfile.tags || []).map((tagVal) => {
-                    const tagObj = RESTAURANT_TAGS.find(t => t.value === tagVal);
-                    if (!tagObj) return null;
-                    return (
-                      <span
-                        key={tagVal}
-                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-foreground text-white text-[11px] font-medium"
-                      >
-                        {tagObj.emoji} {tagObj.label}
-                        <button
-                          onClick={() => updateOwner({ tags: (ownerProfile.tags || []).filter(t => t !== tagVal) })}
-                          className="ml-0.5 opacity-70 hover:opacity-100"
-                          data-testid={`remove-tag-${tagVal}`}
-                        >
-                          <X className="w-3 h-3" />
-                        </button>
-                      </span>
-                    );
-                  })}
-                </div>
-              )}
-              <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-gray-50 dark:bg-muted">
-                <Search className="w-4 h-4 text-muted-foreground/40 flex-shrink-0" />
-                <input
-                  type="text"
-                  value={tagSearch}
-                  onChange={(e) => { setTagSearch(e.target.value); setTagDropdownOpen(true); }}
-                  onFocus={() => setTagDropdownOpen(true)}
-                  placeholder="Search tags..."
-                  className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/40"
-                  data-testid="input-tag-search"
-                />
+          <div className="relative h-36 bg-gradient-to-br from-gray-100 to-gray-200 overflow-hidden" data-testid="owner-hero-banner">
+            {ownerProfile.photos && ownerProfile.photos.length > 0 ? (
+              <img src={ownerProfile.photos[0]} alt={ownerProfile.restaurantName} className="w-full h-full object-cover" />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-[#00B14F]/10 to-[#FFCC02]/10">
+                <Store className="w-12 h-12 text-[#00B14F]/30" />
               </div>
-              <AnimatePresence>
-                {tagDropdownOpen && (
-                  <motion.div
-                    initial={{ opacity: 0, y: -4 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -4 }}
-                    transition={{ duration: 0.15 }}
-                    className="absolute z-20 left-0 right-0 mt-1.5 bg-white dark:bg-card rounded-xl border border-gray-100 dark:border-border overflow-hidden"
-                    style={{ boxShadow: "0 8px 32px -8px rgba(0,0,0,0.12)" }}
-                  >
-                    <div className="max-h-48 overflow-y-auto py-1">
-                      {filteredTags.length === 0 ? (
-                        <p className="px-4 py-3 text-sm text-muted-foreground text-center">No more tags</p>
-                      ) : (
-                        filteredTags.map((tag) => (
-                          <button
-                            key={tag.value}
-                            onClick={() => {
-                              const current = ownerProfile.tags || [];
-                              updateOwner({ tags: [...current, tag.value] });
-                              setTagSearch("");
-                            }}
-                            className="w-full px-4 py-2.5 flex items-center gap-3 text-left transition-colors hover:bg-gray-50 dark:hover:bg-muted active:bg-gray-100"
-                            data-testid={`tag-${tag.value}`}
-                          >
-                            <span className="text-base">{tag.emoji}</span>
-                            <span className="text-[13px] font-medium">{tag.label}</span>
-                          </button>
-                        ))
-                      )}
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
+            )}
+            <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent" />
+
+            <div className="absolute top-3 right-3 flex gap-1.5">
+              {isVerified && (
+                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-[#00B14F] text-white text-[10px] font-bold" data-testid="badge-verified">
+                  <ShieldCheck className="w-3 h-3" /> Verified
+                </span>
+              )}
+              {isPending && (
+                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-amber-500 text-white text-[10px] font-bold" data-testid="badge-pending">
+                  <Clock className="w-3 h-3" /> Pending Approval
+                </span>
+              )}
+              {!isVerified && !isPending && (
+                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-gray-700/80 text-white text-[10px] font-bold" data-testid="badge-unverified">
+                  <Store className="w-3 h-3" /> Setup Mode
+                </span>
+              )}
             </div>
 
-            <p className="text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-widest mb-2">Address</p>
-            <div className="flex items-center gap-2 mb-1">
-              <MapPin className="w-4 h-4 text-muted-foreground/40 flex-shrink-0" />
-              <input
-                type="text"
-                value={ownerProfile.address}
-                onChange={(e) => updateOwner({ address: e.target.value })}
-                placeholder="e.g. 123 Sukhumvit Rd, Bangkok"
-                className="flex-1 px-3.5 py-2.5 rounded-xl bg-gray-50 dark:bg-muted text-sm outline-none placeholder:text-muted-foreground/40"
-                data-testid="input-restaurant-address"
-              />
+            <div className="absolute bottom-3 left-4 right-4">
+              <h2 className="text-white font-bold text-lg truncate drop-shadow-sm" data-testid="text-hero-restaurant-name">
+                {ownerProfile.restaurantName || "Your Restaurant"}
+              </h2>
+              <div className="flex items-center gap-3 mt-0.5">
+                {selectedCategoryObj && (
+                  <span className="text-white/80 text-xs flex items-center gap-1">
+                    {selectedCategoryObj.emoji} {selectedCategoryObj.label}
+                  </span>
+                )}
+                {ownerProfile.address && (
+                  <span className="text-white/70 text-xs flex items-center gap-1">
+                    <MapPin className="w-3 h-3" /> {ownerProfile.address}
+                  </span>
+                )}
+              </div>
             </div>
+          </div>
+
+          <div className="grid grid-cols-3 divide-x divide-gray-100 dark:divide-border border-b border-gray-100 dark:border-border" data-testid="owner-quick-stats">
+            <div className="py-3 text-center">
+              <p className="text-lg font-bold text-foreground" data-testid="stat-views">{weeklyStats.views.toLocaleString()}</p>
+              <p className="text-[10px] text-muted-foreground/60 uppercase tracking-wider font-semibold">Views</p>
+            </div>
+            <div className="py-3 text-center">
+              <p className="text-lg font-bold text-foreground" data-testid="stat-likes">{weeklyStats.likes.toLocaleString()}</p>
+              <p className="text-[10px] text-muted-foreground/60 uppercase tracking-wider font-semibold">Likes</p>
+            </div>
+            <div className="py-3 text-center">
+              <p className="text-lg font-bold text-foreground" data-testid="stat-saves">{weeklyStats.saves.toLocaleString()}</p>
+              <p className="text-[10px] text-muted-foreground/60 uppercase tracking-wider font-semibold">Saves</p>
+            </div>
+          </div>
+
+          <div className="px-5 py-4">
+            <button
+              onClick={() => setActiveSection(activeSection === "details" ? null : "details")}
+              className="w-full flex items-center gap-3 active:opacity-70 transition-opacity"
+              data-testid="button-edit-details"
+            >
+              <div className="w-8 h-8 rounded-lg bg-gray-50 flex items-center justify-center">
+                <Building2 className="w-4 h-4 text-gray-500" />
+              </div>
+              <div className="flex-1 text-left">
+                <p className="font-semibold text-sm">Restaurant Details</p>
+                <p className="text-[11px] text-muted-foreground">Name, category, tags, address</p>
+              </div>
+              <ChevronRight className={`w-4 h-4 text-muted-foreground/40 transition-transform duration-300 ${activeSection === "details" ? "rotate-90" : ""}`} />
+            </button>
+
+            <AnimatePresence initial={false}>
+              {activeSection === "details" && (
+                <motion.div
+                  initial={{ height: 0 }}
+                  animate={{ height: "auto" }}
+                  exit={{ height: 0 }}
+                  transition={springConfig}
+                  className="overflow-hidden"
+                >
+                  <div className="pt-4 space-y-4">
+                    <div>
+                      <label className="text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-widest mb-1.5 block">Restaurant Name</label>
+                      <input
+                        type="text"
+                        value={ownerProfile.restaurantName}
+                        onChange={(e) => updateOwner({ restaurantName: e.target.value })}
+                        placeholder="Restaurant name"
+                        className="w-full px-3.5 py-2.5 rounded-xl bg-gray-50 dark:bg-muted text-sm font-medium outline-none"
+                        data-testid="input-restaurant-name"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-widest mb-1.5 block">Category</label>
+                      <div ref={categoryRef} className="relative" data-testid="input-restaurant-category">
+                        {selectedCategoryObj ? (
+                          <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-gray-50 dark:bg-muted flex-1">
+                              <span className="text-sm">{selectedCategoryObj.emoji}</span>
+                              <span className="text-sm font-medium">{selectedCategoryObj.label}</span>
+                            </div>
+                            <button
+                              onClick={() => updateOwner({ category: "" })}
+                              className="w-9 h-9 rounded-xl bg-gray-50 dark:bg-muted flex items-center justify-center text-muted-foreground/60 active:scale-90 transition-transform"
+                              data-testid="button-clear-category"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+                        ) : (
+                          <>
+                            <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-gray-50 dark:bg-muted">
+                              <Search className="w-4 h-4 text-muted-foreground/40 flex-shrink-0" />
+                              <input
+                                type="text"
+                                value={categorySearch}
+                                onChange={(e) => { setCategorySearch(e.target.value); setCategoryDropdownOpen(true); }}
+                                onFocus={() => setCategoryDropdownOpen(true)}
+                                placeholder="Search category..."
+                                className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/40"
+                                data-testid="input-category-search"
+                              />
+                            </div>
+                            <AnimatePresence>
+                              {categoryDropdownOpen && (
+                                <motion.div
+                                  initial={{ opacity: 0, y: -4 }}
+                                  animate={{ opacity: 1, y: 0 }}
+                                  exit={{ opacity: 0, y: -4 }}
+                                  transition={{ duration: 0.15 }}
+                                  className="absolute z-20 left-0 right-0 mt-1.5 bg-white dark:bg-card rounded-xl border border-gray-100 dark:border-border overflow-hidden"
+                                  style={{ boxShadow: "0 8px 32px -8px rgba(0,0,0,0.12)" }}
+                                >
+                                  <div className="max-h-48 overflow-y-auto py-1">
+                                    {filteredCategories.length === 0 ? (
+                                      <p className="px-4 py-3 text-sm text-muted-foreground text-center">No matches</p>
+                                    ) : (
+                                      filteredCategories.map((cat) => (
+                                        <button
+                                          key={cat.value}
+                                          onClick={() => {
+                                            updateOwner({ category: cat.value });
+                                            setCategorySearch("");
+                                            setCategoryDropdownOpen(false);
+                                          }}
+                                          className="w-full px-4 py-2.5 flex items-center gap-3 text-left transition-colors hover:bg-gray-50 dark:hover:bg-muted active:bg-gray-100"
+                                          data-testid={`category-${cat.value}`}
+                                        >
+                                          <span className="text-base">{cat.emoji}</span>
+                                          <span className="text-[13px] font-medium">{cat.label}</span>
+                                        </button>
+                                      ))
+                                    )}
+                                  </div>
+                                </motion.div>
+                              )}
+                            </AnimatePresence>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-widest mb-1.5 block">Tags</label>
+                      <div ref={tagRef} className="relative" data-testid="input-restaurant-tags">
+                        {(ownerProfile.tags || []).length > 0 && (
+                          <div className="flex flex-wrap gap-1.5 mb-2">
+                            {(ownerProfile.tags || []).map((tagVal) => {
+                              const tagObj = RESTAURANT_TAGS.find(t => t.value === tagVal);
+                              if (!tagObj) return null;
+                              return (
+                                <span
+                                  key={tagVal}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-foreground text-white text-[11px] font-medium"
+                                >
+                                  {tagObj.emoji} {tagObj.label}
+                                  <button
+                                    onClick={() => updateOwner({ tags: (ownerProfile.tags || []).filter(t => t !== tagVal) })}
+                                    className="ml-0.5 opacity-70 hover:opacity-100"
+                                    data-testid={`remove-tag-${tagVal}`}
+                                  >
+                                    <X className="w-3 h-3" />
+                                  </button>
+                                </span>
+                              );
+                            })}
+                          </div>
+                        )}
+                        <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-gray-50 dark:bg-muted">
+                          <Search className="w-4 h-4 text-muted-foreground/40 flex-shrink-0" />
+                          <input
+                            type="text"
+                            value={tagSearch}
+                            onChange={(e) => { setTagSearch(e.target.value); setTagDropdownOpen(true); }}
+                            onFocus={() => setTagDropdownOpen(true)}
+                            placeholder="Search tags..."
+                            className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/40"
+                            data-testid="input-tag-search"
+                          />
+                        </div>
+                        <AnimatePresence>
+                          {tagDropdownOpen && (
+                            <motion.div
+                              initial={{ opacity: 0, y: -4 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={{ opacity: 0, y: -4 }}
+                              transition={{ duration: 0.15 }}
+                              className="absolute z-20 left-0 right-0 mt-1.5 bg-white dark:bg-card rounded-xl border border-gray-100 dark:border-border overflow-hidden"
+                              style={{ boxShadow: "0 8px 32px -8px rgba(0,0,0,0.12)" }}
+                            >
+                              <div className="max-h-48 overflow-y-auto py-1">
+                                {filteredTags.length === 0 ? (
+                                  <p className="px-4 py-3 text-sm text-muted-foreground text-center">No more tags</p>
+                                ) : (
+                                  filteredTags.map((tag) => (
+                                    <button
+                                      key={tag.value}
+                                      onClick={() => {
+                                        const current = ownerProfile.tags || [];
+                                        updateOwner({ tags: [...current, tag.value] });
+                                        setTagSearch("");
+                                      }}
+                                      className="w-full px-4 py-2.5 flex items-center gap-3 text-left transition-colors hover:bg-gray-50 dark:hover:bg-muted active:bg-gray-100"
+                                      data-testid={`tag-${tag.value}`}
+                                    >
+                                      <span className="text-base">{tag.emoji}</span>
+                                      <span className="text-[13px] font-medium">{tag.label}</span>
+                                    </button>
+                                  ))
+                                )}
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-widest mb-1.5 block">Address</label>
+                      <div className="flex items-center gap-2">
+                        <MapPin className="w-4 h-4 text-muted-foreground/40 flex-shrink-0" />
+                        <input
+                          type="text"
+                          value={ownerProfile.address}
+                          onChange={(e) => updateOwner({ address: e.target.value })}
+                          placeholder="e.g. 123 Sukhumvit Rd, Bangkok"
+                          className="flex-1 px-3.5 py-2.5 rounded-xl bg-gray-50 dark:bg-muted text-sm outline-none placeholder:text-muted-foreground/40"
+                          data-testid="input-restaurant-address"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
 
           <div className="mx-5 h-px bg-gray-100 dark:bg-border" />
@@ -2450,7 +3384,7 @@ function OwnerDashboard() {
   );
 }
 
-function StatsRow() {
+function StatsRow({ t }: { t: (key: string, params?: Record<string, string | number>) => string }) {
   const { mineCount, partnerCount } = useSavedRestaurants();
   const [stats, setStats] = useState({ totalSwipes: 0, likes: 0 });
 
@@ -2475,29 +3409,30 @@ function StatsRow() {
   }, []);
 
   const items = [
-    { label: "Swipes", value: stats.totalSwipes, testId: "text-total-swipes" },
-    { label: "Liked", value: stats.likes, testId: "text-total-likes" },
-    { label: "Saved", value: mineCount, testId: "text-saved-count" },
-    { label: "Shared", value: partnerCount, testId: "text-partner-saves" },
+    { labelKey: "profile.swipes", value: stats.totalSwipes, testId: "text-total-swipes" },
+    { labelKey: "profile.liked", value: stats.likes, testId: "text-total-likes" },
+    { labelKey: "profile.saved", value: mineCount, testId: "text-saved-count" },
+    { labelKey: "profile.shared", value: partnerCount, testId: "text-partner-saves" },
   ];
 
   return (
     <div className="flex items-center justify-around py-4 mb-4 border-b border-gray-100 dark:border-border">
-      {items.map((item, idx) => (
-        <div key={item.label} className="flex flex-col items-center">
+      {items.map((item) => (
+        <div key={item.labelKey} className="flex flex-col items-center">
           <p className="text-xl font-bold tracking-tight leading-none" data-testid={item.testId}>{item.value}</p>
-          <p className="text-[10px] text-muted-foreground mt-1">{item.label}</p>
+          <p className="text-[10px] text-muted-foreground mt-1">{t(item.labelKey)}</p>
         </div>
       ))}
     </div>
   );
 }
 
-function PartnerRow({ profile, onInvite, onManualAdd, onUnlink }: {
+function PartnerRow({ profile, onInvite, onManualAdd, onUnlink, t }: {
   profile: LocalProfile;
   onInvite: () => void;
   onManualAdd: () => void;
   onUnlink: () => void;
+  t: (key: string, params?: Record<string, string | number>) => string;
 }) {
   const [, navigate] = useLocation();
   const { partnerCount } = useSavedRestaurants();
@@ -2509,7 +3444,7 @@ function PartnerRow({ profile, onInvite, onManualAdd, onUnlink }: {
           💕
         </div>
         <div className="flex-1 min-w-0">
-          <p className="font-bold text-[15px]">Partner</p>
+          <p className="font-bold text-[15px]">{t("profile.partner")}</p>
           {profile.partnerLinked ? (
             <div className="flex items-center gap-2 mt-0.5">
               <div className="w-5 h-5 rounded-full bg-gray-200 dark:bg-muted overflow-hidden flex items-center justify-center text-[10px]">
@@ -2519,11 +3454,11 @@ function PartnerRow({ profile, onInvite, onManualAdd, onUnlink }: {
               </div>
               <p className="text-[11px] text-muted-foreground truncate" data-testid="text-partner-name">{profile.partnerName}</p>
               {partnerCount > 0 && (
-                <span className="text-[10px] text-pink-500 font-medium ml-1">{partnerCount} shared</span>
+                <span className="text-[10px] text-pink-500 font-medium ml-1">{partnerCount} {t("profile.shared")}</span>
               )}
             </div>
           ) : (
-            <p className="text-[11px] text-muted-foreground mt-0.5">Invite or add a partner</p>
+            <p className="text-[11px] text-muted-foreground mt-0.5">{t("profile.invite_partner")}</p>
           )}
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
@@ -2535,7 +3470,7 @@ function PartnerRow({ profile, onInvite, onManualAdd, onUnlink }: {
                   className="text-[11px] text-pink-500 font-semibold active:scale-95 transition-transform"
                   data-testid="button-view-partner-saves"
                 >
-                  View
+                  {t("common.view")}
                 </button>
               )}
               <button
@@ -2554,14 +3489,14 @@ function PartnerRow({ profile, onInvite, onManualAdd, onUnlink }: {
                 data-testid="button-invite-partner-line"
               >
                 <UserPlus className="w-3 h-3" />
-                Invite
+                {t("common.invite")}
               </button>
               <button
                 onClick={onManualAdd}
                 className="text-[11px] text-muted-foreground font-medium active:scale-95 transition-transform"
                 data-testid="button-add-partner-manual"
               >
-                Add
+                {t("common.add")}
               </button>
               <ChevronRight className="w-4 h-4 text-muted-foreground/40" />
             </>
@@ -2572,7 +3507,7 @@ function PartnerRow({ profile, onInvite, onManualAdd, onUnlink }: {
   );
 }
 
-function SavedSection() {
+function SavedSection({ t }: { t: (key: string, params?: Record<string, string | number>) => string }) {
   const [, navigate] = useLocation();
   const { data, isSaved, getBucket, unsave, mineCount, partnerCount } = useSavedRestaurants();
   const [expanded, setExpanded] = useState(false);
@@ -2602,9 +3537,9 @@ function SavedSection() {
           ❤️
         </div>
         <div className="flex-1 text-left">
-          <p className="font-bold text-[15px]">Saved</p>
+          <p className="font-bold text-[15px]">{t("profile.saved_restaurants")}</p>
           <p className="text-[11px] text-muted-foreground mt-0.5">
-            {totalSaved === 0 ? "No saved restaurants" : `${mineCount} saved · ${partnerCount} shared`}
+            {totalSaved === 0 ? t("profile.no_saved") : `${mineCount} ${t("profile.saved")} · ${partnerCount} ${t("profile.shared")}`}
           </p>
         </div>
         <ChevronRight className={`w-4 h-4 text-muted-foreground/40 transition-transform duration-300 ${expanded ? "rotate-90" : ""}`} />
@@ -2622,8 +3557,8 @@ function SavedSection() {
               {savedRestaurants.length === 0 ? (
                 <div className="text-center py-6">
                   <span className="text-3xl block mb-2">🍽️</span>
-                  <p className="text-sm text-muted-foreground">No restaurants saved yet</p>
-                  <p className="text-xs text-muted-foreground/60 mt-1">Tap the heart on any restaurant to save it</p>
+                  <p className="text-sm text-muted-foreground">{t("profile.no_saved_yet")}</p>
+                  <p className="text-xs text-muted-foreground/60 mt-1">{t("profile.tap_heart_to_save")}</p>
                 </div>
               ) : (
                 <div className="space-y-2">

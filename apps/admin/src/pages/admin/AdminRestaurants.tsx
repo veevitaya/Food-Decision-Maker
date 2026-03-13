@@ -46,18 +46,8 @@ import {
   Loader2,
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { Restaurant as _Restaurant, RestaurantOwner, RestaurantClaim } from "@shared/schema";
+import type { Restaurant, RestaurantOwner, RestaurantClaim } from "@shared/schema";
 import { VIBE_TAGS, VIBE_LABELS, VIBE_EMOJI, BANGKOK_DISTRICTS } from "@shared/vibeConfig";
-
-type Restaurant = _Restaurant & {
-  ownerId?: number | null;
-  ownerClaimStatus?: string | null;
-  paymentConnected?: boolean | null;
-  googlePlaceId?: string | null;
-  vibes?: string[];
-  district?: string | null;
-  operatingHours?: string | null;
-};
 
 type VerificationChecklistItem = {
   id: string;
@@ -147,9 +137,6 @@ export default function AdminRestaurants() {
       address: "",
       isNew: false,
       trendingScore: 0,
-      phone: null,
-      openingHours: null,
-      reviews: null,
       ownerId: null,
       ownerClaimStatus: "unclaimed",
       paymentConnected: false,
@@ -721,7 +708,7 @@ function EditPanel({
     >
       <div className="fixed inset-0 bg-black/20" onClick={onClose} />
       <div className="relative ml-auto w-[460px] h-full bg-white rounded-l-2xl shadow-xl overflow-y-auto">
-        <div className="h-1 rounded-tl-2xl" style={{ background: "linear-gradient(90deg, hsl(222, 47%, 20%), hsl(222, 47%, 35%))" }} />
+        <div className="h-1 rounded-tl-2xl" style={{ backgroundColor: "var(--admin-blue)" }} />
         <div className="sticky top-0 z-10 bg-white border-b border-gray-100">
           <div className="flex items-center justify-between gap-4 px-6 py-4">
             <h2 className="font-semibold text-foreground text-[15px]" data-testid="text-panel-title">

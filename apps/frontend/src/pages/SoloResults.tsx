@@ -4,6 +4,7 @@ import { useLocation } from "wouter";
 import { BottomNav } from "@/components/BottomNav";
 import { Sparkles, Clock, Wallet, TrendingUp, MapPin, Search, UtensilsCrossed, X, Check } from "lucide-react";
 import { useTasteProfile } from "@/hooks/use-taste-profile";
+import { shareWithLiffOrClipboard } from "@/lib/share";
 import mascotPath from "@assets/image_1772011321697.png";
 import drunkToastPath from "@assets/drunk_toast_nobg.png";
 
@@ -319,6 +320,15 @@ export default function SoloResults() {
   const [showDecideForMe, setShowDecideForMe] = useState(false);
   const [decideStep, setDecideStep] = useState<"analyzing" | "result">("analyzing");
   const [aiRecommendation, setAiRecommendation] = useState<MenuItem | null>(null);
+  const [shareState, setShareState] = useState("");
+
+  const handleShareResult = async () => {
+    const choice = currentChoice || aiRecommendation || leftOption;
+    if (!choice) return;
+    const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(choice.name + " Bangkok")}`;
+    const method = await shareWithLiffOrClipboard(`Toast solo pick: ${choice.name}\nMaps: ${mapsUrl}`);
+    setShareState(method === "clipboard" ? "Copied to clipboard." : method === "failed" ? "Share failed." : "Shared.");
+  };
 
   const getNextMenu = () => {
     const currentIds = new Set([leftOption.id, rightOption.id]);
@@ -586,6 +596,14 @@ export default function SoloResults() {
       >
         {isDrinksMode ? "Ready to drink!" : "Ready to eat!"}{currentChoice ? ` — ${currentChoice.name}` : ""}
       </motion.button>
+      <button
+        onClick={handleShareResult}
+        className="w-full max-w-md py-3 rounded-2xl bg-white border border-gray-200 text-sm font-semibold mb-5"
+        data-testid="button-share-solo-result"
+      >
+        Share result
+      </button>
+      {shareState ? <p className="text-xs text-muted-foreground mb-5">{shareState}</p> : null}
 
       <div className="flex items-end gap-2.5 w-full max-w-md">
         <motion.button

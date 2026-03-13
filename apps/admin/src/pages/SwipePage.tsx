@@ -7,6 +7,27 @@ import { BottomNav } from "@/components/BottomNav";
 import { MOCK_HOME_CAMPAIGNS, MOCK_RESTAURANT_CAMPAIGNS, getDealLabel as getCampaignDealLabel } from "@/components/CampaignBanner";
 import { Share2 } from "lucide-react";
 import drunkToastImg from "@assets/drunk_toast_nobg.png";
+import { trackEvent } from "@/lib/analytics";
+
+/** Inject sponsored items at a max rate of 1 per SPONSORED_INTERVAL cards. */
+const SPONSORED_INTERVAL = 5;
+
+function injectSponsored<T extends { sponsored?: boolean }>(items: T[]): T[] {
+  const sponsored = items.filter((i) => i.sponsored);
+  const organic = items.filter((i) => !i.sponsored);
+  if (sponsored.length === 0) return organic;
+
+  const result: T[] = [];
+  let sponsoredIdx = 0;
+  for (let i = 0; i < organic.length; i++) {
+    result.push(organic[i]);
+    // After every SPONSORED_INTERVAL organic cards, inject one sponsored card
+    if ((i + 1) % SPONSORED_INTERVAL === 0 && sponsoredIdx < sponsored.length) {
+      result.push(sponsored[sponsoredIdx++]);
+    }
+  }
+  return result;
+}
 
 const SWIPE_MENUS = [
   { id: 101, name: "Pad Thai", category: "🇹🇭 Thai", tags: ["🍜 Noodles", "🌶️ Spicy", "🦐 Shrimp"], description: "Wok-fried rice noodles with tamarind sauce, crushed peanuts, and fresh lime", imageUrl: "https://images.unsplash.com/photo-1559314809-0d155014e29e?w=800&auto=format&fit=crop&q=60", priceLevel: 1, rating: "4.8", address: "All over Bangkok", isNew: true, sponsored: false },
@@ -22,6 +43,36 @@ const SWIPE_MENUS = [
   { id: 111, name: "Smoothie Bowl", category: "🥣 Healthy", tags: ["🫐 Berry", "🌿 Healthy", "📸 Pretty"], description: "Vibrant açaí or pitaya base topped with granola, fresh fruit, and chia seeds", imageUrl: "https://images.unsplash.com/photo-1501443762994-82bd5dace89a?w=800&auto=format&fit=crop&q=60", priceLevel: 2, rating: "4.5", address: "Sukhumvit, Thonglor", isNew: true, sponsored: false },
   { id: 112, name: "Bubble Tea", category: "🧋 Taiwanese", tags: ["🧋 Boba", "🥤 Drink", "🫧 Tapioca"], description: "Chewy tapioca pearls in creamy milk tea — customize your sweetness and ice level", imageUrl: "https://images.unsplash.com/photo-1541696490-8744a5dc0228?w=800&auto=format&fit=crop&q=60", priceLevel: 1, rating: "4.5", address: "Siam, CentralWorld", isNew: false, sponsored: false },
   { id: 113, name: "Thai Milk Tea", category: "🇹🇭 Thai", tags: ["🧋 Drink", "🍵 Tea", "🧡 Sweet"], description: "Strong brewed Ceylon tea with star anise, condensed milk, and crushed ice", imageUrl: "https://images.unsplash.com/photo-1558857563-b371033873b8?w=800&auto=format&fit=crop&q=60", priceLevel: 1, rating: "4.6", address: "All over Bangkok", isNew: false, sponsored: false },
+  { id: 114, name: "Som Tam", category: "🇹🇭 Thai", tags: ["🌶️ Spicy", "🥗 Salad", "🥜 Peanuts"], description: "Spicy papaya salad pounded fresh with chili, lime, fish sauce, and crunchy peanuts", imageUrl: "https://images.unsplash.com/photo-1562565652-a0d8f0c59eb4?w=800&auto=format&fit=crop&q=60", priceLevel: 1, rating: "4.7", address: "Siam Square, Ari", isNew: false, sponsored: false },
+  { id: 115, name: "Khao Soi", category: "🇹🇭 Northern Thai", tags: ["🍛 Curry", "🍜 Noodles", "🥥 Coconut"], description: "Northern Thai coconut curry noodle soup with crispy egg noodles and pickled mustard", imageUrl: "https://images.unsplash.com/photo-1569718212165-3a8278d5f624?w=800&auto=format&fit=crop&q=60", priceLevel: 1, rating: "4.8", address: "Ekkamai, Ari", isNew: false, sponsored: false },
+  { id: 116, name: "Mango Sticky Rice", category: "🇹🇭 Dessert", tags: ["🥭 Mango", "🍚 Sticky", "🧡 Sweet"], description: "Ripe Thai mango with warm coconut sticky rice and salted coconut cream", imageUrl: "https://images.unsplash.com/photo-1563805042-7684c019e1cb?w=800&auto=format&fit=crop&q=60", priceLevel: 1, rating: "4.9", address: "All over Bangkok", isNew: false, sponsored: false },
+  { id: 117, name: "Tom Yum Goong", category: "🇹🇭 Thai", tags: ["🦐 Shrimp", "🌶️ Spicy", "🍲 Soup"], description: "Hot and sour prawn soup with lemongrass, galangal, kaffir lime, and fresh chilies", imageUrl: "https://images.unsplash.com/photo-1548943487-a2e4e43b4853?w=800&auto=format&fit=crop&q=60", priceLevel: 2, rating: "4.8", address: "Old Town, Silom", isNew: false, sponsored: false },
+  { id: 118, name: "Massaman Curry", category: "🇹🇭 Thai", tags: ["🍛 Curry", "🥔 Potato", "🥜 Peanuts"], description: "Rich, mildly-spiced coconut curry with tender beef, potatoes, and roasted peanuts", imageUrl: "https://images.unsplash.com/photo-1455619452474-d2be8b1e70cd?w=800&auto=format&fit=crop&q=60", priceLevel: 2, rating: "4.7", address: "Sukhumvit, Silom", isNew: true, sponsored: false },
+  { id: 119, name: "Crab Omelette", category: "🇹🇭 Thai", tags: ["🦀 Crab", "🥚 Egg", "⭐ Michelin"], description: "Fluffy crab meat omelette served over rice — Bangkok's most coveted street dish", imageUrl: "https://images.unsplash.com/photo-1504674900247-0877df9cc836?w=800&auto=format&fit=crop&q=60", priceLevel: 3, rating: "4.9", address: "Maha Chai Rd", isNew: false, sponsored: false },
+  { id: 120, name: "Yakitori", category: "🇯🇵 Japanese", tags: ["🍢 Skewers", "🔥 Grilled", "🍺 Izakaya"], description: "Charcoal-grilled chicken skewers with tare glaze — perfect with cold beer", imageUrl: "https://images.unsplash.com/photo-1579871494447-9811cf80d66c?w=800&auto=format&fit=crop&q=60", priceLevel: 2, rating: "4.5", address: "Thonglor, Sukhumvit", isNew: true, sponsored: false },
+  { id: 121, name: "Bibimbap", category: "🇰🇷 Korean", tags: ["🍚 Rice", "🥬 Veggies", "🥚 Egg"], description: "Sizzling stone pot rice with seasoned vegetables, gochujang, and a crispy fried egg", imageUrl: "https://images.unsplash.com/photo-1590301157890-4810ed352733?w=800&auto=format&fit=crop&q=60", priceLevel: 2, rating: "4.6", address: "Sukhumvit 12", isNew: false, sponsored: false },
+  { id: 122, name: "Taco Al Pastor", category: "🇲🇽 Mexican", tags: ["🌮 Tacos", "🍍 Pineapple", "🌶️ Spicy"], description: "Spit-roasted pork with pineapple, cilantro, and lime on fresh corn tortillas", imageUrl: "https://images.unsplash.com/photo-1565299585323-38d6b0865b47?w=800&auto=format&fit=crop&q=60", priceLevel: 2, rating: "4.5", address: "Sukhumvit 31", isNew: true, sponsored: false },
+  { id: 123, name: "Butter Chicken", category: "🇮🇳 Indian", tags: ["🍛 Curry", "🧈 Creamy", "🍚 Rice"], description: "Tender chicken in rich tomato-butter sauce with fragrant basmati rice and naan", imageUrl: "https://images.unsplash.com/photo-1585937421612-70a008356fbe?w=800&auto=format&fit=crop&q=60", priceLevel: 2, rating: "4.6", address: "Sukhumvit 31, 11", isNew: false, sponsored: false },
+  { id: 124, name: "Pho Bo", category: "🇻🇳 Vietnamese", tags: ["🍜 Noodles", "🥩 Beef", "🌿 Herbs"], description: "Slow-simmered beef bone broth with rice noodles, bean sprouts, and Thai basil", imageUrl: "https://images.unsplash.com/photo-1582878826629-29b7ad1cdc43?w=800&auto=format&fit=crop&q=60", priceLevel: 1, rating: "4.7", address: "Ekkamai, Phrom Phong", isNew: false, sponsored: false },
+  { id: 125, name: "Carbonara", category: "🇮🇹 Italian", tags: ["🍝 Pasta", "🥚 Egg", "🧀 Pecorino"], description: "Classic Roman pasta with guanciale, pecorino romano, egg yolk, and black pepper", imageUrl: "https://images.unsplash.com/photo-1414235077428-338989a2e8c0?w=800&auto=format&fit=crop&q=60", priceLevel: 3, rating: "4.6", address: "Langsuan, Silom", isNew: true, sponsored: false },
+  { id: 126, name: "Fish & Chips", category: "🇬🇧 British", tags: ["🐟 Fish", "🍟 Fries", "🍺 Pub"], description: "Beer-battered cod with thick-cut chips, mushy peas, and malt vinegar", imageUrl: "https://images.unsplash.com/photo-1504674900247-0877df9cc836?w=800&auto=format&fit=crop&q=60", priceLevel: 2, rating: "4.3", address: "Sukhumvit 33", isNew: false, sponsored: false },
+  { id: 127, name: "Pad Krapow", category: "🇹🇭 Thai", tags: ["🌶️ Spicy", "🍳 Egg", "🌿 Basil"], description: "Holy basil stir-fry with minced pork and a crispy fried egg over jasmine rice", imageUrl: "https://images.unsplash.com/photo-1562565652-a0d8f0c59eb4?w=800&auto=format&fit=crop&q=60", priceLevel: 1, rating: "4.8", address: "All over Bangkok", isNew: false, sponsored: false },
+  { id: 128, name: "Wagyu Steak", category: "🥩 Steakhouse", tags: ["🥩 Wagyu", "🔥 Grilled", "✨ Premium"], description: "A5 Japanese wagyu seared to perfection with seasonal vegetables and truffle jus", imageUrl: "https://images.unsplash.com/photo-1504674900247-0877df9cc836?w=800&auto=format&fit=crop&q=60", priceLevel: 4, rating: "4.8", address: "Langsuan, Sukhumvit", isNew: true, sponsored: false },
+  { id: 129, name: "Laksa", category: "🇲🇾 Malaysian", tags: ["🍜 Noodles", "🥥 Coconut", "🌶️ Spicy"], description: "Rich coconut curry noodle soup with prawns, tofu puffs, and sambal", imageUrl: "https://images.unsplash.com/photo-1569718212165-3a8278d5f624?w=800&auto=format&fit=crop&q=60", priceLevel: 2, rating: "4.5", address: "Sukhumvit 39", isNew: false, sponsored: false },
+  { id: 130, name: "Shakshuka", category: "🇮🇱 Mediterranean", tags: ["🥚 Eggs", "🍅 Tomato", "🌅 Brunch"], description: "Poached eggs in spiced tomato sauce with feta, za'atar, and warm pita bread", imageUrl: "https://images.unsplash.com/photo-1504674900247-0877df9cc836?w=800&auto=format&fit=crop&q=60", priceLevel: 2, rating: "4.6", address: "Sukhumvit 45", isNew: true, sponsored: false },
+  { id: 131, name: "Khao Pad", category: "🇹🇭 Thai", tags: ["🍚 Fried Rice", "🥚 Egg", "🍋 Lime"], description: "Classic Thai fried rice with egg, spring onions, and a squeeze of fresh lime", imageUrl: "https://images.unsplash.com/photo-1455619452474-d2be8b1e70cd?w=800&auto=format&fit=crop&q=60", priceLevel: 1, rating: "4.4", address: "All over Bangkok", isNew: false, sponsored: false },
+  { id: 132, name: "Gyoza", category: "🇯🇵 Japanese", tags: ["🥟 Dumpling", "🔥 Pan-fried", "🍺 Snack"], description: "Pan-fried pork and cabbage dumplings with crispy bottoms and dipping sauce", imageUrl: "https://images.unsplash.com/photo-1563245372-f21724e3856d?w=800&auto=format&fit=crop&q=60", priceLevel: 1, rating: "4.5", address: "Thonglor, Asoke", isNew: false, sponsored: false },
+  { id: 133, name: "Pad See Ew", category: "🇹🇭 Thai", tags: ["🍜 Noodles", "🥬 Broccoli", "🥚 Egg"], description: "Wide rice noodles stir-fried in dark soy with Chinese broccoli and egg", imageUrl: "https://images.unsplash.com/photo-1559314809-0d155014e29e?w=800&auto=format&fit=crop&q=60", priceLevel: 1, rating: "4.6", address: "All over Bangkok", isNew: false, sponsored: false },
+  { id: 134, name: "Matcha Latte", category: "🍵 Japanese Cafe", tags: ["🍵 Matcha", "🥛 Latte", "📸 Aesthetic"], description: "Ceremonial grade Uji matcha whisked with oat milk and served over ice", imageUrl: "https://images.unsplash.com/photo-1509042239860-f550ce710b93?w=800&auto=format&fit=crop&q=60", priceLevel: 2, rating: "4.5", address: "Ekkamai, Thonglor", isNew: true, sponsored: false },
+  { id: 135, name: "Naan & Tandoori", category: "🇮🇳 Indian", tags: ["🍗 Tandoori", "🫓 Naan", "🔥 Clay oven"], description: "Smoky tandoori chicken with garlic naan fresh from the clay oven", imageUrl: "https://images.unsplash.com/photo-1585937421612-70a008356fbe?w=800&auto=format&fit=crop&q=60", priceLevel: 2, rating: "4.5", address: "Sukhumvit 11, 31", isNew: false, sponsored: false },
+  { id: 136, name: "Banh Mi", category: "🇻🇳 Vietnamese", tags: ["🥖 Sandwich", "🥒 Fresh", "🌶️ Chili"], description: "Crispy baguette with grilled pork, pickled daikon, cilantro, and sriracha", imageUrl: "https://images.unsplash.com/photo-1582878826629-29b7ad1cdc43?w=800&auto=format&fit=crop&q=60", priceLevel: 1, rating: "4.4", address: "Sukhumvit 36", isNew: false, sponsored: false },
+  { id: 137, name: "Truffle Fries", category: "🍟 Western", tags: ["🍟 Fries", "🍄 Truffle", "🧀 Parmesan"], description: "Crispy shoestring fries tossed in truffle oil with shaved parmesan and herbs", imageUrl: "https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=800&auto=format&fit=crop&q=60", priceLevel: 2, rating: "4.3", address: "Thonglor, Ekkamai", isNew: true, sponsored: false },
+  { id: 138, name: "Chicken Rice", category: "🇸🇬 Singaporean", tags: ["🍗 Chicken", "🍚 Rice", "🥒 Cucumber"], description: "Hainanese-style poached chicken with fragrant rice, ginger sauce, and chili", imageUrl: "https://images.unsplash.com/photo-1504674900247-0877df9cc836?w=800&auto=format&fit=crop&q=60", priceLevel: 1, rating: "4.6", address: "Sukhumvit 19", isNew: false, sponsored: false },
+  { id: 139, name: "Tiramisu", category: "🇮🇹 Dessert", tags: ["☕ Coffee", "🧀 Mascarpone", "🍫 Cocoa"], description: "Classic Italian layers of espresso-soaked ladyfingers with mascarpone cream", imageUrl: "https://images.unsplash.com/photo-1551024506-0bccd828d307?w=800&auto=format&fit=crop&q=60", priceLevel: 2, rating: "4.7", address: "Langsuan, Sukhumvit", isNew: false, sponsored: false },
+  { id: 140, name: "Satay", category: "🇹🇭 Thai", tags: ["🍢 Skewers", "🥜 Peanut", "🔥 Grilled"], description: "Charcoal-grilled marinated meat skewers with peanut sauce and cucumber relish", imageUrl: "https://images.unsplash.com/photo-1562565652-a0d8f0c59eb4?w=800&auto=format&fit=crop&q=60", priceLevel: 1, rating: "4.5", address: "All over Bangkok", isNew: false, sponsored: false },
+  { id: 141, name: "Avocado Toast", category: "🥑 Brunch", tags: ["🥑 Avocado", "🍞 Toast", "🥚 Poached egg"], description: "Smashed avocado on sourdough with poached eggs, chili flakes, and microgreens", imageUrl: "https://images.unsplash.com/photo-1525351484163-7529414344d8?w=800&auto=format&fit=crop&q=60", priceLevel: 2, rating: "4.5", address: "Thonglor, Ekkamai", isNew: true, sponsored: false },
+  { id: 142, name: "Katsu Curry", category: "🇯🇵 Japanese", tags: ["🍛 Curry", "🍗 Katsu", "🍚 Rice"], description: "Crispy panko-breaded pork cutlet with rich Japanese curry sauce over steamed rice", imageUrl: "https://images.unsplash.com/photo-1569718212165-3a8278d5f624?w=800&auto=format&fit=crop&q=60", priceLevel: 2, rating: "4.6", address: "Siam, Asoke", isNew: false, sponsored: false },
+  { id: 143, name: "Boat Noodles", category: "🇹🇭 Thai", tags: ["🍜 Noodles", "🥩 Beef", "🌶️ Rich"], description: "Dark, intensely flavored broth with tender beef and blood — Bangkok classic", imageUrl: "https://images.unsplash.com/photo-1569718212165-3a8278d5f624?w=800&auto=format&fit=crop&q=60", priceLevel: 1, rating: "4.7", address: "Victory Monument, Ari", isNew: false, sponsored: false },
 ];
 
 const DRINKS_SWIPE_MENUS = [
@@ -490,15 +541,25 @@ export default function SwipePage() {
   const isCampaignMode = mode === "campaigns";
   const isDrinksMode = mode === "drinks";
   const isRestaurantMode = RESTAURANT_MODES.has(mode);
-  const menuItems = isDrinksMode ? DRINKS_SWIPE_MENUS : SWIPE_MENUS;
-  const restaurantItems = isCampaignMode ? CAMPAIGN_SWIPE_CARDS : RESTAURANT_SWIPE_CARDS;
+  const rawMenuItems = isDrinksMode ? DRINKS_SWIPE_MENUS : SWIPE_MENUS;
+  const rawRestaurantItems = isCampaignMode ? CAMPAIGN_SWIPE_CARDS : RESTAURANT_SWIPE_CARDS;
+  const menuItems = useMemo(() => injectSponsored(rawMenuItems), [rawMenuItems]);
+  const restaurantItems = useMemo(() => injectSponsored(rawRestaurantItems), [rawRestaurantItems]);
   const items = isRestaurantMode ? restaurantItems : menuItems;
+
+  // Track sponsored impressions when the active card changes
+  useEffect(() => {
+    const item = items[currentIndex];
+    if (item?.sponsored) {
+      trackEvent("view_card", { restaurantId: item.id, metadata: { isSponsored: true, itemName: item.name } });
+    }
+  }, [currentIndex]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const modeLabels: Record<string, string> = {
     all: "Swipe Mode",
     cheap: "Budget Eats",
     nearby: "Near BTS",
-    trending: "Trending Now",
+    trending: "Popular Now",
     hot: "Hot Right Now",
     late: "Late Night",
     outdoor: "Outdoor Dining",
@@ -569,7 +630,7 @@ export default function SwipePage() {
 
   if (showMatch && matchedRestaurant) {
     return (
-      <div className="w-full h-[100dvh] bg-white flex flex-col items-center justify-center px-6 relative overflow-hidden" data-testid="solo-match-page">
+      <div className="w-full h-[100dvh] bg-[#FCFCFC] flex flex-col items-center justify-center px-6 relative overflow-hidden" data-testid="solo-match-page">
         <div className="absolute inset-0 pointer-events-none">
           <div className="absolute top-[20%] left-[5%] w-48 h-48 bg-amber-50/50 rounded-full blur-3xl" />
           <div className="absolute bottom-[15%] right-[10%] w-56 h-56 bg-amber-50/50 rounded-full blur-3xl" />

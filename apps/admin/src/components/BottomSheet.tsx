@@ -123,7 +123,7 @@ export function BottomSheet({ activeMode, onModeChange, isGroup, onToggleGroup, 
       }}
       className="absolute bottom-0 left-0 right-0 rounded-t-[28px] z-50 flex flex-col gpu-accelerated"
       style={{
-        background: "#F5F5F5",
+        background: "#FCFCFC",
         boxShadow: "var(--shadow-drawer)",
         height: "82%",
         touchAction: "none",

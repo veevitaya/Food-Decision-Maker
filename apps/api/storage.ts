@@ -5,6 +5,10 @@ import {
   userProfiles,
   groupSessions,
   groupMembers,
+  menus,
+  promotions,
+  restaurantOwners,
+  restaurantClaims,
   placesRequestLogs,
   campaigns,
   adBanners,
@@ -14,6 +18,10 @@ import {
   itemFeatureSnapshots,
   consentLogs,
   analyticsDailyRollups,
+  adminUsers,
+  sponsoredRequests,
+  type SponsoredRequest,
+  type InsertSponsoredRequest,
   type Restaurant,
   type InsertRestaurant,
   type UserPreference,
@@ -24,6 +32,14 @@ import {
   type InsertGroupSession,
   type GroupMember,
   type InsertGroupMember,
+  type Menu,
+  type InsertMenu,
+  type Promotion,
+  type InsertPromotion,
+  type RestaurantOwnerRow,
+  type InsertRestaurantOwner,
+  type RestaurantClaimRow,
+  type InsertRestaurantClaim,
   type PlacesRequestLog,
   type InsertPlacesRequestLog,
   type Campaign,
@@ -40,13 +56,18 @@ import {
   type ConsentLog,
   type InsertConsentLog,
   type AnalyticsDailyRollup,
+  type InsertAdminUser,
   placesTiles,
   type PlacesTile,
+  notificationLogs,
+  type NotificationLog,
+  type InsertNotificationLog,
 } from "@shared/schema";
 import { eq, desc, ilike, or, and, lte, gte, lt, sql, SQL } from "drizzle-orm";
 import type { NormalizedPlace } from "./services/places/types";
 
 type GroupSessionSettings = {
+  mode?: "restaurant" | "menu";
   locations?: string[];
   budget?: string;
   diet?: string[];
@@ -66,6 +87,24 @@ export interface IStorage {
   createRestaurant(data: InsertRestaurant): Promise<Restaurant>;
   updateRestaurant(id: number, updates: Partial<InsertRestaurant>): Promise<Restaurant | undefined>;
   deleteRestaurant(id: number): Promise<boolean>;
+  listMenusByRestaurant(restaurantId: number): Promise<Menu[]>;
+  getMenuById(id: number): Promise<Menu | undefined>;
+  listMenusByName(name: string): Promise<Menu[]>;
+  createMenu(data: InsertMenu): Promise<Menu>;
+  updateMenu(id: number, updates: Partial<InsertMenu>): Promise<Menu | undefined>;
+  deleteMenu(id: number): Promise<boolean>;
+  listPromotionsByRestaurant(restaurantId: number, activeOnly?: boolean): Promise<Promotion[]>;
+  createPromotion(data: InsertPromotion): Promise<Promotion>;
+  updatePromotion(id: number, updates: Partial<InsertPromotion>): Promise<Promotion | undefined>;
+  deletePromotion(id: number): Promise<boolean>;
+  listRestaurantOwners(): Promise<RestaurantOwnerRow[]>;
+  getRestaurantOwnerById(id: number): Promise<RestaurantOwnerRow | undefined>;
+  getRestaurantOwnerByEmail(email: string): Promise<RestaurantOwnerRow | undefined>;
+  createRestaurantOwner(data: InsertRestaurantOwner): Promise<RestaurantOwnerRow>;
+  updateRestaurantOwner(id: number, updates: Partial<InsertRestaurantOwner>): Promise<RestaurantOwnerRow | undefined>;
+  listRestaurantClaims(status?: "pending" | "approved" | "rejected"): Promise<RestaurantClaimRow[]>;
+  createRestaurantClaim(data: InsertRestaurantClaim): Promise<RestaurantClaimRow>;
+  updateRestaurantClaim(id: number, updates: Partial<InsertRestaurantClaim>): Promise<RestaurantClaimRow | undefined>;
   getSuggestions(): Promise<Restaurant[]>;
   createPreference(pref: InsertUserPreference): Promise<UserPreference>;
   seedRestaurants(data: InsertRestaurant[]): Promise<void>;
@@ -101,6 +140,7 @@ export interface IStorage {
   createEventLog(data: InsertEventLog): Promise<EventLog | null>;
   listEventLogsByUser(userId: string): Promise<EventLog[]>;
   listEventLogs(limit?: number, since?: Date): Promise<EventLog[]>;
+  listEventLogsByType(eventType: string, since?: Date, limit?: number): Promise<EventLog[]>;
   listActiveUsersInRange(start: Date, end: Date): Promise<Set<string>>;
   listUserFeatureSnapshots(limit?: number): Promise<UserFeatureSnapshot[]>;
   listItemFeatureSnapshots(limit?: number): Promise<ItemFeatureSnapshot[]>;
@@ -114,6 +154,16 @@ export interface IStorage {
   runDataRetention(rawEventDays?: number, aggregateDays?: number): Promise<{ rawEventsDeleted: number; snapshotsDeleted: number }>;
   upsertDailyRollup(date: string, data: Omit<AnalyticsDailyRollup, "date" | "updatedAt">): Promise<AnalyticsDailyRollup>;
   listDailyRollups(days: number): Promise<AnalyticsDailyRollup[]>;
+  listAdminUsers(): Promise<typeof adminUsers.$inferSelect[]>;
+  getAdminUserById(id: number): Promise<typeof adminUsers.$inferSelect | undefined>;
+  getAdminUserByEmail(email: string): Promise<typeof adminUsers.$inferSelect | undefined>;
+  getAdminUserByUsername(username: string): Promise<typeof adminUsers.$inferSelect | undefined>;
+  createAdminUser(data: InsertAdminUser): Promise<typeof adminUsers.$inferSelect>;
+  updateAdminUser(id: number, updates: Partial<InsertAdminUser & { updatedAt: Date }>): Promise<typeof adminUsers.$inferSelect | undefined>;
+  listSponsoredRequests(status?: string): Promise<SponsoredRequest[]>;
+  getSponsoredRequestById(id: number): Promise<SponsoredRequest | undefined>;
+  createSponsoredRequest(data: InsertSponsoredRequest): Promise<SponsoredRequest>;
+  updateSponsoredRequest(id: number, updates: Partial<SponsoredRequest>): Promise<SponsoredRequest | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -181,6 +231,114 @@ export class DatabaseStorage implements IStorage {
     return deleted.length > 0;
   }
 
+  async listMenusByRestaurant(restaurantId: number): Promise<Menu[]> {
+    return db.select().from(menus).where(eq(menus.restaurantId, restaurantId)).orderBy(desc(menus.createdAt));
+  }
+
+  async getMenuById(id: number): Promise<Menu | undefined> {
+    const [menu] = await db.select().from(menus).where(eq(menus.id, id)).limit(1);
+    return menu;
+  }
+
+  async listMenusByName(name: string): Promise<Menu[]> {
+    const normalized = name.trim();
+    if (!normalized) return [];
+    return db
+      .select()
+      .from(menus)
+      .where(and(sql`LOWER(${menus.name}) = LOWER(${normalized})`, eq(menus.isActive, true)));
+  }
+
+  async createMenu(data: InsertMenu): Promise<Menu> {
+    const [created] = await db.insert(menus).values(data).returning();
+    return created;
+  }
+
+  async updateMenu(id: number, updates: Partial<InsertMenu>): Promise<Menu | undefined> {
+    const [updated] = await db.update(menus).set(updates).where(eq(menus.id, id)).returning();
+    return updated;
+  }
+
+  async deleteMenu(id: number): Promise<boolean> {
+    const deleted = await db.delete(menus).where(eq(menus.id, id)).returning({ id: menus.id });
+    return deleted.length > 0;
+  }
+
+  async listPromotionsByRestaurant(restaurantId: number, activeOnly = false): Promise<Promotion[]> {
+    const now = new Date().toISOString().slice(0, 10);
+    if (activeOnly) {
+      return db
+        .select()
+        .from(promotions)
+        .where(
+          and(
+            eq(promotions.restaurantId, restaurantId),
+            eq(promotions.isActive, true),
+            or(sql`${promotions.startDate} is null`, lte(promotions.startDate, now)),
+            or(sql`${promotions.endDate} is null`, gte(promotions.endDate, now)),
+          ),
+        )
+        .orderBy(desc(promotions.createdAt));
+    }
+    return db.select().from(promotions).where(eq(promotions.restaurantId, restaurantId)).orderBy(desc(promotions.createdAt));
+  }
+
+  async createPromotion(data: InsertPromotion): Promise<Promotion> {
+    const [created] = await db.insert(promotions).values(data).returning();
+    return created;
+  }
+
+  async updatePromotion(id: number, updates: Partial<InsertPromotion>): Promise<Promotion | undefined> {
+    const [updated] = await db.update(promotions).set(updates).where(eq(promotions.id, id)).returning();
+    return updated;
+  }
+
+  async deletePromotion(id: number): Promise<boolean> {
+    const deleted = await db.delete(promotions).where(eq(promotions.id, id)).returning({ id: promotions.id });
+    return deleted.length > 0;
+  }
+
+  async listRestaurantOwners(): Promise<RestaurantOwnerRow[]> {
+    return db.select().from(restaurantOwners).orderBy(desc(restaurantOwners.createdAt));
+  }
+
+  async getRestaurantOwnerById(id: number): Promise<RestaurantOwnerRow | undefined> {
+    const [owner] = await db.select().from(restaurantOwners).where(eq(restaurantOwners.id, id)).limit(1);
+    return owner;
+  }
+
+  async getRestaurantOwnerByEmail(email: string): Promise<RestaurantOwnerRow | undefined> {
+    const [owner] = await db.select().from(restaurantOwners).where(eq(restaurantOwners.email, email)).limit(1);
+    return owner;
+  }
+
+  async createRestaurantOwner(data: InsertRestaurantOwner): Promise<RestaurantOwnerRow> {
+    const [created] = await db.insert(restaurantOwners).values(data).returning();
+    return created;
+  }
+
+  async updateRestaurantOwner(id: number, updates: Partial<InsertRestaurantOwner>): Promise<RestaurantOwnerRow | undefined> {
+    const [updated] = await db.update(restaurantOwners).set(updates).where(eq(restaurantOwners.id, id)).returning();
+    return updated;
+  }
+
+  async listRestaurantClaims(status?: "pending" | "approved" | "rejected"): Promise<RestaurantClaimRow[]> {
+    if (status) {
+      return db.select().from(restaurantClaims).where(eq(restaurantClaims.status, status)).orderBy(desc(restaurantClaims.submittedAt));
+    }
+    return db.select().from(restaurantClaims).orderBy(desc(restaurantClaims.submittedAt));
+  }
+
+  async createRestaurantClaim(data: InsertRestaurantClaim): Promise<RestaurantClaimRow> {
+    const [created] = await db.insert(restaurantClaims).values(data).returning();
+    return created;
+  }
+
+  async updateRestaurantClaim(id: number, updates: Partial<InsertRestaurantClaim>): Promise<RestaurantClaimRow | undefined> {
+    const [updated] = await db.update(restaurantClaims).set(updates).where(eq(restaurantClaims.id, id)).returning();
+    return updated;
+  }
+
   async getSuggestions(): Promise<Restaurant[]> {
     return await db.select().from(restaurants).limit(5);
   }
@@ -233,7 +391,11 @@ export class DatabaseStorage implements IStorage {
       | undefined
       | Record<string, unknown>;
     const settings: GroupSessionSettings | null | undefined = settingsRaw
-      ? {
+        ? {
+          mode:
+            (settingsRaw as Record<string, unknown>).mode === "menu"
+              ? "menu"
+              : "restaurant",
           locations: Array.isArray((settingsRaw as Record<string, unknown>).locations)
             ? ((settingsRaw as Record<string, unknown>).locations as string[])
             : undefined,
@@ -507,6 +669,13 @@ export class DatabaseStorage implements IStorage {
       .limit(limit);
   }
 
+  async listEventLogsByType(eventType: string, since?: Date, limit = 5000): Promise<EventLog[]> {
+    const condition = since
+      ? and(eq(eventLogs.eventType, eventType), gte(eventLogs.createdAt, since))
+      : eq(eventLogs.eventType, eventType);
+    return db.select().from(eventLogs).where(condition).orderBy(desc(eventLogs.createdAt)).limit(limit);
+  }
+
   async listActiveUsersInRange(start: Date, end: Date): Promise<Set<string>> {
     const rows = await db
       .select({ userId: eventLogs.userId })
@@ -670,6 +839,77 @@ export class DatabaseStorage implements IStorage {
       .from(analyticsDailyRollups)
       .where(gte(analyticsDailyRollups.date, since))
       .orderBy(desc(analyticsDailyRollups.date));
+  }
+
+  async listAdminUsers(): Promise<typeof adminUsers.$inferSelect[]> {
+    return db.select().from(adminUsers).orderBy(adminUsers.createdAt);
+  }
+
+  async getAdminUserById(id: number): Promise<typeof adminUsers.$inferSelect | undefined> {
+    const [row] = await db.select().from(adminUsers).where(eq(adminUsers.id, id)).limit(1);
+    return row;
+  }
+
+  async getAdminUserByEmail(email: string): Promise<typeof adminUsers.$inferSelect | undefined> {
+    const [row] = await db.select().from(adminUsers).where(eq(adminUsers.email, email)).limit(1);
+    return row;
+  }
+
+  async getAdminUserByUsername(username: string): Promise<typeof adminUsers.$inferSelect | undefined> {
+    const [row] = await db.select().from(adminUsers).where(eq(adminUsers.username, username)).limit(1);
+    return row;
+  }
+
+  async createAdminUser(data: InsertAdminUser): Promise<typeof adminUsers.$inferSelect> {
+    const [row] = await db.insert(adminUsers).values(data).returning();
+    return row;
+  }
+
+  async updateAdminUser(id: number, updates: Partial<InsertAdminUser & { updatedAt: Date }>): Promise<typeof adminUsers.$inferSelect | undefined> {
+    const [row] = await db
+      .update(adminUsers)
+      .set({ ...updates, updatedAt: updates.updatedAt ?? new Date() })
+      .where(eq(adminUsers.id, id))
+      .returning();
+    return row;
+  }
+
+  async createNotificationLog(data: InsertNotificationLog): Promise<NotificationLog> {
+    const [row] = await db.insert(notificationLogs).values(data).returning();
+    return row;
+  }
+
+  async listNotificationLogs(limit = 100): Promise<NotificationLog[]> {
+    return db
+      .select()
+      .from(notificationLogs)
+      .orderBy(desc(notificationLogs.sentAt))
+      .limit(limit);
+  }
+
+  async listSponsoredRequests(status?: string): Promise<SponsoredRequest[]> {
+    const q = db.select().from(sponsoredRequests).orderBy(desc(sponsoredRequests.createdAt));
+    if (status) return q.where(eq(sponsoredRequests.status, status));
+    return q;
+  }
+
+  async getSponsoredRequestById(id: number): Promise<SponsoredRequest | undefined> {
+    const [row] = await db.select().from(sponsoredRequests).where(eq(sponsoredRequests.id, id)).limit(1);
+    return row;
+  }
+
+  async createSponsoredRequest(data: InsertSponsoredRequest): Promise<SponsoredRequest> {
+    const [row] = await db.insert(sponsoredRequests).values(data).returning();
+    return row;
+  }
+
+  async updateSponsoredRequest(id: number, updates: Partial<SponsoredRequest>): Promise<SponsoredRequest | undefined> {
+    const [row] = await db
+      .update(sponsoredRequests)
+      .set(updates)
+      .where(eq(sponsoredRequests.id, id))
+      .returning();
+    return row;
   }
 }
 

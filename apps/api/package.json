@@ -8,6 +8,7 @@
     "build": "tsx --env-file=../../.env ../../script/build.ts",
     "start": "node --env-file=../../.env ../../dist/index.cjs",
     "check": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "seed:admin": "tsx --env-file=../../.env scripts/seedAdmin.ts"
   }
 }

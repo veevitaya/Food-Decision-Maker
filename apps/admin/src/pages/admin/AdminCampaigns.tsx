@@ -23,7 +23,22 @@ import {
   Target,
   Plus,
   X,
+  Send,
+  Star,
+  Clock,
 } from "lucide-react";
+
+type SponsoredRequest = {
+  id: number;
+  restaurantId: number;
+  ownerId: number;
+  status: string;
+  requestedStartDate: string | null;
+  requestedEndDate: string | null;
+  notes: string | null;
+  reviewNotes: string | null;
+  createdAt: string;
+};
 
 const statusTabs = ["All", "Draft", "Active", "Paused", "Ended"] as const;
 
@@ -91,9 +106,9 @@ function formatNum(n: number): string {
 }
 
 const kpiCards = [
-  { label: "Total Impressions", value: "248K", icon: Eye, iconColor: "text-[#3B82F6]", iconBg: "bg-[#3B82F6]/10" },
+  { label: "Total Impressions", value: "248K", icon: Eye, iconColor: "text-[var(--admin-blue)]", iconBg: "bg-[var(--admin-blue-10)]" },
   { label: "Total Clicks", value: "12.4K", icon: MousePointerClick, iconColor: "text-teal-500", iconBg: "bg-teal-50" },
-  { label: "Avg CTR", value: "5.0%", icon: TrendingUp, iconColor: "text-[#3B82F6]", iconBg: "bg-[#3B82F6]/10" },
+  { label: "Avg CTR", value: "5.0%", icon: TrendingUp, iconColor: "text-[var(--admin-blue)]", iconBg: "bg-[var(--admin-blue-10)]" },
   { label: "Revenue Generated", value: "฿847K", icon: DollarSign, iconColor: "text-emerald-500", iconBg: "bg-emerald-50" },
 ];
 
@@ -129,6 +144,9 @@ export default function AdminCampaigns() {
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState({ ...emptyForm });
+  const [sendModal, setSendModal] = useState<{ campaign: Campaign } | null>(null);
+  const [notifLineIds, setNotifLineIds] = useState("");
+  const [notifMessage, setNotifMessage] = useState("");
   const { toast } = useToast();
 
   const { data: campaigns = [], isLoading } = useQuery<Campaign[]>({
@@ -164,6 +182,43 @@ export default function AdminCampaigns() {
     },
   });
 
+  const { data: sponsoredRequests = [] } = useQuery<SponsoredRequest[]>({
+    queryKey: ["/api/admin/sponsored-requests"],
+    queryFn: async () => {
+      const res = await fetch("/api/admin/sponsored-requests", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to load sponsored requests");
+      return res.json();
+    },
+  });
+
+  const reviewSponsoredMutation = useMutation({
+    mutationFn: (args: { id: number; status: "approved" | "rejected"; reviewNotes?: string }) =>
+      apiRequest("PATCH", `/api/admin/sponsored-requests/${args.id}`, { status: args.status, reviewNotes: args.reviewNotes }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/sponsored-requests"] });
+      toast({ title: "Sponsorship request reviewed" });
+    },
+    onError: () => toast({ title: "Error reviewing request", variant: "destructive" }),
+  });
+
+  const sendNotifMutation = useMutation({
+    mutationFn: (args: { lineUserIds: string[]; message: string; campaignId: number }) =>
+      apiRequest("POST", "/api/notifications/send", args),
+    onSuccess: (data: any) => {
+      setSendModal(null);
+      setNotifLineIds("");
+      setNotifMessage("");
+      if (data?.lineConfigured === false) {
+        toast({ title: "Notification logged (LINE not configured)", description: "LINE_CHANNEL_ACCESS_TOKEN is not set. Log saved, no message delivered.", variant: "default" });
+      } else {
+        toast({ title: "Notification sent", description: `Delivered to ${data?.recipientCount ?? "?"} recipient(s).` });
+      }
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to send notification.", variant: "destructive" });
+    },
+  });
+
   const filtered = campaigns.filter((c) => {
     const matchesTab =
       activeTab === "All" || c.status === activeTab.toLowerCase();
@@ -176,6 +231,56 @@ export default function AdminCampaigns() {
 
   return (
     <div data-testid="admin-campaigns-page" className="space-y-6">
+      {/* Send Notification Modal */}
+      {sendModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+          <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-md space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-gray-800">Send Notification</h3>
+              <Button size="icon" variant="ghost" onClick={() => setSendModal(null)}><X className="w-4 h-4" /></Button>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              Campaign: <span className="font-medium text-gray-800">{sendModal.campaign.title}</span>
+            </p>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-gray-700">LINE User IDs (comma-separated)</label>
+              <textarea
+                value={notifLineIds}
+                onChange={(e) => setNotifLineIds(e.target.value)}
+                placeholder="U1234abcd,U5678efgh"
+                rows={2}
+                className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-[var(--admin-blue)]/30"
+              />
+              <p className="text-[11px] text-muted-foreground">Enter LINE userIds of recipients. If LINE is not configured, the log will still be saved.</p>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-gray-700">Message</label>
+              <textarea
+                value={notifMessage}
+                onChange={(e) => setNotifMessage(e.target.value)}
+                placeholder={`Check out our new deal: ${sendModal.campaign.dealValue || sendModal.campaign.title}!`}
+                rows={3}
+                className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-[var(--admin-blue)]/30"
+              />
+            </div>
+            <div className="flex gap-3 justify-end">
+              <Button variant="outline" className="rounded-xl" onClick={() => setSendModal(null)}>Cancel</Button>
+              <Button
+                className="bg-[var(--admin-blue)] hover:bg-[var(--admin-blue-90)] text-white rounded-xl"
+                disabled={sendNotifMutation.isPending || !notifMessage.trim() || !notifLineIds.trim()}
+                onClick={() => {
+                  const ids = notifLineIds.split(",").map((s) => s.trim()).filter(Boolean);
+                  if (ids.length === 0) return;
+                  sendNotifMutation.mutate({ lineUserIds: ids, message: notifMessage.trim(), campaignId: sendModal.campaign.id });
+                }}
+              >
+                <Send className="w-4 h-4 mr-1" />
+                {sendNotifMutation.isPending ? "Sending..." : "Send"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div className="flex items-center gap-3 flex-wrap">
           <h2 className="text-xl font-semibold text-gray-800" data-testid="text-campaigns-title">
@@ -198,7 +303,7 @@ export default function AdminCampaigns() {
           </div>
           <Button
             onClick={() => setShowCreate(!showCreate)}
-            className="bg-[#3B82F6] hover:bg-[#3B82F6]/90 text-white rounded-xl"
+            className="bg-[var(--admin-blue)] hover:bg-[var(--admin-blue-90)] text-white rounded-xl"
             data-testid="button-create-campaign"
           >
             <Plus className="w-4 h-4 mr-1" />
@@ -313,7 +418,7 @@ export default function AdminCampaigns() {
                     }}
                     className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
                       form.targetGroups.includes(group)
-                        ? "bg-[#3B82F6] text-white"
+                        ? "bg-[var(--admin-blue)] text-white"
                         : "bg-gray-100 text-gray-600"
                     }`}
                     data-testid={`toggle-target-${group}`}
@@ -343,7 +448,7 @@ export default function AdminCampaigns() {
                 createMutation.mutate(form);
               }}
               disabled={createMutation.isPending}
-              className="bg-[#3B82F6] hover:bg-[#3B82F6]/90 text-white rounded-xl"
+              className="bg-[var(--admin-blue)] hover:bg-[var(--admin-blue-90)] text-white rounded-xl"
               data-testid="button-submit-create"
             >
               {createMutation.isPending ? "Creating..." : "Create Campaign"}
@@ -602,6 +707,18 @@ export default function AdminCampaigns() {
                         End
                       </button>
                     )}
+                    <button
+                      className="inline-flex items-center gap-1 border border-gray-100 text-muted-foreground hover:text-[var(--admin-blue)] hover:bg-blue-50 text-sm font-medium rounded-xl px-4 py-1.5 transition-colors"
+                      onClick={() => {
+                        setNotifMessage(`Hey! Check out our deal: ${campaign.dealValue || campaign.title} 🎉`);
+                        setNotifLineIds("");
+                        setSendModal({ campaign });
+                      }}
+                      data-testid={`button-notify-${campaign.id}`}
+                    >
+                      <Send className="w-4 h-4" />
+                      Notify
+                    </button>
                     <Button
                       size="icon"
                       variant="ghost"
@@ -623,6 +740,76 @@ export default function AdminCampaigns() {
           })}
         </div>
       )}
+
+      {/* Sponsored Requests Queue */}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-4" data-testid="section-sponsored-requests">
+        <div className="flex items-center gap-3">
+          <Star className="w-5 h-5 text-amber-400" />
+          <div>
+            <h3 className="text-base font-semibold text-gray-800">Sponsored Placement Requests</h3>
+            <p className="text-xs text-muted-foreground">Partner requests to feature their restaurant as sponsored in the swipe deck</p>
+          </div>
+          {sponsoredRequests.filter(r => r.status === "pending").length > 0 && (
+            <span className="ml-auto bg-amber-100 text-amber-700 text-xs font-semibold rounded-full px-2.5 py-0.5">
+              {sponsoredRequests.filter(r => r.status === "pending").length} pending
+            </span>
+          )}
+        </div>
+
+        {sponsoredRequests.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-2">No sponsored requests yet.</p>
+        ) : (
+          <div className="space-y-3">
+            {sponsoredRequests.map((req) => (
+              <div key={req.id} className="border border-gray-100 rounded-xl p-4 flex items-start justify-between gap-4 flex-wrap" data-testid={`sponsored-req-${req.id}`}>
+                <div className="space-y-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-medium text-gray-800">Restaurant #{req.restaurantId}</span>
+                    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                      req.status === "pending" ? "bg-amber-100 text-amber-700"
+                      : req.status === "approved" ? "bg-green-100 text-green-700"
+                      : "bg-red-100 text-red-600"
+                    }`}>
+                      {req.status}
+                    </span>
+                  </div>
+                  {(req.requestedStartDate || req.requestedEndDate) && (
+                    <p className="text-xs text-muted-foreground flex items-center gap-1">
+                      <Clock className="w-3 h-3" />
+                      {req.requestedStartDate ?? "—"} → {req.requestedEndDate ?? "ongoing"}
+                    </p>
+                  )}
+                  {req.notes && <p className="text-xs text-muted-foreground">Note: {req.notes}</p>}
+                  {req.reviewNotes && <p className="text-xs text-muted-foreground italic">Review: {req.reviewNotes}</p>}
+                  <p className="text-[10px] text-muted-foreground/60">
+                    Submitted: {new Date(req.createdAt).toLocaleDateString()}
+                  </p>
+                </div>
+                {req.status === "pending" && (
+                  <div className="flex gap-2 flex-shrink-0">
+                    <button
+                      className="inline-flex items-center gap-1 bg-[#00B14F] hover:bg-[#00B14F]/90 text-white text-sm font-medium rounded-xl px-4 py-1.5 transition-colors disabled:opacity-50"
+                      disabled={reviewSponsoredMutation.isPending}
+                      onClick={() => reviewSponsoredMutation.mutate({ id: req.id, status: "approved" })}
+                      data-testid={`approve-sponsored-${req.id}`}
+                    >
+                      <CheckCircle className="w-4 h-4" /> Approve
+                    </button>
+                    <button
+                      className="inline-flex items-center gap-1 border border-gray-100 text-muted-foreground hover:text-red-500 hover:bg-red-50 text-sm font-medium rounded-xl px-4 py-1.5 transition-colors disabled:opacity-50"
+                      disabled={reviewSponsoredMutation.isPending}
+                      onClick={() => reviewSponsoredMutation.mutate({ id: req.id, status: "rejected" })}
+                      data-testid={`reject-sponsored-${req.id}`}
+                    >
+                      <X className="w-4 h-4" /> Reject
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
