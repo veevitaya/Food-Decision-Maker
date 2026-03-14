@@ -654,7 +654,9 @@ function EditPanel({
 
   const saveMutation = useMutation({
     mutationFn: (data: Partial<Restaurant>) =>
-      apiRequest("PATCH", `/api/admin/restaurants/${restaurant.id}`, data),
+      isNew
+        ? apiRequest("POST", "/api/admin/restaurants", data)
+        : apiRequest("PATCH", `/api/admin/restaurants/${restaurant.id}`, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/restaurants"] });
       onClose();

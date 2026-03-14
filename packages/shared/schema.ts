@@ -32,6 +32,8 @@ export const restaurants = pgTable("restaurants", {
   reviews: jsonb("reviews").$type<RestaurantReview[]>(),
   isSponsored: boolean("is_sponsored").notNull().default(false),
   sponsoredUntil: text("sponsored_until"),
+  vibes: text("vibes").array().default([]),
+  district: text("district"),
 });
 
 export const insertRestaurantSchema = createInsertSchema(restaurants).omit({ id: true });

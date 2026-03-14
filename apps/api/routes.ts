@@ -3472,6 +3472,43 @@ export async function registerRoutes(
     }
   });
 
+  // Auto-assign vibes to ALL restaurants (bulk)
+  app.post("/api/admin/restaurants/auto-assign-vibes", async (req, res) => {
+    try {
+      if (!requireAdminSession(req, res)) return;
+      const all = await storage.listRestaurants();
+      const CATEGORY_VIBES: Record<string, string[]> = {
+        thai: ["local", "authentic", "spicy"],
+        japanese: ["clean", "fresh", "minimalist"],
+        italian: ["romantic", "cozy", "pasta"],
+        korean: ["social", "bbq", "spicy"],
+        chinese: ["family", "sharing"],
+        seafood: ["fresh", "upscale"],
+        cafe: ["cozy", "casual", "coffee"],
+        coffee: ["cozy", "casual", "coffee"],
+        "street food": ["casual", "quick", "local"],
+        "fine dining": ["upscale", "romantic", "date-night"],
+        burgers: ["casual", "comfort"],
+        pizza: ["casual", "sharing"],
+        healthy: ["fresh", "light", "healthy"],
+        indian: ["spicy", "exotic", "aromatic"],
+        western: ["comfort", "classic"],
+        international: ["trendy", "diverse"],
+      };
+      let updated = 0;
+      for (const r of all) {
+        const key = r.category.toLowerCase();
+        const matched = Object.entries(CATEGORY_VIBES).find(([k]) => key.includes(k));
+        const vibes = matched ? matched[1] : ["casual"];
+        await storage.updateRestaurant(r.id, { vibes });
+        updated++;
+      }
+      res.json({ updated });
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
   app.post("/api/admin/restaurants", async (req, res) => {
     try {
       if (!requireAdminSession(req, res)) return;
@@ -3488,6 +3525,8 @@ export async function registerRoutes(
         isNew: z.boolean().optional().default(false),
         trendingScore: z.number().int().optional().default(0),
         phone: z.string().optional(),
+        vibes: z.array(z.string()).optional().default([]),
+        district: z.string().optional(),
         openingHours: z.array(z.object({
           day: z.string().min(1),
           hours: z.string().min(1),
@@ -3505,6 +3544,42 @@ export async function registerRoutes(
       if (err instanceof z.ZodError) {
         return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid payload" });
       }
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // Auto-assign vibes to a single restaurant
+  app.post("/api/admin/restaurants/:id/auto-assign-vibes", async (req, res) => {
+    try {
+      if (!requireAdminSession(req, res)) return;
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ message: "Invalid restaurant id" });
+      const restaurant = await storage.getRestaurantById(id);
+      if (!restaurant) return res.status(404).json({ message: "Restaurant not found" });
+      const CATEGORY_VIBES: Record<string, string[]> = {
+        thai: ["local", "authentic", "spicy"],
+        japanese: ["clean", "fresh", "minimalist"],
+        italian: ["romantic", "cozy", "pasta"],
+        korean: ["social", "bbq", "spicy"],
+        chinese: ["family", "sharing"],
+        seafood: ["fresh", "upscale"],
+        cafe: ["cozy", "casual", "coffee"],
+        coffee: ["cozy", "casual", "coffee"],
+        "street food": ["casual", "quick", "local"],
+        "fine dining": ["upscale", "romantic", "date-night"],
+        burgers: ["casual", "comfort"],
+        pizza: ["casual", "sharing"],
+        healthy: ["fresh", "light", "healthy"],
+        indian: ["spicy", "exotic", "aromatic"],
+        western: ["comfort", "classic"],
+        international: ["trendy", "diverse"],
+      };
+      const key = restaurant.category.toLowerCase();
+      const matched = Object.entries(CATEGORY_VIBES).find(([k]) => key.includes(k));
+      const vibes = matched ? matched[1] : ["casual"];
+      const updated = await storage.updateRestaurant(id, { vibes });
+      res.json(updated);
+    } catch {
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -3528,6 +3603,8 @@ export async function registerRoutes(
           isNew: z.boolean().optional(),
           trendingScore: z.number().int().optional(),
           phone: z.string().optional(),
+          vibes: z.array(z.string()).optional(),
+          district: z.string().nullable().optional(),
           openingHours: z.array(z.object({
             day: z.string().min(1),
             hours: z.string().min(1),
