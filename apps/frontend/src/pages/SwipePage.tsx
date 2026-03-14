@@ -1,9 +1,11 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { motion, useMotionValue, useTransform, PanInfo, AnimatePresence, useAnimate } from "framer-motion";
 import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { useTasteProfile } from "@/hooks/use-taste-profile";
+import { useLineProfile } from "@/hooks/use-line-profile";
 import { sendInvite } from "@/lib/liff";
+import { trackEvent } from "@/lib/analytics";
 import { BottomNav } from "@/components/BottomNav";
 import { MOCK_HOME_CAMPAIGNS, MOCK_RESTAURANT_CAMPAIGNS, getDealLabel as getCampaignDealLabel } from "@/components/CampaignBanner";
 import { Share2 } from "lucide-react";
@@ -40,6 +42,7 @@ const DRINKS_SWIPE_MENUS = [
 
 interface RestaurantCard {
   id: number;
+  sponsored?: boolean;
   name: string;
   category: string;
   tags: string[];
@@ -50,6 +53,52 @@ interface RestaurantCard {
   address: string;
   isNew: boolean;
   matchChance: number;
+  explanation?: string[];
+  recommendationSource?: string;
+  recommendationVariant?: string;
+  recommendationExperimentKey?: string;
+}
+
+const BANGKOK = { lat: 13.7563, lng: 100.5018 };
+
+function getCoords(): Promise<{ lat: number; lng: number }> {
+  const hardTimeout = new Promise<typeof BANGKOK>((resolve) =>
+    setTimeout(() => resolve(BANGKOK), 3000),
+  );
+  const geo = new Promise<typeof BANGKOK>((resolve) => {
+    if (!navigator.geolocation) { resolve(BANGKOK); return; }
+    try {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+        () => resolve(BANGKOK),
+        { timeout: 2500 },
+      );
+    } catch {
+      resolve(BANGKOK);
+    }
+  });
+  return Promise.race([geo, hardTimeout]).catch(() => BANGKOK);
+}
+
+interface PersonalizedItem {
+  id: number;
+  name: string;
+  category: string;
+  description: string;
+  imageUrl: string;
+  priceLevel: number;
+  rating: string;
+  address: string;
+  isNew: boolean;
+  score: number;
+  explanation: string[];
+}
+
+interface PersonalizedResponse {
+  source: "personalized" | "sparse_blend" | "segment" | "trending";
+  variant: string;
+  experimentKey: string;
+  items: PersonalizedItem[];
 }
 
 const RESTAURANT_SWIPE_CARDS: RestaurantCard[] = [
@@ -451,6 +500,14 @@ function RestaurantSwipeCard({
 
         <p className="text-foreground/60 text-sm leading-relaxed flex-1 min-h-0 line-clamp-2">{item.description}</p>
 
+        {item.explanation?.[0] && (
+          <div className="mt-2">
+            <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-700 bg-amber-50 border border-amber-200/60 rounded-full px-2.5 py-1">
+              ✦ {item.explanation[0]}
+            </span>
+          </div>
+        )}
+
         <div className="mt-auto pt-2 flex items-center justify-between">
           <span className="text-xs text-muted-foreground truncate max-w-[50%]">{item.address}</span>
           <p className="text-xs text-[#D4A800] font-semibold flex-shrink-0">{drunk ? "Tap for bars →" : "Tap to view details →"}</p>
@@ -471,6 +528,30 @@ export default function SwipePage() {
   const [showConfetti, setShowConfetti] = useState(false);
   const [showMatch, setShowMatch] = useState(false);
   const { recordSwipe } = useTasteProfile();
+  const { profile } = useLineProfile();
+  const userId = profile?.userId ?? null;
+  const pendingTapRef = useRef<{ itemId: number; timer: ReturnType<typeof setTimeout> } | null>(null);
+  const lastViewedCardRef = useRef<string | null>(null);
+  const [userCoords, setUserCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const now = new Date();
+  const hour = now.getHours();
+  const day = now.getDay();
+
+  useEffect(() => {
+    let active = true;
+    getCoords()
+      .then((coords) => {
+        if (active) setUserCoords(coords);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const isCampaignMode = mode === "campaigns";
+  const isDrinksMode = mode === "drinks";
+  const isRestaurantMode = RESTAURANT_MODES.has(mode);
 
   const { data: apiCampaigns } = useQuery<Array<{ id: string; title: string; dealType: string; dealValue: string; endDate: string; restaurantName: string; restaurantImage: string; description: string }>>({
     queryKey: ["/api/campaigns/active"],
@@ -479,8 +560,24 @@ export default function SwipePage() {
       if (!res.ok) return [];
       return res.json();
     },
-    enabled: mode === "campaigns",
+    enabled: isCampaignMode,
   });
+
+  const { data: personalizedData, isLoading: personalizedLoading } = useQuery<PersonalizedResponse>({
+    queryKey: ["personalized-swipe", userId, hour, day],
+    queryFn: async () => {
+      const { lat, lng } = await getCoords();
+      const res = await fetch(
+        `/api/recommendations/personalized?userId=${userId}&lat=${lat}&lng=${lng}&hour=${hour}&day=${day}&limit=20`,
+      );
+      if (!res.ok) throw new Error("personalized fetch failed");
+      return res.json();
+    },
+    enabled: userId !== null && isRestaurantMode && !isCampaignMode,
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  });
+
   const campaignSource = (apiCampaigns && apiCampaigns.length > 0) ? apiCampaigns : MOCK_HOME_CAMPAIGNS;
   const campaignCardIds = campaignSource.map((c) => c.id);
   const campaignSwipeCards: RestaurantCard[] = campaignSource.map((c, idx) => ({
@@ -497,12 +594,53 @@ export default function SwipePage() {
     matchChance: 0,
   }));
 
-  const isCampaignMode = mode === "campaigns";
-  const isDrinksMode = mode === "drinks";
-  const isRestaurantMode = RESTAURANT_MODES.has(mode);
+  const personalizedCards: RestaurantCard[] = (personalizedData?.items ?? []).map((item) => ({
+    id: item.id,
+    name: item.name,
+    category: item.category,
+    tags: item.explanation?.slice(1).map((e) => `✨ ${e}`) ?? [],
+    description: item.description,
+    imageUrl: item.imageUrl,
+    priceLevel: item.priceLevel,
+    rating: item.rating,
+    address: item.address,
+    isNew: item.isNew ?? false,
+    matchChance: item.score,
+    explanation: item.explanation,
+    recommendationSource: personalizedData?.source,
+    recommendationVariant: personalizedData?.variant,
+    recommendationExperimentKey: personalizedData?.experimentKey,
+  }));
+
   const menuItems = isDrinksMode ? DRINKS_SWIPE_MENUS : SWIPE_MENUS;
-  const restaurantItems = isCampaignMode ? campaignSwipeCards : RESTAURANT_SWIPE_CARDS;
+  const restaurantItems: RestaurantCard[] =
+    isCampaignMode
+      ? campaignSwipeCards
+      : personalizedCards.length > 0
+      ? personalizedCards
+      : RESTAURANT_SWIPE_CARDS;
   const items = isRestaurantMode ? restaurantItems : menuItems;
+
+  useEffect(() => {
+    if (!isRestaurantMode || isCampaignMode) return;
+    const item = restaurantItems[currentIndex];
+    if (!item) return;
+    const viewKey = `${currentIndex}:${item.id}`;
+    if (lastViewedCardRef.current === viewKey) return;
+    lastViewedCardRef.current = viewKey;
+    trackEvent("view_card", {
+      restaurantId: item.id,
+      metadata: {
+        category: item.category,
+        priceLevel: item.priceLevel,
+        source: "swipe_page",
+        recommendation_source: item.recommendationSource ?? personalizedData?.source ?? "unknown",
+        recommendation_variant: item.recommendationVariant ?? personalizedData?.variant ?? "unknown",
+        recommendation_experiment_key: item.recommendationExperimentKey ?? personalizedData?.experimentKey ?? "unknown",
+        ...(userCoords ? { lat: userCoords.lat, lng: userCoords.lng } : {}),
+      },
+    });
+  }, [currentIndex, isRestaurantMode, isCampaignMode, restaurantItems, userCoords, personalizedData]);
 
   const modeLabels: Record<string, string> = {
     all: "Swipe Mode",
@@ -526,6 +664,10 @@ export default function SwipePage() {
   };
 
   const handleMenuSwipe = (dir: "left" | "right" | "up") => {
+    if (pendingTapRef.current) {
+      clearTimeout(pendingTapRef.current.timer);
+      pendingTapRef.current = null;
+    }
     const item = menuItems[currentIndex];
     if (item) {
       if (dir === "right") recordSwipe(item.name, "like");
@@ -542,8 +684,24 @@ export default function SwipePage() {
   };
 
   const handleRestaurantSwipe = (dir: "left" | "right" | "up") => {
+    if (pendingTapRef.current) {
+      clearTimeout(pendingTapRef.current.timer);
+      pendingTapRef.current = null;
+    }
     const item = restaurantItems[currentIndex];
     if (!item) return;
+
+    trackEvent(dir === "left" ? "swipe_left" : dir === "up" ? "swipe_super" : "swipe_right", {
+      restaurantId: item.id,
+      metadata: {
+        category: item.category,
+        priceLevel: item.priceLevel,
+        source: "swipe_page",
+        recommendation_source: item.recommendationSource ?? personalizedData?.source ?? "unknown",
+        recommendation_variant: item.recommendationVariant ?? personalizedData?.variant ?? "unknown",
+        recommendation_experiment_key: item.recommendationExperimentKey ?? personalizedData?.experimentKey ?? "unknown",
+      },
+    });
 
     if (dir === "right") recordSwipe(item.name, "like");
     else if (dir === "up") recordSwipe(item.name, "superlike");
@@ -571,11 +729,41 @@ export default function SwipePage() {
       const campaignId = campaignCardIds[item.id];
       if (campaignId) navigate(`/campaign/${campaignId}`);
     } else if (isRestaurantMode) {
-      navigate(`/restaurant/${item.id}`);
+      // Double-tap on an active restaurant card is treated as super-like.
+      if (pendingTapRef.current?.itemId === item.id) {
+        const currentTap = pendingTapRef.current;
+        if (currentTap) clearTimeout(currentTap.timer);
+        pendingTapRef.current = null;
+        handleRestaurantSwipe("up");
+        return;
+      }
+      if (pendingTapRef.current) {
+        clearTimeout(pendingTapRef.current.timer);
+        pendingTapRef.current = null;
+      }
+      const timer = setTimeout(() => {
+        pendingTapRef.current = null;
+        const detailParams = new URLSearchParams({
+          recSource: item.recommendationSource ?? personalizedData?.source ?? "unknown",
+          recVariant: item.recommendationVariant ?? personalizedData?.variant ?? "unknown",
+          recExp: item.recommendationExperimentKey ?? personalizedData?.experimentKey ?? "unknown",
+        });
+        navigate(`/restaurant/${item.id}?${detailParams.toString()}`);
+      }, 260);
+      pendingTapRef.current = { itemId: item.id, timer };
     } else {
       navigate(`/restaurants?category=${encodeURIComponent(item.name)}`);
     }
   };
+
+  useEffect(() => {
+    return () => {
+      if (pendingTapRef.current) {
+        clearTimeout(pendingTapRef.current.timer);
+        pendingTapRef.current = null;
+      }
+    };
+  }, []);
 
   if (showMatch && matchedRestaurant) {
     return (
@@ -741,7 +929,11 @@ export default function SwipePage() {
       </AnimatePresence>
 
       <div className="flex-1 relative px-5 pb-4">
-        {currentIndex >= items.length ? (
+        {isRestaurantMode && !isCampaignMode && personalizedLoading && userId !== null ? (
+          <div className="relative w-full h-full max-w-sm mx-auto">
+            <div className="absolute inset-0 bg-gray-100 rounded-[28px] animate-pulse" />
+          </div>
+        ) : currentIndex >= items.length ? (
           <div className="flex flex-col items-center justify-center h-full text-center">
             <motion.div
               className="relative mb-6"

@@ -10,12 +10,16 @@ export type CanonicalEventType =
   | "search"
   | "filter"
   | "order_click"
-  | "booking_click";
+  | "booking_click"
+  | "deeplink_click"
+  | "view_menu_item"
+  | "click_menu_item";
 
 type EventPayload = {
   eventType: CanonicalEventType;
   eventName?: string;
   itemId?: number;
+  menuItemId?: number;
   metadata?: Record<string, unknown>;
   context?: string;
   platform?: string;
@@ -35,6 +39,7 @@ type QueuedEvent = {
   context: string;
   userId?: string;
   itemId?: number;
+  menuItemId?: number;
   metadata?: Record<string, unknown>;
   sessionId?: string;
 };
@@ -93,6 +98,7 @@ export function trackEvent(input: EventPayload) {
     context: input.context ?? window.location.pathname,
     userId: input.userId ?? getUserId(),
     itemId: input.itemId,
+    menuItemId: input.menuItemId,
     sessionId: input.sessionId ?? getSessionId(),
     metadata: input.metadata ?? {},
   };

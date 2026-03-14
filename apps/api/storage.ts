@@ -1,4 +1,5 @@
 import { db } from "./db";
+import { applyItemFeatureDeltas } from "./lib/itemFeatureSnapshot";
 import {
   restaurants,
   userPreferences,
@@ -62,6 +63,8 @@ import {
   notificationLogs,
   type NotificationLog,
   type InsertNotificationLog,
+  partnerInvites,
+  type PartnerInvite,
 } from "@shared/schema";
 import { eq, desc, ilike, or, and, lte, gte, lt, sql, SQL } from "drizzle-orm";
 import type { NormalizedPlace } from "./services/places/types";
@@ -146,7 +149,8 @@ export interface IStorage {
   listItemFeatureSnapshots(limit?: number): Promise<ItemFeatureSnapshot[]>;
   upsertUserFeatureSnapshot(userId: string, data: Partial<InsertUserFeatureSnapshot>): Promise<UserFeatureSnapshot>;
   getUserFeatureSnapshot(userId: string): Promise<UserFeatureSnapshot | undefined>;
-  upsertItemFeatureSnapshot(itemId: number, data: Partial<InsertItemFeatureSnapshot>): Promise<ItemFeatureSnapshot>;
+  // Applies additive deltas to item metrics. Fields are incremented, not overwritten.
+  upsertItemFeatureSnapshot(itemId: number, delta: Partial<InsertItemFeatureSnapshot>): Promise<ItemFeatureSnapshot>;
   createConsentLog(data: InsertConsentLog): Promise<ConsentLog>;
   getLatestConsent(userId: string, consentType?: string): Promise<ConsentLog | undefined>;
   deletePrivacyData(userId: string): Promise<number>;
@@ -164,6 +168,11 @@ export interface IStorage {
   getSponsoredRequestById(id: number): Promise<SponsoredRequest | undefined>;
   createSponsoredRequest(data: InsertSponsoredRequest): Promise<SponsoredRequest>;
   updateSponsoredRequest(id: number, updates: Partial<SponsoredRequest>): Promise<SponsoredRequest | undefined>;
+  createPartnerInvite(data: { token: string; initiatorLineUserId: string; expiresAt: Date }): Promise<PartnerInvite>;
+  getPartnerInviteByToken(token: string): Promise<PartnerInvite | undefined>;
+  getPartnerInviteByTokenAny(token: string): Promise<PartnerInvite | undefined>;
+  updatePartnerInvite(token: string, updates: Partial<{ status: string; acceptedAt: Date }>): Promise<PartnerInvite | undefined>;
+  unlinkPartner(lineUserId: string): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -726,6 +735,7 @@ export class DatabaseStorage implements IStorage {
         activeHours: data.activeHours ?? [],
         locationClusters: data.locationClusters ?? [],
         dislikedItemIds: data.dislikedItemIds ?? [],
+        menuItemAffinity: data.menuItemAffinity ?? {},
       })
       .returning();
     return created;
@@ -742,30 +752,51 @@ export class DatabaseStorage implements IStorage {
 
   async upsertItemFeatureSnapshot(
     itemId: number,
-    data: Partial<InsertItemFeatureSnapshot>,
+    delta: Partial<InsertItemFeatureSnapshot>,
   ): Promise<ItemFeatureSnapshot> {
+    const ctrDelta = delta.ctr ?? 0;
+    const likeRateDelta = delta.likeRate ?? 0;
+    const superLikeRateDelta = delta.superLikeRate ?? 0;
+    const conversionRateDelta = delta.conversionRate ?? 0;
+
     const [existing] = await db
       .select()
       .from(itemFeatureSnapshots)
       .where(eq(itemFeatureSnapshots.itemId, itemId))
       .limit(1);
     if (existing) {
+      const merged = applyItemFeatureDeltas(existing, {
+        ctr: ctrDelta,
+        likeRate: likeRateDelta,
+        superLikeRate: superLikeRateDelta,
+        conversionRate: conversionRateDelta,
+      });
       const [updated] = await db
         .update(itemFeatureSnapshots)
-        .set({ ...data, updatedAt: new Date() })
+        .set({
+          ctr: merged.ctr,
+          likeRate: merged.likeRate,
+          superLikeRate: merged.superLikeRate,
+          conversionRate: merged.conversionRate,
+          updatedAt: new Date(),
+        })
         .where(eq(itemFeatureSnapshots.itemId, itemId))
         .returning();
       return updated;
     }
+    const initial = applyItemFeatureDeltas(
+      { ctr: 0, likeRate: 0, superLikeRate: 0, conversionRate: 0 },
+      { ctr: ctrDelta, likeRate: likeRateDelta, superLikeRate: superLikeRateDelta, conversionRate: conversionRateDelta },
+    );
     const [created] = await db
       .insert(itemFeatureSnapshots)
       .values({
         itemId,
-        itemType: data.itemType ?? "restaurant",
-        ctr: data.ctr ?? 0,
-        likeRate: data.likeRate ?? 0,
-        superLikeRate: data.superLikeRate ?? 0,
-        conversionRate: data.conversionRate ?? 0,
+        itemType: delta.itemType ?? "restaurant",
+        ctr: initial.ctr,
+        likeRate: initial.likeRate,
+        superLikeRate: initial.superLikeRate,
+        conversionRate: initial.conversionRate,
       })
       .returning();
     return created;
@@ -910,6 +941,45 @@ export class DatabaseStorage implements IStorage {
       .where(eq(sponsoredRequests.id, id))
       .returning();
     return row;
+  }
+
+  async createPartnerInvite(data: { token: string; initiatorLineUserId: string; expiresAt: Date }): Promise<PartnerInvite> {
+    const [row] = await db.insert(partnerInvites).values(data).returning();
+    return row;
+  }
+
+  async getPartnerInviteByToken(token: string): Promise<PartnerInvite | undefined> {
+    const [row] = await db
+      .select()
+      .from(partnerInvites)
+      .where(and(eq(partnerInvites.token, token), gte(partnerInvites.expiresAt, new Date())))
+      .limit(1);
+    return row;
+  }
+
+  async getPartnerInviteByTokenAny(token: string): Promise<PartnerInvite | undefined> {
+    const [row] = await db
+      .select()
+      .from(partnerInvites)
+      .where(eq(partnerInvites.token, token))
+      .limit(1);
+    return row;
+  }
+
+  async updatePartnerInvite(token: string, updates: Partial<{ status: string; acceptedAt: Date }>): Promise<PartnerInvite | undefined> {
+    const [row] = await db
+      .update(partnerInvites)
+      .set(updates)
+      .where(eq(partnerInvites.token, token))
+      .returning();
+    return row;
+  }
+
+  async unlinkPartner(lineUserId: string): Promise<void> {
+    await db
+      .update(userProfiles)
+      .set({ partnerLineUserId: null, partnerDisplayName: null, partnerPictureUrl: null })
+      .where(eq(userProfiles.lineUserId, lineUserId));
   }
 }
 

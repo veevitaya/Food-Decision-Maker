@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { motion, useMotionValue, useTransform, PanInfo, AnimatePresence, useAnimate } from "framer-motion";
 import { useLocation } from "wouter";
 import { useTasteProfile } from "@/hooks/use-taste-profile";
@@ -90,6 +90,7 @@ const DRINKS_SWIPE_MENUS = [
 
 interface RestaurantCard {
   id: number;
+  sponsored?: boolean;
   name: string;
   category: string;
   tags: string[];
@@ -537,6 +538,7 @@ export default function SwipePage() {
   const [showConfetti, setShowConfetti] = useState(false);
   const [showMatch, setShowMatch] = useState(false);
   const { recordSwipe } = useTasteProfile();
+  const pendingTapRef = useRef<{ itemId: number; timer: ReturnType<typeof setTimeout> } | null>(null);
 
   const isCampaignMode = mode === "campaigns";
   const isDrinksMode = mode === "drinks";
@@ -551,7 +553,16 @@ export default function SwipePage() {
   useEffect(() => {
     const item = items[currentIndex];
     if (item?.sponsored) {
-      trackEvent("view_card", { restaurantId: item.id, metadata: { isSponsored: true, itemName: item.name } });
+      trackEvent("view_card", {
+        restaurantId: item.id,
+        metadata: {
+          isSponsored: true,
+          itemName: item.name,
+          recommendation_source: "admin_swipe",
+          recommendation_variant: "control",
+          recommendation_experiment_key: "recommendation_ranking_v1",
+        },
+      });
     }
   }, [currentIndex]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -577,6 +588,10 @@ export default function SwipePage() {
   };
 
   const handleMenuSwipe = (dir: "left" | "right" | "up") => {
+    if (pendingTapRef.current) {
+      clearTimeout(pendingTapRef.current.timer);
+      pendingTapRef.current = null;
+    }
     const item = menuItems[currentIndex];
     if (item) {
       if (dir === "right") recordSwipe(item.name, "like");
@@ -593,8 +608,24 @@ export default function SwipePage() {
   };
 
   const handleRestaurantSwipe = (dir: "left" | "right" | "up") => {
+    if (pendingTapRef.current) {
+      clearTimeout(pendingTapRef.current.timer);
+      pendingTapRef.current = null;
+    }
     const item = restaurantItems[currentIndex];
     if (!item) return;
+
+    trackEvent(dir === "left" ? "swipe_left" : dir === "up" ? "swipe_super" : "swipe_right", {
+      restaurantId: item.id,
+      metadata: {
+        category: item.category,
+        priceLevel: item.priceLevel,
+        source: "swipe_page",
+        recommendation_source: "admin_swipe",
+        recommendation_variant: "control",
+        recommendation_experiment_key: "recommendation_ranking_v1",
+      },
+    });
 
     if (dir === "right") recordSwipe(item.name, "like");
     else if (dir === "up") recordSwipe(item.name, "superlike");
@@ -622,11 +653,36 @@ export default function SwipePage() {
       const campaignId = CAMPAIGN_CARD_IDS[item.id];
       if (campaignId) navigate(`/campaign/${campaignId}`);
     } else if (isRestaurantMode) {
-      navigate(`/restaurant/${item.id}`);
+      // Double-tap on an active restaurant card is treated as super-like.
+      if (pendingTapRef.current?.itemId === item.id) {
+        const currentTap = pendingTapRef.current;
+        if (currentTap) clearTimeout(currentTap.timer);
+        pendingTapRef.current = null;
+        handleRestaurantSwipe("up");
+        return;
+      }
+      if (pendingTapRef.current) {
+        clearTimeout(pendingTapRef.current.timer);
+        pendingTapRef.current = null;
+      }
+      const timer = setTimeout(() => {
+        pendingTapRef.current = null;
+        navigate(`/restaurant/${item.id}`);
+      }, 260);
+      pendingTapRef.current = { itemId: item.id, timer };
     } else {
       navigate(`/restaurants?category=${encodeURIComponent(item.name)}`);
     }
   };
+
+  useEffect(() => {
+    return () => {
+      if (pendingTapRef.current) {
+        clearTimeout(pendingTapRef.current.timer);
+        pendingTapRef.current = null;
+      }
+    };
+  }, []);
 
   if (showMatch && matchedRestaurant) {
     return (

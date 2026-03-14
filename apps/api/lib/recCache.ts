@@ -35,6 +35,13 @@ export function invalidateRecCache(userId: string): void {
   store.delete(userId);
 }
 
+/** Deletes all cache entries whose key starts with the given prefix. */
+export function invalidateRecCacheByPrefix(prefix: string): void {
+  for (const key of store.keys()) {
+    if (key.startsWith(prefix)) store.delete(key);
+  }
+}
+
 // Cleanup expired entries every 10 minutes to prevent unbounded memory growth
 setInterval(() => {
   const now = Date.now();

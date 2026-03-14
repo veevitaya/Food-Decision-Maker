@@ -276,6 +276,7 @@ export const eventLogs = pgTable("event_logs", {
   userId: text("user_id"),
   sessionId: text("session_id"),
   itemId: integer("item_id"),
+  menuItemId: integer("menu_item_id").references(() => menus.id, { onDelete: "set null" }),
   metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (t) => ({
@@ -295,6 +296,7 @@ export const userFeatureSnapshots = pgTable("user_feature_snapshots", {
   activeHours: integer("active_hours").array().default([]),
   locationClusters: text("location_clusters").array().default([]),
   dislikedItemIds: integer("disliked_item_ids").array().default([]),
+  menuItemAffinity: jsonb("menu_item_affinity").$type<Record<number, number>>().default({}),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
@@ -486,3 +488,18 @@ export const sponsoredRequests = pgTable("sponsored_requests", {
 export const insertSponsoredRequestSchema = createInsertSchema(sponsoredRequests).omit({ id: true, createdAt: true, reviewedAt: true });
 export type SponsoredRequest = typeof sponsoredRequests.$inferSelect;
 export type InsertSponsoredRequest = z.infer<typeof insertSponsoredRequestSchema>;
+
+export const partnerInvites = pgTable("partner_invites", {
+  id: serial("id").primaryKey(),
+  token: text("token").notNull().unique(),
+  initiatorLineUserId: text("initiator_line_user_id").notNull(),
+  status: text("status").notNull().default("pending"), // "pending" | "accepted" | "declined" | "expired"
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+  acceptedAt: timestamp("accepted_at"),
+}, (t) => ({
+  tokenIdx: index("partner_invites_token_idx").on(t.token),
+  initiatorIdx: index("partner_invites_initiator_idx").on(t.initiatorLineUserId),
+}));
+
+export type PartnerInvite = typeof partnerInvites.$inferSelect;

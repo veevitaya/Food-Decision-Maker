@@ -32,7 +32,7 @@ export type ScoredRecommendation = {
   explanation: string[];
 };
 
-const DEFAULT_WEIGHTS: ScoringWeights = {
+export const DEFAULT_SCORING_WEIGHTS: ScoringWeights = {
   cuisineAffinity: 0.35,
   priceMatch: 0.2,
   distanceScore: 0.2,
@@ -44,7 +44,7 @@ export function scoreRecommendations(
   items: RecommendationItem[],
   feature: UserFeatureSnapshot | null,
   context: RecommendationContext | null = null,
-  weights: ScoringWeights = DEFAULT_WEIGHTS,
+  weights: ScoringWeights = DEFAULT_SCORING_WEIGHTS,
 ): ScoredRecommendation[] {
   const maxDistance = Math.max(...items.map((item) => item.distanceMeters ?? 5000), 1);
   const maxPopularity = Math.max(...items.map((item) => item.trendingScore ?? 0), 1);

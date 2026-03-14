@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useLocation } from "wouter";
 import { useLineProfile } from "@/hooks/use-line-profile";
-import { sendGroupInvite } from "@/lib/liff";
+import { sendPartnerInvite, getAccessToken } from "@/lib/liff";
 import { BottomNav } from "@/components/BottomNav";
 import { useSavedRestaurants } from "@/hooks/use-saved-restaurants";
 import { ChevronRight, UserPlus, Unlink, LogIn, LogOut, X, Store, User, Star, TrendingUp, Image, Sparkles, Plus, Check, Crown, Eye, ExternalLink, MapPin, Clock, BarChart3, ArrowUpRight, ArrowDownRight, Utensils, Zap, Calendar, Megaphone, Tag, Percent, Trash2, Send, Users, Target, Search } from "lucide-react";
@@ -294,7 +294,21 @@ export default function Profile() {
   };
 
   const invitePartnerViaLine = async () => {
-    await sendGroupInvite("partner-link");
+    try {
+      const bearerToken = getAccessToken();
+      const res = await fetch("/api/partner/invite", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(bearerToken ? { Authorization: `Bearer ${bearerToken}` } : {}),
+        },
+      });
+      if (!res.ok) return;
+      const { token } = await res.json();
+      await sendPartnerInvite(token);
+    } catch {
+      // Silently fail — user can retry
+    }
   };
 
   const displayName = localProfile.displayName || lineProfile?.displayName || "Toast Lover";

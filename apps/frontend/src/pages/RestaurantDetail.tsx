@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useLocation, useRoute } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import type { RestaurantResponse } from "@shared/routes";
+import type { Menu } from "@shared/schema";
 import { LoadingMascot } from "@/components/LoadingMascot";
 import { trackEvent } from "@/lib/analytics";
 import { BottomNav } from "@/components/BottomNav";
@@ -148,6 +149,10 @@ export default function RestaurantDetail() {
   const [, navigate] = useLocation();
   const [, params] = useRoute("/restaurant/:id");
   const id = params?.id ? parseInt(params.id) : null;
+  const searchParams = new URLSearchParams(window.location.search);
+  const recommendationSource = searchParams.get("recSource") ?? "unknown";
+  const recommendationVariant = searchParams.get("recVariant") ?? "unknown";
+  const recommendationExperimentKey = searchParams.get("recExp") ?? "unknown";
   const [activePhoto, setActivePhoto] = useState(0);
   const [showHours, setShowHours] = useState(false);
   const [showSavePicker, setShowSavePicker] = useState(false);
@@ -179,6 +184,23 @@ export default function RestaurantDetail() {
     enabled: !!id && !mockRestaurant,
     retry: false,
   });
+
+  const { data: menuItems = [] } = useQuery<Menu[]>({
+    queryKey: ["/api/restaurants", id, "menus"],
+    queryFn: async () => {
+      const res = await fetch(`/api/restaurants/${id}/menus`, { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!id,
+  });
+
+  useEffect(() => {
+    if (!menuItems.length || !id) return;
+    for (const item of menuItems.filter((m) => m.isActive)) {
+      trackEvent("view_menu_item", { restaurantId: id, menuItemId: item.id, metadata: { name: item.name } });
+    }
+  }, [menuItems, id]);
 
   const restaurant = mockRestaurant || apiRestaurant;
 
@@ -226,7 +248,16 @@ export default function RestaurantDetail() {
   ];
 
   const handleDeliverySelect = (platform: typeof DELIVERY_APPS[0]) => {
-    trackEvent("delivery_click", { restaurantId: restaurant.id, metadata: { platform: platform.id, restaurantName: restaurant.name } });
+    trackEvent("delivery_click", {
+      restaurantId: restaurant.id,
+      metadata: {
+        platform: platform.id,
+        restaurantName: restaurant.name,
+        recommendation_source: recommendationSource,
+        recommendation_variant: recommendationVariant,
+        recommendation_experiment_key: recommendationExperimentKey,
+      },
+    });
 
     const deepLink = platform.deepLink(restaurant.name);
     const fallback = platform.fallback(restaurant.name);
@@ -432,6 +463,32 @@ export default function RestaurantDetail() {
             <p className="text-sm text-muted-foreground">{phone}</p>
           </div>
         </div>
+
+        {menuItems.filter((m) => m.isActive).length > 0 && (
+          <div className="border-t border-gray-100/80 pt-5 mb-6">
+            <h2 className="font-bold text-lg mb-4">Menu</h2>
+            <div className="space-y-3">
+              {menuItems.filter((m) => m.isActive).map((item) => (
+                <button
+                  key={item.id}
+                  onClick={() => {
+                    trackEvent("click_menu_item", { restaurantId: restaurant.id, menuItemId: item.id, metadata: { name: item.name } });
+                  }}
+                  className="w-full flex items-center gap-3 p-3 rounded-xl border border-gray-100 hover:bg-gray-50 text-left transition-colors"
+                >
+                  {item.imageUrl && (
+                    <img src={item.imageUrl} alt={item.name} className="w-16 h-16 rounded-lg object-cover flex-shrink-0" />
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold text-sm">{item.name}</p>
+                    {item.description && <p className="text-xs text-muted-foreground line-clamp-2 mt-0.5">{item.description}</p>}
+                    {item.priceApprox && <p className="text-xs font-medium text-foreground/70 mt-1">~฿{item.priceApprox}</p>}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="border-t border-gray-100/80 pt-5 mb-6">
           <h2 className="font-bold text-lg mb-4">Reviews</h2>

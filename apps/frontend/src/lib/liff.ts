@@ -147,6 +147,12 @@ export async function sendGroupInvite(sessionId: string): Promise<ShareResult> {
   return shareMessage(message);
 }
 
+export async function sendPartnerInvite(token: string): Promise<ShareResult> {
+  const acceptUrl = liffUrl("/partner/accept", { token });
+  const message = `Let's find food together on Toast! 💕\n\nTap here to link as my food partner:\n${acceptUrl}`;
+  return shareMessage(message);
+}
+
 export function isInLiff(): boolean {
   if (!initialized) return false;
   return liff.isInClient();

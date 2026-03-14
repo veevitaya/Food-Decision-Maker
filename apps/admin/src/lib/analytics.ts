@@ -4,6 +4,7 @@ function mapToCanonical(eventType: string): CanonicalEventType {
   switch (eventType) {
     case "swipe_left":
     case "swipe_right":
+    case "swipe_super":
       return "swipe";
     case "view_detail":
       return "view_card";
@@ -31,8 +32,13 @@ export function trackEvent(
   data?: { userId?: string; restaurantId?: number; metadata?: Record<string, unknown> },
 ) {
   const canonicalType = mapToCanonical(eventType);
-  const direction =
-    eventType === "swipe_left" ? "left" : eventType === "swipe_right" ? "right" : undefined;
+  const direction = eventType === "swipe_left"
+    ? "left"
+    : eventType === "swipe_right"
+    ? "right"
+    : eventType === "swipe_super"
+    ? "super"
+    : undefined;
   enqueueEvent({
     eventType: canonicalType,
     eventName: eventType,

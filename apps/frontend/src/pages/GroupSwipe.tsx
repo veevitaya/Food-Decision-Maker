@@ -20,6 +20,11 @@ interface MenuItem {
   availableCount?: number;
   mode?: "restaurant" | "menu";
   isNew?: boolean;
+  groupScore?: number;
+  memberScores?: Array<{ memberId: number; name: string; avatarUrl: string | null; matchPct: number }>;
+  recommendationSource?: string;
+  recommendationVariant?: string;
+  recommendationExperimentKey?: string;
 }
 
 interface SessionMember {
@@ -106,7 +111,7 @@ function useSwipeHintGroup(active: boolean, showHint: boolean) {
   return scope;
 }
 
-function SwipeCardGroup({ item, active, behind, onSwipe, onTap, showHint = false, members }: { item: MenuItem; active: boolean; behind: boolean; onSwipe: (id: number, dir: "left" | "right" | "super") => void; onTap: () => void; showHint?: boolean; members: SessionMember[] }) {
+function SwipeCardGroup({ item, active, behind, onSwipe, onTap, showHint = false, members, memberScores }: { item: MenuItem; active: boolean; behind: boolean; onSwipe: (id: number, dir: "left" | "right" | "super") => void; onTap: () => void; showHint?: boolean; members: SessionMember[]; memberScores?: MenuItem["memberScores"] }) {
   const hintRef = useSwipeHintGroup(active, showHint);
   const x = useMotionValue(0);
   const y = useMotionValue(0);
@@ -244,19 +249,45 @@ function SwipeCardGroup({ item, active, behind, onSwipe, onTap, showHint = false
         <p className="text-foreground/60 text-sm leading-relaxed flex-1 min-h-0 line-clamp-2">{item.description}</p>
 
         <div className="mt-auto pt-2 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="flex -space-x-1.5">
-              {members.map((m) => (
-                m.avatarUrl ? (
-                  <img key={m.id} src={m.avatarUrl} alt={m.name} className="w-5 h-5 rounded-full border-[1.5px] border-white object-cover" />
-                ) : (
-                  <div key={m.id} className="w-5 h-5 rounded-full border-[1.5px] border-white bg-gradient-to-br from-amber-100 to-orange-100 flex items-center justify-center">
-                    <span className="text-[8px] font-bold text-amber-600">{m.name.charAt(0)}</span>
+          <div className="flex flex-wrap gap-1.5">
+            {memberScores && memberScores.length > 0
+              ? memberScores.map((ms) => (
+                  <div key={ms.memberId} className="flex items-center gap-1">
+                    <div className={`rounded-full border-2 ${
+                      ms.matchPct >= 70 ? "border-green-400" :
+                      ms.matchPct >= 40 ? "border-yellow-400" : "border-gray-300"
+                    }`}>
+                      {ms.avatarUrl
+                        ? <img src={ms.avatarUrl} className="w-5 h-5 rounded-full object-cover" alt={ms.name} />
+                        : <div className="w-5 h-5 rounded-full bg-amber-100 flex items-center justify-center">
+                            <span className="text-[8px] font-bold text-amber-600">{ms.name.charAt(0)}</span>
+                          </div>
+                      }
+                    </div>
+                    <span className="text-[10px] font-bold rounded-full px-1.5 py-0.5"
+                      style={{
+                        background: ms.matchPct >= 70 ? "hsl(160,60%,92%)" : ms.matchPct >= 40 ? "hsl(45,95%,90%)" : "hsl(0,0%,94%)",
+                        color:      ms.matchPct >= 70 ? "hsl(160,60%,35%)" : ms.matchPct >= 40 ? "hsl(45,80%,35%)" : "hsl(0,0%,45%)",
+                      }}>{ms.matchPct}%</span>
+                  </div>
+                ))
+              : (
+                  <div className="flex items-center gap-2">
+                    <div className="flex -space-x-1.5">
+                      {members.map((m) => (
+                        m.avatarUrl ? (
+                          <img key={m.id} src={m.avatarUrl} alt={m.name} className="w-5 h-5 rounded-full border-[1.5px] border-white object-cover" />
+                        ) : (
+                          <div key={m.id} className="w-5 h-5 rounded-full border-[1.5px] border-white bg-gradient-to-br from-amber-100 to-orange-100 flex items-center justify-center">
+                            <span className="text-[8px] font-bold text-amber-600">{m.name.charAt(0)}</span>
+                          </div>
+                        )
+                      ))}
+                    </div>
+                    <span className="text-[10px] text-muted-foreground">{members.length} swiping</span>
                   </div>
                 )
-              ))}
-            </div>
-            <span className="text-[10px] text-muted-foreground">{members.length} swiping</span>
+            }
           </div>
           <span className="text-xs text-muted-foreground truncate max-w-[40%]">{item.address}</span>
         </div>
@@ -328,30 +359,67 @@ export default function GroupSwipe() {
         };
 
         const { lat, lng } = await getCoords();
-        // Use the session deck endpoint — triggers Places API fetch when DB is empty,
-        // then caches results in DB so subsequent calls are instant.
-        const res = await fetch(
-          `/api/group/sessions/${sessionCode}/deck?lat=${lat}&lng=${lng}&radius=5000`,
-        );
-        if (res.ok) {
-          const data = await res.json();
-          const items: MenuItem[] = data.map((r: any) => ({
-            id: r.id,
-            name: r.name,
-            category: r.category || "Restaurant",
-            tags: buildTagsFromCategory(r.category || ""),
-            description: r.description || "",
-            priceLevel: r.priceLevel || 2,
-            rating: r.rating || "4.0",
-            address: r.address || "Bangkok",
-            imageUrl: r.imageUrl || "",
-            availableCount: r.availableCount,
-            mode: r.mode || "restaurant",
-            isNew: r.isNew || false,
-          }));
-          const normalizedMode = items[0]?.mode === "menu" ? "menu" : "restaurant";
-          setSessionMode(normalizedMode);
-          setMenuItems(normalizedMode === "menu" ? items : items.sort(() => Math.random() - 0.5));
+
+        const mapItem = (r: any): MenuItem => ({
+          id: r.id,
+          name: r.name,
+          category: r.category || "Restaurant",
+          tags: buildTagsFromCategory(r.category || ""),
+          description: r.description || "",
+          priceLevel: r.priceLevel || 2,
+          rating: r.rating || "4.0",
+          address: r.address || "Bangkok",
+          imageUrl: r.imageUrl || "",
+          availableCount: r.availableCount,
+          mode: r.mode || "restaurant",
+          isNew: r.isNew || false,
+          groupScore: r.groupScore,
+          memberScores: r.memberScores,
+          recommendationSource: r.recommendationSource,
+          recommendationVariant: r.recommendationVariant,
+          recommendationExperimentKey: r.recommendationExperimentKey,
+        });
+
+        // Try personalized group endpoint first
+        let loadedFromPersonalized = false;
+        try {
+          const groupRes = await fetch(
+            `/api/recommendations/group?sessionCode=${sessionCode}&lat=${lat}&lng=${lng}&hour=${new Date().getHours()}&day=${new Date().getDay()}&limit=20`,
+          );
+          if (groupRes.ok) {
+            const data = await groupRes.json();
+            if (data.items?.length > 0) {
+              const items: MenuItem[] = data.items.map((item: any) =>
+                mapItem({
+                  ...item,
+                  recommendationSource: data.source,
+                  recommendationVariant: data.variant,
+                  recommendationExperimentKey: data.experimentKey,
+                }),
+              );
+              const normalizedMode = items[0]?.mode === "menu" ? "menu" : "restaurant";
+              setSessionMode(normalizedMode);
+              // Personalized results are already ranked — do not shuffle
+              setMenuItems(items);
+              loadedFromPersonalized = true;
+            }
+          }
+        } catch {
+          // fall through to deck endpoint
+        }
+
+        if (!loadedFromPersonalized) {
+          // Fallback: existing deck endpoint
+          const res = await fetch(
+            `/api/group/sessions/${sessionCode}/deck?lat=${lat}&lng=${lng}&radius=5000`,
+          );
+          if (res.ok) {
+            const data = await res.json();
+            const items: MenuItem[] = data.map(mapItem);
+            const normalizedMode = items[0]?.mode === "menu" ? "menu" : "restaurant";
+            setSessionMode(normalizedMode);
+            setMenuItems(normalizedMode === "menu" ? items : items.sort(() => Math.random() - 0.5));
+          }
         }
       } catch (err) {
         console.error("Failed to load restaurants:", err);
@@ -360,7 +428,21 @@ export default function GroupSwipe() {
       }
     };
     loadRestaurants();
-  }, [sessionCode]);
+    }, [sessionCode]);
+
+  useEffect(() => {
+    const item = menuItems[currentIndex];
+    if (!item) return;
+    trackEvent("view_card", {
+      restaurantId: item.id,
+      metadata: {
+        category: item.category || "",
+        recommendation_source: item.recommendationSource ?? "unknown",
+        recommendation_variant: item.recommendationVariant ?? "unknown",
+        recommendation_experiment_key: item.recommendationExperimentKey ?? "unknown",
+      },
+    });
+  }, [currentIndex, menuItems]);
 
   useEffect(() => {
     if (!sessionCode) return;
@@ -445,9 +527,14 @@ export default function GroupSwipe() {
     const item = menuItems.find((m) => m.id === id);
     if (!item) return;
 
-    trackEvent(dir === "left" ? "swipe_left" : "swipe_right", {
+    trackEvent(dir === "left" ? "swipe_left" : dir === "super" ? "swipe_super" : "swipe_right", {
       restaurantId: id,
-      metadata: { category: item.category || "" },
+      metadata: {
+        category: item.category || "",
+        recommendation_source: item.recommendationSource ?? "unknown",
+        recommendation_variant: item.recommendationVariant ?? "unknown",
+        recommendation_experiment_key: item.recommendationExperimentKey ?? "unknown",
+      },
     });
 
     if (dir === "right" || dir === "super") {
@@ -538,7 +625,12 @@ export default function GroupSwipe() {
       navigate(`/group/menu-restaurants?session=${sessionCode}&menuItem=${item.id}`);
       return;
     }
-    navigate(`/restaurant/${item.id}`);
+    const detailParams = new URLSearchParams({
+      recSource: item.recommendationSource ?? "unknown",
+      recVariant: item.recommendationVariant ?? "unknown",
+      recExp: item.recommendationExperimentKey ?? "unknown",
+    });
+    navigate(`/restaurant/${item.id}?${detailParams.toString()}`);
   };
 
   const handleEndSession = async () => {
@@ -879,6 +971,7 @@ export default function GroupSwipe() {
                   onTap={() => handleTap(item)}
                   showHint={idx === 0 && currentIndex === 0}
                   members={members}
+                  memberScores={item.memberScores}
                 />
               );
             })}

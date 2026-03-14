@@ -13,8 +13,9 @@
  */
 import { storage } from "../storage";
 import { sendAlert } from "../lib/alerting";
-import { invalidateRecCache } from "../lib/recCache";
+import { invalidateRecCache, invalidateRecCacheByPrefix } from "../lib/recCache";
 import { withJobLock } from "../lib/jobLock";
+import { getSwipeSignalWeight } from "../lib/superLike";
 
 const pendingUsers = new Set<string>();
 
@@ -40,6 +41,8 @@ async function rebuildUserSnapshot(userId: string): Promise<void> {
   const priceLevels: number[] = [];
   const activeHoursSet = new Set<number>();
   const dislikedIds: number[] = [];
+  const locationCounts: Record<string, number> = {};
+  const menuItemCounts: Record<number, number> = {};
 
   // Process in chronological order (oldest first), applying recency weighting
   for (let i = 0; i < events.length; i++) {
@@ -48,12 +51,29 @@ async function rebuildUserSnapshot(userId: string): Promise<void> {
     const recencyWeight = Math.exp(-i / 200); // ~0.99 per event, older ones decay to ~0
 
     const category = String(event.metadata?.category ?? "").trim();
-    if (category && (event.eventType === "swipe" || event.eventType === "favorite")) {
-      affinityCounts[category] = (affinityCounts[category] ?? 0) + recencyWeight;
+    const swipeSignalWeight = getSwipeSignalWeight(event.eventType, event.metadata);
+    const positiveSignalWeight = event.eventType === "favorite" ? 1 : swipeSignalWeight;
+    if (category && positiveSignalWeight > 0) {
+      affinityCounts[category] = (affinityCounts[category] ?? 0) + recencyWeight * positiveSignalWeight;
     }
 
     if (event.eventType === "dismiss" && event.itemId && !dislikedIds.includes(event.itemId)) {
       dislikedIds.push(event.itemId);
+    }
+
+    if (event.eventType === "view_card") {
+      const districtRaw = event.metadata?.district;
+      const district = typeof districtRaw === "string" ? districtRaw.trim() : "";
+      if (district) {
+        locationCounts[district] = (locationCounts[district] ?? 0) + recencyWeight;
+      }
+    }
+
+    if (event.eventType === "click_menu_item" && event.menuItemId) {
+      menuItemCounts[event.menuItemId] = (menuItemCounts[event.menuItemId] ?? 0) + recencyWeight;
+    }
+    if (event.eventType === "view_menu_item" && event.menuItemId) {
+      menuItemCounts[event.menuItemId] = (menuItemCounts[event.menuItemId] ?? 0) + recencyWeight * 0.2;
     }
 
     const pl = Number(event.metadata?.priceLevel);
@@ -76,16 +96,33 @@ async function rebuildUserSnapshot(userId: string): Promise<void> {
     priceLevels.length > 0
       ? Math.round(priceLevels.reduce((a, b) => a + b, 0) / priceLevels.length)
       : 2;
+  const locationClusters = Object.entries(locationCounts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([district]) => district)
+    .slice(0, 10);
+
+  const maxMenuCount = Math.max(1, ...Object.values(menuItemCounts));
+  const menuItemAffinity = Object.fromEntries(
+    Object.entries(menuItemCounts).map(([k, v]) => [Number(k), parseFloat((v / maxMenuCount).toFixed(4))]),
+  );
 
   await storage.upsertUserFeatureSnapshot(userId, {
     cuisineAffinity,
     preferredPriceLevel,
     activeHours: Array.from(activeHoursSet).sort((a, b) => a - b),
     dislikedItemIds: dislikedIds.slice(0, 200), // cap to prevent unbounded growth
+    locationClusters,
+    menuItemAffinity,
   });
 
   // Invalidate any cached recommendations for this user
   invalidateRecCache(userId);
+
+  // Also invalidate the partner's blended rec cache if they are linked
+  const profile = await storage.getProfile(userId);
+  if (profile?.partnerLineUserId) {
+    invalidateRecCacheByPrefix(`partner:${profile.partnerLineUserId}:`);
+  }
 }
 
 export async function runFeatureUpdateJob(): Promise<void> {

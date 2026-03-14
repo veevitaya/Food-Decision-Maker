@@ -16,6 +16,9 @@ const CANONICAL_EVENT_TYPES = [
   "filter",
   "order_click",
   "booking_click",
+  "deeplink_click",
+  "view_menu_item",
+  "click_menu_item",
 ] as const;
 
 function makeValidEvent(eventType: string) {
@@ -82,11 +85,11 @@ describe("analyticsEventSchema contract", () => {
     expect(result.success).toBe(true);
   });
 
-  it("schema has exactly 10 canonical event types", () => {
+  it("schema has exactly 13 canonical event types", () => {
     // Access the enum options through the shape
     const eventTypeField = analyticsEventSchema.shape.eventType;
     const options = (eventTypeField as { options: string[] }).options;
-    expect(options).toHaveLength(10);
+    expect(options).toHaveLength(13);
     expect(options.sort()).toEqual([...CANONICAL_EVENT_TYPES].sort());
   });
 });

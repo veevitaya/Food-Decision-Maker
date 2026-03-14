@@ -138,4 +138,41 @@ describe("buildPersonalizedRecommendations", () => {
     const establishedRest = result.items.find((r) => r.id === 10);
     expect(newRest!.score).toBeGreaterThan(establishedRest!.score);
   });
+
+  it("adds super-like explanation for strongly matched cuisines", () => {
+    const result = buildPersonalizedRecommendations({
+      restaurants,
+      feature: {
+        cuisineAffinity: { Thai: 0.9, Japanese: 0.4, Italian: 0.3, Korean: 0.1 },
+        preferredPriceLevel: 2,
+        activeHours: [],
+        dislikedItemIds: [],
+      },
+    });
+    const thaiResult = result.items.find((r) => r.category === "Thai");
+    expect(thaiResult).toBeDefined();
+    expect(thaiResult?.explanation).toContain("Super-like cuisine boost applied");
+  });
+
+  it("adds location cluster explanation for top districts", () => {
+    const localizedRestaurants: Restaurant[] = [
+      makeRestaurant({ id: 21, category: "Thai", address: "Silom Road", trendingScore: 50 }),
+      makeRestaurant({ id: 22, category: "Thai", address: "Ratchada", trendingScore: 50 }),
+    ];
+
+    const result = buildPersonalizedRecommendations({
+      restaurants: localizedRestaurants,
+      feature: {
+        cuisineAffinity: { Thai: 0.6, Japanese: 0.2, Italian: 0.2, Korean: 0.1 },
+        preferredPriceLevel: 2,
+        activeHours: [],
+        dislikedItemIds: [],
+        locationClusters: ["Silom", "Sukhumvit"],
+      },
+    });
+
+    const sukhumvitItem = result.items.find((r) => r.id === 21);
+    expect(sukhumvitItem).toBeDefined();
+    expect(sukhumvitItem?.explanation).toContain("Near your frequent area");
+  });
 });

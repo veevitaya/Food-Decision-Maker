@@ -17,13 +17,26 @@ import { insertMenuSchema } from "@shared/schema";
 import { insertPromotionSchema, insertRestaurantClaimSchema, insertRestaurantOwnerSchema } from "@shared/schema";
 import type { NormalizedPlace } from "./services/places/types";
 import { buildPersonalizedRecommendations } from "./services/recommendations/personalized";
+import { blendSnapshots, computePerMemberScores } from "./services/recommendations/groupBlend";
+import { blendPartnerSnapshots, buildPartnerMemberEntries, computeCompatibilityScore } from "./services/recommendations/partnerBlend";
 import { enqueueFeatureUpdate } from "./jobs/featureUpdateJob";
-import { getRecCache, setRecCache } from "./lib/recCache";
+import { getRecCache, setRecCache, invalidateRecCache, invalidateRecCacheByPrefix } from "./lib/recCache";
 import { getKey, getSource, setKey, ALLOWED_SERVICE_IDS, loadFromDb } from "./lib/apiKeyStore";
 import { persistAnalyticsQualityReport } from "./jobs/analyticsQuality";
 import { appendSecurityAudit } from "./lib/opsLog";
 import { checkSLOs } from "./lib/slo";
 import { sendAlert } from "./lib/alerting";
+import { deriveItemFeatureDelta, hasItemFeatureDelta } from "./lib/itemFeatureMetrics";
+import { reverseGeocodeDistrict } from "./lib/locationCluster";
+import {
+  DEFAULT_RECOMMENDATION_EXPERIMENT_KEY,
+  parseExperimentConfigs,
+  parseRecommendationWeightsConfig,
+  resolveRecommendationExperiment,
+  validateVariantPresetMapping,
+  type ExperimentConfig,
+} from "./lib/recommendationExperiment";
+import { aggregateRecommendationExperimentReport } from "./lib/recommendationExperimentReport";
 import * as lineMessaging from "./services/line/messaging";
 
 const isDev = process.env.NODE_ENV !== "production";
@@ -380,36 +393,6 @@ function eventTimestampMsFromLog(log: { createdAt: Date; metadata: unknown }): n
   const rawTs = metadata.timestamp;
   const parsed = typeof rawTs === "string" ? Date.parse(rawTs) : NaN;
   return Number.isFinite(parsed) ? parsed : new Date(log.createdAt).getTime();
-}
-
-type ExperimentConfig = {
-  experimentKey: string;
-  enabled: boolean;
-  variants: Array<{ key: string; weight: number }>;
-};
-
-function hashStringToUint32(input: string): number {
-  let hash = 2166136261;
-  for (let i = 0; i < input.length; i += 1) {
-    hash ^= input.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
-}
-
-function pickVariant(seed: string, variants: Array<{ key: string; weight: number }>): string {
-  const normalized = variants
-    .map((variant) => ({ ...variant, weight: Math.max(0, variant.weight) }))
-    .filter((variant) => variant.weight > 0);
-  if (normalized.length === 0) return "control";
-  const total = normalized.reduce((sum, variant) => sum + variant.weight, 0);
-  const bucket = (hashStringToUint32(seed) % 10000) / 10000;
-  let cursor = 0;
-  for (const variant of normalized) {
-    cursor += variant.weight / total;
-    if (bucket <= cursor) return variant.key;
-  }
-  return normalized[normalized.length - 1]?.key ?? "control";
 }
 
 async function buildDashboardDetails() {
@@ -1434,6 +1417,260 @@ export async function registerRoutes(
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({ message: err.errors[0].message });
+      }
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // ── Partner linking ─────────────────────────────────────────────────────
+
+  app.post("/api/partner/invite", async (req, res) => {
+    try {
+      const verifiedUser = await requireVerifiedLineUser(req, res);
+      if (!verifiedUser) return;
+
+      const token = crypto.randomBytes(9).toString("base64url").slice(0, 12);
+      const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
+      await storage.createPartnerInvite({ token, initiatorLineUserId: verifiedUser.lineUserId, expiresAt });
+
+      const inviteUrl = `${req.protocol}://${req.get("host")}/partner/accept?token=${token}`;
+      res.json({ token, expiresAt: expiresAt.toISOString(), inviteUrl });
+    } catch (err) {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.get("/api/partner/invite/:token", async (req, res) => {
+    try {
+      const token = String(req.params.token || "").trim();
+      if (!token) return res.status(400).json({ message: "Token required" });
+
+      // Check without expiry filter to give proper error for expired tokens
+      const invite = await storage.getPartnerInviteByTokenAny(token);
+
+      if (!invite) return res.status(404).json({ message: "Invite not found" });
+      if (new Date(invite.expiresAt) < new Date()) return res.status(410).json({ message: "Invite link has expired" });
+      if (invite.status !== "pending") return res.status(409).json({ message: "Invite already used" });
+
+      const initiatorProfile = await storage.getProfile(invite.initiatorLineUserId);
+      res.json({
+        initiatorDisplayName: initiatorProfile?.displayName ?? "Someone",
+        initiatorPictureUrl: initiatorProfile?.pictureUrl ?? null,
+        expiresAt: invite.expiresAt.toISOString(),
+        status: invite.status,
+      });
+    } catch (err) {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.post("/api/partner/accept", async (req, res) => {
+    try {
+      const verifiedUser = await requireVerifiedLineUser(req, res);
+      if (!verifiedUser) return;
+
+      const { token } = z.object({ token: z.string().min(1) }).parse(req.body ?? {});
+      const invite = await storage.getPartnerInviteByToken(token);
+
+      if (!invite) return res.status(410).json({ message: "Invite link has expired or does not exist" });
+      if (invite.status !== "pending") return res.status(409).json({ message: "Invite already used" });
+      if (invite.initiatorLineUserId === verifiedUser.lineUserId) {
+        return res.status(400).json({ message: "You cannot accept your own invite" });
+      }
+
+      const [initiatorProfile, acceptorProfile] = await Promise.all([
+        storage.getProfile(invite.initiatorLineUserId),
+        storage.getProfile(verifiedUser.lineUserId),
+      ]);
+
+      if (!initiatorProfile) return res.status(404).json({ message: "Initiator profile not found" });
+
+      await Promise.all([
+        storage.updateProfile(verifiedUser.lineUserId, {
+          partnerLineUserId: invite.initiatorLineUserId,
+          partnerDisplayName: initiatorProfile.displayName,
+          partnerPictureUrl: initiatorProfile.pictureUrl ?? null,
+        }),
+        storage.updateProfile(invite.initiatorLineUserId, {
+          partnerLineUserId: verifiedUser.lineUserId,
+          partnerDisplayName: acceptorProfile?.displayName ?? "Your partner",
+          partnerPictureUrl: acceptorProfile?.pictureUrl ?? null,
+        }),
+        storage.updatePartnerInvite(token, { status: "accepted", acceptedAt: new Date() }),
+      ]);
+
+      // Invalidate rec caches for both users
+      invalidateRecCache(verifiedUser.lineUserId);
+      invalidateRecCache(invite.initiatorLineUserId);
+      invalidateRecCacheByPrefix(`partner:${verifiedUser.lineUserId}:`);
+      invalidateRecCacheByPrefix(`partner:${invite.initiatorLineUserId}:`);
+
+      res.json({
+        ok: true,
+        partnerDisplayName: initiatorProfile.displayName,
+        partnerPictureUrl: initiatorProfile.pictureUrl ?? null,
+      });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid payload" });
+      }
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.delete("/api/partner", async (req, res) => {
+    try {
+      const verifiedUser = await requireVerifiedLineUser(req, res);
+      if (!verifiedUser) return;
+
+      const userProfile = await storage.getProfile(verifiedUser.lineUserId);
+      if (!userProfile) return res.status(404).json({ message: "Profile not found" });
+
+      const partnerLineUserId = userProfile.partnerLineUserId;
+
+      await storage.unlinkPartner(verifiedUser.lineUserId);
+      invalidateRecCache(verifiedUser.lineUserId);
+      invalidateRecCacheByPrefix(`partner:${verifiedUser.lineUserId}:`);
+
+      if (partnerLineUserId) {
+        try {
+          await storage.unlinkPartner(partnerLineUserId);
+          invalidateRecCache(partnerLineUserId);
+          invalidateRecCacheByPrefix(`partner:${partnerLineUserId}:`);
+        } catch {
+          // Partner profile may no longer exist — self-unlink already done
+        }
+      }
+
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.get("/api/recommendations/partner", async (req, res) => {
+    try {
+      const input = z.object({
+        userId: z.string().min(1),
+        lat: z.coerce.number().optional(),
+        lng: z.coerce.number().optional(),
+        hour: z.coerce.number().int().min(0).max(23).optional(),
+        day: z.coerce.number().int().min(0).max(6).optional(),
+        limit: z.coerce.number().int().positive().max(50).optional().default(20),
+      }).parse(req.query ?? {});
+
+      const cacheKey = `partner:${input.userId}:${input.lat ?? ""}:${input.lng ?? ""}:${input.hour ?? ""}:${input.day ?? ""}:${input.limit}`;
+      const cached = getRecCache(cacheKey);
+      if (cached) return res.json(cached);
+
+      const userProfile = await storage.getProfile(input.userId);
+      const restaurants = await storage.getRestaurants("trending");
+      const now = new Date();
+      const context = {
+        hourOfDay: input.hour ?? now.getHours(),
+        dayOfWeek: input.day ?? now.getDay(),
+      };
+
+      if (!userProfile?.partnerLineUserId) {
+        // No partner linked — fall through to single-user personalized
+        const userSnapshot = await storage.getUserFeatureSnapshot(input.userId);
+        const result = buildPersonalizedRecommendations({
+          restaurants,
+          feature: userSnapshot
+            ? {
+                cuisineAffinity: userSnapshot.cuisineAffinity ?? {},
+                preferredPriceLevel: userSnapshot.preferredPriceLevel ?? 2,
+                dislikedItemIds: userSnapshot.dislikedItemIds ?? [],
+                activeHours: userSnapshot.activeHours ?? [],
+              }
+            : null,
+          context,
+          lat: input.lat,
+          lng: input.lng,
+          limit: input.limit,
+        });
+        const response = {
+          source: result.source,
+          linked: false,
+          compatibilityScore: null,
+          memberCount: 1,
+          membersWithData: userSnapshot ? 1 : 0,
+          items: result.items.map((r) => ({ ...r, groupScore: r.score, memberScores: [] })),
+        };
+        setRecCache(cacheKey, response);
+        return res.json(response);
+      }
+
+      const partnerLineUserId = userProfile.partnerLineUserId;
+      const [userSnapshot, partnerSnapshot, partnerProfile] = await Promise.all([
+        storage.getUserFeatureSnapshot(input.userId),
+        storage.getUserFeatureSnapshot(partnerLineUserId),
+        storage.getProfile(partnerLineUserId),
+      ]);
+
+      const blendInput = {
+        userSnapshot: userSnapshot
+          ? {
+              cuisineAffinity: userSnapshot.cuisineAffinity ?? {},
+              preferredPriceLevel: userSnapshot.preferredPriceLevel ?? 2,
+              dislikedItemIds: userSnapshot.dislikedItemIds ?? [],
+              activeHours: userSnapshot.activeHours ?? [],
+            }
+          : null,
+        partnerSnapshot: partnerSnapshot
+          ? {
+              cuisineAffinity: partnerSnapshot.cuisineAffinity ?? {},
+              preferredPriceLevel: partnerSnapshot.preferredPriceLevel ?? 2,
+              dislikedItemIds: partnerSnapshot.dislikedItemIds ?? [],
+              activeHours: partnerSnapshot.activeHours ?? [],
+            }
+          : null,
+        userLineUserId: input.userId,
+        partnerLineUserId,
+        userDisplayName: userProfile.displayName,
+        partnerDisplayName: partnerProfile?.displayName ?? userProfile.partnerDisplayName ?? "Partner",
+        userAvatarUrl: userProfile.pictureUrl,
+        partnerAvatarUrl: partnerProfile?.pictureUrl ?? userProfile.partnerPictureUrl,
+      };
+
+      const blended = blendPartnerSnapshots(blendInput);
+      const result = buildPersonalizedRecommendations({
+        restaurants,
+        feature: blended,
+        context,
+        lat: input.lat,
+        lng: input.lng,
+        limit: input.limit,
+      });
+
+      const memberEntries = buildPartnerMemberEntries(blendInput);
+      const perMemberScores = computePerMemberScores(result.items, memberEntries, input.lat, input.lng, context);
+      const compatibilityScore = computeCompatibilityScore(blendInput.userSnapshot, blendInput.partnerSnapshot);
+
+      const membersWithData = [blendInput.userSnapshot, blendInput.partnerSnapshot].filter(Boolean).length;
+
+      const items = result.items.map((r) => ({
+        ...r,
+        groupScore: r.score,
+        memberScores: perMemberScores.get(r.id) ?? [],
+      }));
+
+      const response = {
+        source: blended ? result.source : "trending" as const,
+        linked: true,
+        compatibilityScore,
+        memberCount: 2,
+        membersWithData,
+        partnerDisplayName: blendInput.partnerDisplayName,
+        partnerPictureUrl: blendInput.partnerAvatarUrl ?? null,
+        items,
+      };
+
+      setRecCache(cacheKey, response);
+      res.json(response);
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid query" });
       }
       res.status(500).json({ message: "Internal server error" });
     }
@@ -3724,11 +3961,23 @@ export async function registerRoutes(
       const prevClicks = prevMyLogs.filter(e => e.eventType === "deeplink_click").length;
       const clicksChangePct = prevClicks > 0 ? Math.round(((clickedDelivery - prevClicks) / prevClicks) * 100) : 0;
 
-      // Dish clicks from menus table
+      // Dish clicks from menus table — real counts from click_menu_item events
       const menuItems = restaurantId ? await storage.listMenusByRestaurant(restaurantId) : [];
+      const menuItemIds = new Set(menuItems.map(m => m.id));
+      const clicksByMenuItemId = new Map<number, number>();
+      for (const e of myLogs) {
+        if (e.eventType === "click_menu_item" && e.menuItemId && menuItemIds.has(e.menuItemId)) {
+          clicksByMenuItemId.set(e.menuItemId, (clicksByMenuItemId.get(e.menuItemId) ?? 0) + 1);
+        }
+      }
       const dishClicks = menuItems
         .filter(m => m.isActive)
-        .map(m => ({ name: m.name, clicks: 0, ctr: 0, trend: "up" as const, matchRate: 0 }));
+        .map(m => {
+          const clicks = clicksByMenuItemId.get(m.id) ?? 0;
+          const ctr = seen > 0 ? Number(((clicks / seen) * 100).toFixed(1)) : 0;
+          return { name: m.name, clicks, ctr, trend: "up" as const, matchRate: 0 };
+        })
+        .sort((a, b) => b.clicks - a.clicks);
 
       // Campaign clicks from campaigns table
       const allCampaigns = await storage.listCampaigns();
@@ -4705,6 +4954,8 @@ export async function registerRoutes(
             "order_click",
             "booking_click",
             "deeplink_click",
+            "view_menu_item",
+            "click_menu_item",
           ]),
           eventName: z.string().optional(),
           timestamp: z.string().datetime(),
@@ -4713,6 +4964,7 @@ export async function registerRoutes(
           userId: z.string().optional(),
           sessionId: z.string().optional(),
           itemId: z.number().int().optional(),
+          menuItemId: z.number().int().positive().optional(),
           metadata: z.record(z.string(), z.unknown()).optional().default({}),
         })).min(1).max(200),
       }).parse(req.body ?? {});
@@ -4755,21 +5007,33 @@ export async function registerRoutes(
           }
         }
 
+        const enrichedMetadata: Record<string, unknown> = {
+          ...(event.metadata ?? {}),
+          eventId: event.eventId,
+          eventVersion: event.eventVersion,
+          eventName: event.eventName ?? event.eventType,
+          timestamp: event.timestamp,
+          platform: event.platform,
+          context: event.context,
+        };
+
+        if (event.eventType === "view_card" && !enrichedMetadata.district) {
+          const lat = Number((event.metadata as Record<string, unknown> | undefined)?.lat);
+          const lng = Number((event.metadata as Record<string, unknown> | undefined)?.lng);
+          if (Number.isFinite(lat) && Number.isFinite(lng)) {
+            const district = await reverseGeocodeDistrict(lat, lng);
+            if (district) enrichedMetadata.district = district;
+          }
+        }
+
         const created = await storage.createEventLog({
           idempotencyKey: event.idempotencyKey,
           eventType: event.eventType,
           userId: event.userId ?? null,
           sessionId: event.sessionId ?? null,
           itemId: event.itemId ?? null,
-          metadata: {
-            ...(event.metadata ?? {}),
-            eventId: event.eventId,
-            eventVersion: event.eventVersion,
-            eventName: event.eventName ?? event.eventType,
-            timestamp: event.timestamp,
-            platform: event.platform,
-            context: event.context,
-          },
+          menuItemId: event.menuItemId ?? null,
+          metadata: enrichedMetadata,
         });
         if (created) accepted += 1;
         else {
@@ -4784,14 +5048,10 @@ export async function registerRoutes(
         }
 
         if (created && event.itemId) {
-          const likeDelta = event.eventType === "favorite" || event.eventType === "swipe" ? 1 : 0;
-          const dismissDelta = event.eventType === "dismiss" ? 1 : 0;
-          await storage.upsertItemFeatureSnapshot(event.itemId, {
-            likeRate: likeDelta * 100,
-            conversionRate: dismissDelta > 0 ? 0 : 50,
-            ctr: 100,
-            superLikeRate: Number(event.metadata?.direction === "UP") * 100,
-          });
+          const delta = deriveItemFeatureDelta(event.eventType, event.metadata);
+          if (hasItemFeatureDelta(delta)) {
+            await storage.upsertItemFeatureSnapshot(event.itemId, delta);
+          }
         }
       }
 
@@ -5396,10 +5656,13 @@ export async function registerRoutes(
   app.get("/api/admin/experiments/config", async (req, res) => {
     try {
       if (!requirePermission("manage_config")(req, res)) return;
-      const config = await storage.getAdminConfig("experiments_config");
+      const [config, recommendationWeightsConfig] = await Promise.all([
+        storage.getAdminConfig("experiments_config"),
+        storage.getAdminConfig("recommendation_weights"),
+      ]);
       const defaults: ExperimentConfig[] = [
         {
-          experimentKey: "recommendation_ranking_v1",
+          experimentKey: DEFAULT_RECOMMENDATION_EXPERIMENT_KEY,
           enabled: true,
           variants: [
             { key: "control", weight: 50 },
@@ -5407,10 +5670,12 @@ export async function registerRoutes(
           ],
         },
       ];
-      const experiments = Array.isArray(config?.value?.experiments)
-        ? (config?.value?.experiments as ExperimentConfig[])
-        : defaults;
-      res.json({ experiments });
+      const experiments = parseExperimentConfigs(config?.value?.experiments);
+      const recommendationWeights = parseRecommendationWeightsConfig(recommendationWeightsConfig?.value);
+      res.json({
+        experiments: experiments.length > 0 ? experiments : defaults,
+        recommendationWeights,
+      });
     } catch {
       res.status(500).json({ message: "Internal server error" });
     }
@@ -5428,11 +5693,42 @@ export async function registerRoutes(
             weight: z.number().min(0),
           })).min(1),
         })).min(1),
+        recommendationWeights: z.object({
+          activePresetKey: z.string().min(1),
+          presets: z.record(z.string().min(1), z.object({
+            cuisineAffinity: z.number().finite(),
+            priceMatch: z.number().finite(),
+            distanceScore: z.number().finite(),
+            globalPopularity: z.number().finite(),
+            recentNegativePenalty: z.number().finite(),
+          })).refine((value) => Object.keys(value).length > 0, "At least one preset is required"),
+        }),
       }).parse(req.body ?? {});
-      const saved = await storage.upsertAdminConfig("experiments_config", {
-        updatedAt: new Date().toISOString(),
-        experiments: input.experiments,
-      });
+
+      const missingPresetKeys = validateVariantPresetMapping(input.experiments, input.recommendationWeights.presets);
+      if (missingPresetKeys.length > 0) {
+        return res.status(400).json({
+          message: `Missing weight presets for variants: ${missingPresetKeys.join(", ")}`,
+        });
+      }
+      if (!input.recommendationWeights.presets[input.recommendationWeights.activePresetKey]) {
+        return res.status(400).json({
+          message: "Active preset key must exist in recommendationWeights.presets",
+        });
+      }
+
+      const nowIso = new Date().toISOString();
+      const [savedExperiments] = await Promise.all([
+        storage.upsertAdminConfig("experiments_config", {
+          updatedAt: nowIso,
+          experiments: input.experiments,
+        }),
+        storage.upsertAdminConfig("recommendation_weights", {
+          updatedAt: nowIso,
+          activePresetKey: input.recommendationWeights.activePresetKey,
+          presets: input.recommendationWeights.presets,
+        }),
+      ]);
       void appendSecurityAudit({
         ts: new Date().toISOString(),
         level: "info",
@@ -5441,10 +5737,15 @@ export async function registerRoutes(
         metadata: {
           updatedBy: req.session?.username ?? req.session?.ownerEmail ?? "unknown",
           experimentCount: input.experiments.length,
+          presetCount: Object.keys(input.recommendationWeights.presets).length,
+          activePresetKey: input.recommendationWeights.activePresetKey,
           ip: req.ip,
         },
       });
-      res.json(saved.value);
+      res.json({
+        ...savedExperiments.value,
+        recommendationWeights: input.recommendationWeights,
+      });
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid payload" });
@@ -5460,15 +5761,18 @@ export async function registerRoutes(
         experimentKey: z.string().min(1),
       }).parse(req.body ?? {});
 
-      const config = await storage.getAdminConfig("experiments_config");
-      const experiments = Array.isArray(config?.value?.experiments)
-        ? (config?.value?.experiments as ExperimentConfig[])
-        : [];
-      const experiment = experiments.find((item) => item.experimentKey === input.experimentKey);
-      const assignedVariant =
-        experiment && experiment.enabled
-          ? pickVariant(`${input.userId}:${input.experimentKey}`, experiment.variants)
-          : "control";
+      const [config, recommendationWeightsConfig] = await Promise.all([
+        storage.getAdminConfig("experiments_config"),
+        storage.getAdminConfig("recommendation_weights"),
+      ]);
+      const experiments = parseExperimentConfigs(config?.value?.experiments);
+      const recommendationWeights = parseRecommendationWeightsConfig(recommendationWeightsConfig?.value);
+      const resolved = resolveRecommendationExperiment({
+        experiments,
+        recommendationWeights,
+        experimentKey: input.experimentKey,
+        seed: input.userId,
+      });
 
       const exposureConfig = await storage.getAdminConfig("experiments_exposures");
       const exposures = Array.isArray(exposureConfig?.value?.items)
@@ -5478,7 +5782,7 @@ export async function registerRoutes(
         ts: new Date().toISOString(),
         userId: input.userId,
         experimentKey: input.experimentKey,
-        variant: assignedVariant,
+        variant: resolved.variant,
       };
       await storage.upsertAdminConfig("experiments_exposures", {
         updatedAt: exposure.ts,
@@ -5492,19 +5796,41 @@ export async function registerRoutes(
         metadata: {
           userId: input.userId,
           experimentKey: input.experimentKey,
-          variant: assignedVariant,
+          variant: resolved.variant,
           ip: req.ip,
         },
       });
 
       res.json({
         experimentKey: input.experimentKey,
-        variant: assignedVariant,
+        variant: resolved.variant,
       });
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid payload" });
       }
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.get("/api/admin/experiments/recommendations/report", async (req, res) => {
+    try {
+      if (!requireAnalyticsAccess(req, res)) return;
+      const daysParam = Number(req.query.days ?? 7);
+      const days = Number.isFinite(daysParam) ? Math.min(Math.max(daysParam, 1), 90) : 7;
+      const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+      const logs = await storage.listEventLogs(10000, since);
+      const filtered = logs.filter((log) =>
+        log.eventType === "view_card" ||
+        log.eventType === "swipe" ||
+        log.eventType === "deeplink_click",
+      );
+      const rows = aggregateRecommendationExperimentReport(filtered);
+      res.json({
+        windowDays: days,
+        rows,
+      });
+    } catch {
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -5515,11 +5841,24 @@ export async function registerRoutes(
         userId: z.string().min(1),
         lat: z.coerce.number().optional(),
         lng: z.coerce.number().optional(),
+        hour: z.coerce.number().int().min(0).max(23).optional(),
+        day: z.coerce.number().int().min(0).max(6).optional(),
         limit: z.coerce.number().int().positive().max(50).optional().default(20),
       }).parse(req.query ?? {});
 
+      const [experimentsConfig, recommendationWeightsConfig] = await Promise.all([
+        storage.getAdminConfig("experiments_config"),
+        storage.getAdminConfig("recommendation_weights"),
+      ]);
+      const resolvedExperiment = resolveRecommendationExperiment({
+        experiments: parseExperimentConfigs(experimentsConfig?.value?.experiments),
+        recommendationWeights: parseRecommendationWeightsConfig(recommendationWeightsConfig?.value),
+        experimentKey: DEFAULT_RECOMMENDATION_EXPERIMENT_KEY,
+        seed: input.userId,
+      });
+
       // Check per-user cache first (TTL: 5 min, invalidated on feature-snapshot rebuild)
-      const cacheKey = `${input.userId}:${input.lat ?? ""}:${input.lng ?? ""}:${input.limit}`;
+      const cacheKey = `${input.userId}:${resolvedExperiment.experimentKey}:${resolvedExperiment.variant}:${input.lat ?? ""}:${input.lng ?? ""}:${input.hour ?? ""}:${input.day ?? ""}:${input.limit}`;
       const cached = getRecCache(cacheKey);
       if (cached) return res.json(cached);
 
@@ -5528,10 +5867,10 @@ export async function registerRoutes(
 
       let source: "personalized" | "sparse_blend" | "segment" | "trending" = "trending";
       let items: Array<any> = [];
+      const now = new Date();
 
       if (latestConsent?.granted) {
         const feature = await storage.getUserFeatureSnapshot(input.userId);
-        const now = new Date();
         const result = buildPersonalizedRecommendations({
           restaurants,
           feature: feature
@@ -5540,12 +5879,14 @@ export async function registerRoutes(
                 preferredPriceLevel: feature.preferredPriceLevel ?? 2,
                 dislikedItemIds: feature.dislikedItemIds ?? [],
                 activeHours: feature.activeHours ?? [],
+                locationClusters: feature.locationClusters ?? [],
               }
             : null,
           context: {
-            hourOfDay: now.getHours(),
-            dayOfWeek: now.getDay(),
+            hourOfDay: input.hour ?? now.getHours(),
+            dayOfWeek: input.day ?? now.getDay(),
           },
+          weights: resolvedExperiment.weights,
           lat: input.lat,
           lng: input.lng,
           limit: input.limit,
@@ -5560,7 +5901,177 @@ export async function registerRoutes(
         }));
       }
 
-      const response = { source, items };
+      const response = {
+        source,
+        variant: resolvedExperiment.variant,
+        experimentKey: resolvedExperiment.experimentKey,
+        items,
+      };
+      setRecCache(cacheKey, response);
+      res.json(response);
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid query" });
+      }
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.get("/api/recommendations/group", async (req, res) => {
+    try {
+      const input = z.object({
+        sessionCode: z.string().min(1).transform((s) => s.toUpperCase()),
+        lat: z.coerce.number().optional(),
+        lng: z.coerce.number().optional(),
+        hour: z.coerce.number().int().min(0).max(23).optional(),
+        day: z.coerce.number().int().min(0).max(6).optional(),
+        limit: z.coerce.number().int().positive().max(50).optional().default(20),
+      }).parse(req.query ?? {});
+
+      const [experimentsConfig, recommendationWeightsConfig] = await Promise.all([
+        storage.getAdminConfig("experiments_config"),
+        storage.getAdminConfig("recommendation_weights"),
+      ]);
+      const resolvedExperiment = resolveRecommendationExperiment({
+        experiments: parseExperimentConfigs(experimentsConfig?.value?.experiments),
+        recommendationWeights: parseRecommendationWeightsConfig(recommendationWeightsConfig?.value),
+        experimentKey: DEFAULT_RECOMMENDATION_EXPERIMENT_KEY,
+        seed: input.sessionCode,
+      });
+
+      const cacheKey = `group:${input.sessionCode}:${resolvedExperiment.experimentKey}:${resolvedExperiment.variant}:${input.lat ?? ""}:${input.lng ?? ""}:${input.hour ?? ""}:${input.day ?? ""}:${input.limit}`;
+      const cached = getRecCache(cacheKey);
+      if (cached) return res.json(cached);
+
+      const session = await storage.getGroupSessionByCode(input.sessionCode);
+      if (!session) return res.status(404).json({ message: "Session not found" });
+
+      // Build restaurant pool — replicate deck endpoint's filtering pattern
+      const settings = (session.settings || {}) as {
+        mode?: "restaurant" | "menu";
+        locations?: string[];
+        budget?: string;
+        diet?: string[];
+      };
+      const selectedBudget = String(settings.budget || "").toLowerCase();
+      const selectedLocations = settings.locations ?? [];
+      const selectedDiet = settings.diet ?? [];
+
+      const budgetPredicate = (priceLevel: number) => {
+        if (selectedBudget.includes("cheap")) return priceLevel <= 1;
+        if (selectedBudget.includes("moderate")) return priceLevel <= 2;
+        if (selectedBudget.includes("fancy")) return priceLevel >= 3;
+        if (selectedBudget.includes("expensive")) return priceLevel >= 4;
+        return true;
+      };
+
+      const locationTokensMap: Record<string, string[]> = {
+        bts: ["bts", "station", "skytrain"],
+        mall: ["mall", "plaza", "center", "centre"],
+        street: ["street", "market", "night market"],
+        rooftop: ["rooftop", "sky", "view"],
+        riverside: ["river", "riverside", "waterfront"],
+        latenight: ["late", "night", "24", "midnight"],
+        "street food": ["street", "market", "night market"],
+        restaurants: ["restaurant", "food", "eatery"],
+        "near bts": ["bts", "station", "skytrain"],
+        "at the mall": ["mall", "plaza", "center", "centre"],
+        "late night": ["late", "night", "24", "midnight"],
+        rooftops: ["rooftop", "sky", "view"],
+      };
+
+      const dietTokensMap: Record<string, string[]> = {
+        vegan: ["vegan", "plant-based", "vegetarian"],
+        halal: ["halal"],
+        "gluten-free": ["gluten free", "gluten-free"],
+        "no pork": ["no pork", "pork-free"],
+        keto: ["keto", "low carb", "low-carb"],
+        "dairy-free": ["dairy free", "dairy-free", "lactose-free"],
+      };
+
+      const locationTokens = selectedLocations.flatMap((loc) => locationTokensMap[loc.toLowerCase()] ?? []);
+      const dietTokens = selectedDiet.flatMap((diet) => dietTokensMap[diet.toLowerCase()] ?? []);
+
+      const textMatch = (r: { name: string; category: string; description: string; address: string }, tokens: string[]) => {
+        if (tokens.length === 0) return true;
+        const haystack = `${r.name} ${r.category} ${r.description} ${r.address}`.toLowerCase();
+        return tokens.some((t) => haystack.includes(t.toLowerCase()));
+      };
+
+      const nearbyRestaurants =
+        Number.isFinite(input.lat) && Number.isFinite(input.lng)
+          ? await storage.findRestaurantsNear(input.lat!, input.lng!, 5000)
+          : await storage.getRestaurants();
+
+      const pool = nearbyRestaurants.filter((r) => {
+        if (!budgetPredicate(r.priceLevel ?? 2)) return false;
+        const combined = [...locationTokens, ...dietTokens];
+        return textMatch({ name: r.name, category: r.category ?? "", description: r.description ?? "", address: r.address ?? "" }, combined.length > 0 ? combined : []);
+      });
+
+      // Load members and their feature snapshots
+      const members = await storage.listGroupMembers(session.id);
+      const snapshotResults = await Promise.all(
+        members.map((m) => (m.lineUserId ? storage.getUserFeatureSnapshot(m.lineUserId) : Promise.resolve(null))),
+      );
+
+      const memberSnapshots = members.map((m, i) => ({
+        memberId: m.id,
+        name: m.name,
+        avatarUrl: m.avatarUrl,
+        snapshot: snapshotResults[i] != null
+          ? {
+              cuisineAffinity: snapshotResults[i]!.cuisineAffinity ?? {},
+              preferredPriceLevel: snapshotResults[i]!.preferredPriceLevel ?? 2,
+              dislikedItemIds: snapshotResults[i]!.dislikedItemIds ?? [],
+              activeHours: snapshotResults[i]!.activeHours ?? [],
+            }
+          : null,
+      }));
+
+      const blended = blendSnapshots(memberSnapshots.map((m) => m.snapshot));
+      const now = new Date();
+      const context = {
+        hourOfDay: input.hour ?? now.getHours(),
+        dayOfWeek: input.day ?? now.getDay(),
+      };
+
+      const result = buildPersonalizedRecommendations({
+        restaurants: pool,
+        feature: blended,
+        lat: input.lat,
+        lng: input.lng,
+        context,
+        weights: resolvedExperiment.weights,
+        limit: input.limit,
+      });
+
+      const perMemberScores = computePerMemberScores(
+        result.items,
+        memberSnapshots,
+        input.lat,
+        input.lng,
+        context,
+        resolvedExperiment.weights,
+      );
+
+      const membersWithData = memberSnapshots.filter((m) => m.snapshot != null).length;
+
+      const items = result.items.map((r) => ({
+        ...r,
+        groupScore: r.score,
+        memberScores: perMemberScores.get(r.id) ?? [],
+      }));
+
+      const response = {
+        source: result.source,
+        variant: resolvedExperiment.variant,
+        experimentKey: resolvedExperiment.experimentKey,
+        memberCount: members.length,
+        membersWithData,
+        items,
+      };
+
       setRecCache(cacheKey, response);
       res.json(response);
     } catch (err) {

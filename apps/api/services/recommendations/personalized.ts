@@ -1,5 +1,17 @@
 import type { Restaurant } from "@shared/schema";
-import { scoreRecommendations, type RecommendationItem, type UserFeatureSnapshot, type RecommendationContext } from "@algorithms";
+import {
+  scoreRecommendations,
+  type RecommendationItem,
+  type UserFeatureSnapshot,
+  type RecommendationContext,
+  type ScoringWeights,
+} from "@algorithms";
+import { getSuperLikeMultiplier } from "../../lib/superLike";
+import { autoDetectDistrict } from "@shared/vibeConfig";
+
+type RecommendationFeature = UserFeatureSnapshot & {
+  locationClusters?: string[];
+};
 
 function toRecommendationItem(restaurant: Restaurant, lat?: number, lng?: number): RecommendationItem {
   const rLat = Number(restaurant.lat);
@@ -75,14 +87,15 @@ function applyDiversitySpread<T extends { score: number; category: string }>(
 
 export function buildPersonalizedRecommendations(params: {
   restaurants: Restaurant[];
-  feature: UserFeatureSnapshot | null;
+  feature: RecommendationFeature | null;
   lat?: number;
   lng?: number;
   context?: RecommendationContext | null;
   limit?: number;
   itemCtrs?: Map<number, number>;
+  weights?: ScoringWeights;
 }): { source: "personalized" | "sparse_blend" | "segment" | "trending"; items: Array<Restaurant & { score: number; explanation: string[] }> } {
-  const { restaurants, feature, lat, lng, context = null, limit = 20, itemCtrs } = params;
+  const { restaurants, feature, lat, lng, context = null, limit = 20, itemCtrs, weights } = params;
 
   if (restaurants.length === 0) {
     return { source: "trending", items: [] };
@@ -97,6 +110,10 @@ export function buildPersonalizedRecommendations(params: {
   if (feature) {
     // Defensive normalization for any legacy snapshots with affinity > 1
     const normalizedAffinity = normalizeAffinity(feature.cuisineAffinity ?? {});
+    const topLocationClusters = (feature.locationClusters ?? [])
+      .slice(0, 2)
+      .map((v) => v.trim().toLowerCase())
+      .filter(Boolean);
     const affinityKeys = Object.keys(normalizedAffinity).length;
     const isSparseUser = affinityKeys < 3;
 
@@ -109,6 +126,7 @@ export function buildPersonalizedRecommendations(params: {
         activeHours: feature.activeHours ?? [],
       },
       context,
+      weights,
     );
 
     if (isSparseUser) {
@@ -127,11 +145,23 @@ export function buildPersonalizedRecommendations(params: {
           const popularityScore = (categoryCounts[key] ?? 0) / maxCategoryCount;
           const trend = Math.max(0, Math.min(1, (restaurant.trendingScore ?? 0) / 100));
           const popularityBlend = trend * 0.65 + popularityScore * 0.35;
-          const blendedScore = 0.7 * popularityBlend + 0.3 * score.score + newRestaurantBoost(restaurant.id);
+          const affinity = normalizedAffinity[restaurant.category] ?? 0;
+          const superLikeMultiplier = getSuperLikeMultiplier(affinity);
+          const detectedDistrict = autoDetectDistrict(restaurant.address ?? "")?.toLowerCase();
+          const locationBoost = detectedDistrict && topLocationClusters.includes(detectedDistrict) ? 0.05 : 0;
+          const blendedScore =
+            (0.7 * popularityBlend + 0.3 * score.score) * superLikeMultiplier +
+            newRestaurantBoost(restaurant.id) +
+            locationBoost;
           return {
             ...restaurant,
             score: Number(blendedScore.toFixed(4)),
-            explanation: ["Sparse user: blending popularity and early preference signals", ...score.explanation],
+            explanation: [
+              "Sparse user: blending popularity and early preference signals",
+              ...(superLikeMultiplier > 1 ? ["Super-like cuisine boost applied"] : []),
+              ...(locationBoost > 0 ? ["Near your frequent area"] : []),
+              ...score.explanation,
+            ],
           };
         })
         .sort((a, b) => b.score - a.score);
@@ -142,11 +172,19 @@ export function buildPersonalizedRecommendations(params: {
     const full = scored
       .map((score) => {
         const restaurant = restaurants.find((r) => r.id === score.id)!;
-        const boostedScore = score.score + newRestaurantBoost(restaurant.id);
+        const affinity = normalizedAffinity[restaurant.category] ?? 0;
+        const superLikeMultiplier = getSuperLikeMultiplier(affinity);
+        const detectedDistrict = autoDetectDistrict(restaurant.address ?? "")?.toLowerCase();
+        const locationBoost = detectedDistrict && topLocationClusters.includes(detectedDistrict) ? 0.05 : 0;
+        const boostedScore = score.score * superLikeMultiplier + newRestaurantBoost(restaurant.id) + locationBoost;
         return {
           ...restaurant,
           score: Number(boostedScore.toFixed(4)),
-          explanation: score.explanation,
+          explanation: [
+            ...(superLikeMultiplier > 1 ? ["Super-like cuisine boost applied"] : []),
+            ...(locationBoost > 0 ? ["Near your frequent area"] : []),
+            ...score.explanation,
+          ],
         };
       })
       .sort((a, b) => b.score - a.score);

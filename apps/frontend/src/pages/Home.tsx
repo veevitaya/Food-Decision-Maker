@@ -22,6 +22,7 @@ import { trackEvent } from "@/lib/analytics";
 import { useFeatureFlags } from "@/hooks/use-feature-flags";
 import { useBranding } from "@/hooks/use-branding";
 import { useVibesConfig } from "@/hooks/use-vibes-config";
+import { usePartnerStatus } from "@/hooks/use-partner-status";
 import toastLogoPath from "@assets/toast_logo_nobg.png";
 import mascotPath from "@assets/toast_mascot_nobg.png";
 
