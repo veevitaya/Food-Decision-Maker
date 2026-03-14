@@ -48,11 +48,20 @@ export function SwipeCard({ restaurant, active, onSwipe, zIndex }: SwipeCardProp
     >
       {/* Restaurant Image */}
       <div className="relative w-full h-2/3">
-        <img 
-          src={restaurant.imageUrl} 
-          alt={restaurant.name}
-          className="w-full h-full object-cover pointer-events-none"
-        />
+        {restaurant.imageUrl ? (
+          <img
+            src={restaurant.imageUrl}
+            alt={restaurant.name}
+            className="w-full h-full object-cover pointer-events-none"
+            onError={(e) => {
+              const el = e.target as HTMLImageElement;
+              el.style.display = "none";
+              el.parentElement?.classList.add("bg-gray-200");
+            }}
+          />
+        ) : (
+          <div className="w-full h-full bg-gray-200" />
+        )}
         {/* Subtle dark gradient at bottom of image for text readability */}
         <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" />
         

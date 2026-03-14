@@ -9,13 +9,17 @@ import path from "path";
 import crypto from "crypto";
 import express from "express";
 import bcrypt from "bcryptjs";
+import OpenAI from "openai";
 import { getBearerToken, requireVerifiedLineUser, verifyLineIdToken } from "./lineAuth";
 import * as placesService from "./services/places/placesService";
-import type { RestaurantOpeningHour, RestaurantReview, AdminRole, AdminPermission } from "@shared/schema";
+import type { RestaurantOpeningHour, RestaurantReview, AdminRole, AdminPermission, InsertRestaurant } from "@shared/schema";
 import { ROLE_DEFAULT_PERMISSIONS } from "@shared/schema";
+import { autoAssignVibes } from "@shared/vibeConfig";
 import { insertMenuSchema } from "@shared/schema";
 import { insertPromotionSchema, insertRestaurantClaimSchema, insertRestaurantOwnerSchema } from "@shared/schema";
 import type { NormalizedPlace } from "./services/places/types";
+import { queryOverpass } from "./services/places/providers/overpass";
+import { queryGoogle } from "./services/places/providers/google";
 import { buildPersonalizedRecommendations } from "./services/recommendations/personalized";
 import { blendSnapshots, computePerMemberScores } from "./services/recommendations/groupBlend";
 import { blendPartnerSnapshots, buildPartnerMemberEntries, computeCompatibilityScore } from "./services/recommendations/partnerBlend";
@@ -38,6 +42,13 @@ import {
 } from "./lib/recommendationExperiment";
 import { aggregateRecommendationExperimentReport } from "./lib/recommendationExperimentReport";
 import * as lineMessaging from "./services/line/messaging";
+import {
+  buildMenuDrafts,
+  countRealActiveMenus,
+  detectCuisineKey,
+  parseOpenAIDishesResponse,
+  type MenuTextCandidate,
+} from "./lib/menuGeneration";
 
 const isDev = process.env.NODE_ENV !== "production";
 
@@ -75,6 +86,43 @@ function requireOwnerOrAdmin(req: Request, res: Response): boolean {
   if (req.session?.sessionType === "owner") return true;
   res.status(401).json({ message: "Owner or admin login required" });
   return false;
+}
+
+type OwnerScope = {
+  ownerId: number;
+  ownerEmail: string;
+  approvedRestaurantIds: Set<number>;
+  activeRestaurantId: number | null;
+};
+
+async function getOwnerScope(req: Request): Promise<OwnerScope | null> {
+  if (req.session?.sessionType !== "owner") return null;
+  const ownerEmail = (req.session.ownerEmail ?? "").trim();
+  if (!ownerEmail) return null;
+
+  const owner = await storage.getRestaurantOwnerByEmail(ownerEmail);
+  if (!owner) return null;
+
+  const claims = await storage.listRestaurantClaims("approved");
+  const approvedRestaurantIds = new Set<number>(
+    claims.filter((claim) => claim.ownerId === owner.id).map((claim) => claim.restaurantId),
+  );
+
+  if (owner.isVerified && owner.restaurantId) {
+    approvedRestaurantIds.add(owner.restaurantId);
+  }
+
+  const sessionRestaurantId = req.session.ownerRestaurantId;
+  const activeRestaurantId = sessionRestaurantId && approvedRestaurantIds.has(sessionRestaurantId)
+    ? sessionRestaurantId
+    : (approvedRestaurantIds.values().next().value ?? null);
+
+  return {
+    ownerId: owner.id,
+    ownerEmail,
+    approvedRestaurantIds,
+    activeRestaurantId,
+  };
 }
 
 /**
@@ -142,6 +190,7 @@ type AnalyticsEventRecord = {
   eventType: string;
   userId: string | null;
   restaurantId: number | null;
+  restaurantName: string | null;
   metadata: string | null;
   timestamp: string;
 };
@@ -167,32 +216,108 @@ function appendEventAudit(record: EventIngestAuditRecord) {
   }
 }
 
-const DEFAULT_BANNERS = [
-  {
-    id: 1,
-    title: "Try the New Chef Specials",
-    imageUrl: "https://images.unsplash.com/photo-1543353071-087092ec393a?auto=format&fit=crop&w=1000&q=60",
-    linkUrl: "https://example.com/specials",
-    position: "home_top",
-    isActive: true,
-    startDate: "2026-03-01",
-    endDate: "2026-03-31",
-    impressions: 12480,
-    clicks: 624,
-  },
-  {
-    id: 2,
-    title: "Family Dinner Deals",
-    imageUrl: "https://images.unsplash.com/photo-1559339352-11d035aa65de?auto=format&fit=crop&w=1000&q=60",
-    linkUrl: "https://example.com/family",
-    position: "detail_bottom",
-    isActive: true,
-    startDate: "2026-03-03",
-    endDate: "2026-04-03",
-    impressions: 9320,
-    clicks: 488,
-  },
-];
+type MenuGenerateRestaurantResult = {
+  restaurantId: number;
+  restaurantName: string;
+  status: "generated" | "skipped" | "failed";
+  reason?: string;
+  existingRealCount: number;
+  createdCount: number;
+  createdItemNames: string[];
+  missingImages: number;
+};
+
+type MenuGenerateJobSummary = {
+  selected: number;
+  processed: number;
+  generatedRestaurants: number;
+  generatedItems: number;
+  skippedRestaurants: number;
+  failedRestaurants: number;
+};
+
+type MenuGenerateJob = {
+  jobId: string;
+  status: "running" | "completed" | "failed";
+  restaurantId: number | null;
+  force: boolean;
+  summary: MenuGenerateJobSummary;
+  results: MenuGenerateRestaurantResult[];
+  startedAt: string;
+  finishedAt?: string;
+};
+
+const MENU_GENERATE_JOB_HISTORY_LIMIT = 30;
+const menuGenerateJobs = new Map<string, MenuGenerateJob>();
+
+function createMenuGenerateJobId(): string {
+  return `menugen_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function pruneMenuGenerateJobs(): void {
+  if (menuGenerateJobs.size <= MENU_GENERATE_JOB_HISTORY_LIMIT) return;
+  const ordered = Array.from(menuGenerateJobs.entries())
+    .sort((a, b) => {
+      const left = new Date(a[1].startedAt).getTime();
+      const right = new Date(b[1].startedAt).getTime();
+      return left - right;
+    });
+  while (ordered.length > MENU_GENERATE_JOB_HISTORY_LIMIT) {
+    const oldest = ordered.shift();
+    if (!oldest) break;
+    menuGenerateJobs.delete(oldest[0]);
+  }
+}
+
+function extractJsonObject(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return trimmed;
+  const codeBlockMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (codeBlockMatch?.[1]) return codeBlockMatch[1].trim();
+  return trimmed;
+}
+
+async function requestMenuTextFromOpenAI(args: {
+  client: OpenAI;
+  model: string;
+  restaurant: { id: number; name: string; category: string; description: string; district: string | null; priceLevel: number };
+  cuisineKey: string;
+  targetCount: number;
+}): Promise<MenuTextCandidate[]> {
+  const prompt = [
+    "Generate realistic menu items for a Bangkok restaurant.",
+    `Restaurant name: ${args.restaurant.name}`,
+    `Category: ${args.restaurant.category}`,
+    `District: ${args.restaurant.district ?? "unknown"}`,
+    `Cuisine key: ${args.cuisineKey}`,
+    `Price level (1-4): ${args.restaurant.priceLevel}`,
+    `Restaurant description: ${args.restaurant.description}`,
+    `Generate exactly ${args.targetCount} menu dishes in English.`,
+    "Return strict JSON only with shape: {\"dishes\":[{\"name\":\"...\",\"description\":\"...\",\"tags\":[\"...\"],\"dietFlags\":[\"...\"]}]}",
+    "No markdown, no commentary, no explanation.",
+  ].join("\n");
+
+  const completion = await args.client.chat.completions.create({
+    model: args.model,
+    temperature: 0.7,
+    response_format: { type: "json_object" },
+    messages: [
+      {
+        role: "system",
+        content:
+          "You are a culinary data generator. Output valid JSON only, and keep dishes plausible for Bangkok restaurants.",
+      },
+      {
+        role: "user",
+        content: prompt,
+      },
+    ],
+  });
+
+  const content = completion.choices[0]?.message?.content;
+  if (!content) throw new Error("OpenAI returned empty content");
+  return parseOpenAIDishesResponse(extractJsonObject(content));
+}
 
 const DEFAULT_ADMIN_CONFIG_VALUE: Record<string, unknown> = {
   features: {
@@ -302,19 +427,6 @@ const DEFAULT_ADMIN_CONFIG_VALUE: Record<string, unknown> = {
   ],
 };
 
-let seededBanners = false;
-
-async function ensureDefaultBanners() {
-  if (seededBanners) return;
-  const existing = await storage.listBanners();
-  if (existing.length === 0) {
-    for (const item of DEFAULT_BANNERS) {
-      await storage.createBanner(item);
-    }
-  }
-  seededBanners = true;
-}
-
 type StoredOwner = {
   id: number;
   restaurantId: number;
@@ -349,11 +461,15 @@ const CLAIMS_CONFIG_KEY = "restaurant_claims";
 async function buildAnalyticsEvents(): Promise<AnalyticsEventRecord[]> {
   const logs = await storage.listEventLogs(500);
   if (logs.length > 0) {
+    const allRestaurants = await storage.getRestaurants();
+    const restaurantNames: Record<number, string> = {};
+    for (const r of allRestaurants) restaurantNames[r.id] = r.name;
     return logs.map((log) => ({
       id: log.id,
       eventType: log.eventType,
       userId: log.userId ?? null,
       restaurantId: log.itemId ?? null,
+      restaurantName: log.itemId ? (restaurantNames[log.itemId] ?? null) : null,
       metadata: JSON.stringify(log.metadata ?? {}),
       timestamp: new Date(log.createdAt).toISOString(),
     }));
@@ -365,6 +481,7 @@ async function buildAnalyticsEvents(): Promise<AnalyticsEventRecord[]> {
     eventType: log.cacheHit ? "swipe_right" : log.fallbackUsed ? "swipe_left" : "view_detail",
     userId: null,
     restaurantId: null,
+    restaurantName: null,
     metadata: JSON.stringify({ source: log.source, query: log.query, resultCount: log.resultCount }),
     timestamp: new Date(log.ts).toISOString(),
   }));
@@ -494,10 +611,37 @@ async function buildDashboardDetails() {
   };
 }
 
-const GOOGLE_NEARBY_URL = "https://maps.googleapis.com/maps/api/place/nearbysearch/json";
-const GOOGLE_DETAILS_URL = "https://maps.googleapis.com/maps/api/place/details/json";
-const GOOGLE_PHOTO_URL = "https://maps.googleapis.com/maps/api/place/photo";
+const GOOGLE_NEARBY_URL  = "https://places.googleapis.com/v1/places:searchNearby";
+const GOOGLE_TEXT_URL    = "https://places.googleapis.com/v1/places:searchText";
+const GOOGLE_DETAILS_URL = "https://places.googleapis.com/v1/places"; // append /{id}
+const GOOGLE_PHOTO_URL   = "https://places.googleapis.com/v1";         // prefix for photo names
 
+// Raw response shape from Places API (New)
+type GooglePlaceNew = {
+  id: string;
+  displayName?: { text?: string };
+  location?: { latitude?: number; longitude?: number };
+  shortFormattedAddress?: string;
+  formattedAddress?: string;
+  rating?: number;
+  priceLevel?: string; // e.g. "PRICE_LEVEL_MODERATE"
+  photos?: Array<{ name: string }>;
+  types?: string[];
+  internationalPhoneNumber?: string;
+  currentOpeningHours?: { weekdayDescriptions?: string[] };
+  reviews?: Array<{
+    authorAttribution?: { displayName?: string };
+    rating?: number;
+    text?: { text?: string };
+    relativePublishTimeDescription?: string;
+  }>;
+};
+
+// Adapter output types — same shape as before, so all callers are unchanged.
+// photo_reference now holds the new photo name string (e.g. places/ChIJ.../photos/xxx)
+// which toPhotoUrl converts to the correct URL.
+// _details carries rich data already returned by the new Nearby Search so callers
+// can skip a separate fetchGoogleDetails call when this is populated.
 type GoogleNearbyResult = {
   place_id: string;
   name: string;
@@ -507,6 +651,7 @@ type GoogleNearbyResult = {
   price_level?: number;
   photos?: Array<{ photo_reference: string }>;
   types?: string[];
+  _details?: GoogleDetailsResult; // pre-populated from Nearby Search FieldMask
 };
 
 type GoogleDetailsResult = {
@@ -524,6 +669,17 @@ type GoogleDetailsResult = {
   rating?: number;
   price_level?: number;
 };
+
+function parsePriceLevel(priceLevel?: string): number | undefined {
+  switch (priceLevel) {
+    case "PRICE_LEVEL_FREE":
+    case "PRICE_LEVEL_INEXPENSIVE":    return 1;
+    case "PRICE_LEVEL_MODERATE":       return 2;
+    case "PRICE_LEVEL_EXPENSIVE":      return 3;
+    case "PRICE_LEVEL_VERY_EXPENSIVE": return 4;
+    default:                           return undefined;
+  }
+}
 
 function toImportCategory(types?: string[]): string {
   if (!types || types.length === 0) return "Restaurant";
@@ -563,11 +719,30 @@ function toReviews(reviews?: GoogleDetailsResult["reviews"]): RestaurantReview[]
 }
 
 function toPhotoUrl(photoReference: string, apiKey: string): string {
-  const url = new URL(GOOGLE_PHOTO_URL);
-  url.searchParams.set("maxwidth", "800");
-  url.searchParams.set("photo_reference", photoReference);
-  url.searchParams.set("key", apiKey);
-  return url.toString();
+  // photoReference is a Places API (New) photo name: "places/ChIJ.../photos/AUc7tXx"
+  return `${GOOGLE_PHOTO_URL}/${photoReference}/media?maxWidthPx=800&key=${encodeURIComponent(apiKey)}`;
+}
+
+function isLegacyGooglePhotoUrl(url?: string | null): boolean {
+  if (!url) return false;
+  return (
+    /maps\.googleapis\.com\/maps\/api\/place\/photo\?/i.test(url) ||
+    /[?&]photo_reference=/i.test(url)
+  );
+}
+
+function normalizeVibes(vibes?: string[] | null): string[] {
+  return Array.from(new Set((vibes ?? []).filter((v) => Boolean(v && v.trim().length > 0)))).sort();
+}
+
+function sameVibes(a?: string[] | null, b?: string[] | null): boolean {
+  const left = normalizeVibes(a);
+  const right = normalizeVibes(b);
+  if (left.length !== right.length) return false;
+  for (let i = 0; i < left.length; i += 1) {
+    if (left[i] !== right[i]) return false;
+  }
+  return true;
 }
 
 function distanceMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
@@ -606,6 +781,58 @@ function logImport(run: GoogleImportRun, message: string, level: ImportLogLevel 
   });
 }
 
+const PLACES_NEW_FIELD_MASK = [
+  "places.id",
+  "places.displayName",
+  "places.location",
+  "places.shortFormattedAddress",
+  "places.formattedAddress",
+  "places.rating",
+  "places.priceLevel",
+  "places.photos",
+  "places.types",
+  "places.internationalPhoneNumber",
+  "places.currentOpeningHours",
+  "places.reviews",
+].join(",");
+
+function adaptNearbyPlace(p: GooglePlaceNew): GoogleNearbyResult {
+  const photos = p.photos?.map((ph) => ({ photo_reference: ph.name }));
+
+  // Pre-populate _details from rich data already returned by Nearby Search,
+  // so callers can skip a separate fetchGoogleDetails call.
+  const hasRichData = !!(p.formattedAddress || p.internationalPhoneNumber || p.currentOpeningHours || p.reviews?.length);
+  const _details: GoogleDetailsResult | undefined = hasRichData ? {
+    formatted_address: p.formattedAddress ?? p.shortFormattedAddress,
+    formatted_phone_number: p.internationalPhoneNumber,
+    opening_hours: p.currentOpeningHours?.weekdayDescriptions?.length
+      ? { weekday_text: p.currentOpeningHours.weekdayDescriptions }
+      : undefined,
+    reviews: p.reviews?.map((r) => ({
+      author_name: r.authorAttribution?.displayName,
+      rating: r.rating,
+      text: r.text?.text,
+      relative_time_description: r.relativePublishTimeDescription,
+    })),
+    photos,
+    types: p.types,
+    rating: p.rating,
+    price_level: parsePriceLevel(p.priceLevel),
+  } : undefined;
+
+  return {
+    place_id: p.id,
+    name: p.displayName?.text ?? "",
+    geometry: { location: { lat: p.location?.latitude, lng: p.location?.longitude } },
+    vicinity: p.shortFormattedAddress,
+    rating: p.rating,
+    price_level: parsePriceLevel(p.priceLevel),
+    photos,
+    types: p.types,
+    _details,
+  };
+}
+
 async function fetchGoogleNearby(
   apiKey: string,
   lat: number,
@@ -614,69 +841,93 @@ async function fetchGoogleNearby(
   keyword: string,
   maxResults = 20,
 ): Promise<GoogleNearbyResult[]> {
-  const allResults: GoogleNearbyResult[] = [];
-  let nextPageToken: string | undefined;
-  let page = 0;
-
-  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-  while (allResults.length < maxResults && page < 3) {
-    const url = new URL(GOOGLE_NEARBY_URL);
-    url.searchParams.set("key", apiKey);
-
-    if (nextPageToken) {
-      url.searchParams.set("pagetoken", nextPageToken);
-    } else {
-      url.searchParams.set("location", `${lat},${lng}`);
-      url.searchParams.set("radius", String(radius));
-      url.searchParams.set("type", "restaurant");
-      if (keyword.trim()) url.searchParams.set("keyword", keyword.trim());
-    }
-
-    let json:
-      | { status?: string; results?: GoogleNearbyResult[]; error_message?: string; next_page_token?: string }
-      | undefined;
-
-    // Google may return INVALID_REQUEST briefly for a fresh next_page_token.
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      const res = await fetch(url.toString());
-      if (!res.ok) {
-        throw new Error(`Google nearby call failed (${res.status})`);
-      }
-      json = (await res.json()) as { status?: string; results?: GoogleNearbyResult[]; error_message?: string; next_page_token?: string };
-      if (json.status !== "INVALID_REQUEST") break;
-      await sleep(2000);
-    }
-
-    if (!json) break;
-    if (json.status && !["OK", "ZERO_RESULTS"].includes(json.status)) {
-      throw new Error(`Google nearby status: ${json.status}${json.error_message ? ` (${json.error_message})` : ""}`);
-    }
-
-    allResults.push(...(json.results ?? []));
-    nextPageToken = json.next_page_token;
-    page += 1;
-
-    if (!nextPageToken) break;
-    await sleep(2000);
+  // Places API (New) caps at 20 per request — no pagination token
+  const count = Math.min(maxResults, 20);
+  if (maxResults > 20) {
+    console.warn(`[google] Places API (New): maxResultCount capped at 20 (requested ${maxResults})`);
   }
 
-  return allResults.slice(0, maxResults);
+  const useTextSearch = keyword.trim().length > 0;
+  const url = useTextSearch ? GOOGLE_TEXT_URL : GOOGLE_NEARBY_URL;
+  const circle = { center: { latitude: lat, longitude: lng }, radiusMeters: radius };
+  const body = useTextSearch
+    ? {
+        textQuery: keyword.trim(),
+        // locationRestriction (not locationBias) enforces the radius strictly
+        locationRestriction: { circle },
+        maxResultCount: count,
+        rankPreference: "RELEVANCE",
+      }
+    : {
+        locationRestriction: { circle },
+        includedTypes: ["restaurant"],
+        maxResultCount: count,
+        rankPreference: "DISTANCE",
+      };
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Goog-Api-Key": apiKey,
+      "X-Goog-FieldMask": PLACES_NEW_FIELD_MASK,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => String(res.status));
+    throw new Error(`Google Places (New) nearby call failed (${res.status}): ${errText}`);
+  }
+
+  const json = (await res.json()) as { places?: GooglePlaceNew[]; error?: { message?: string } };
+  if (json.error) throw new Error(`Google Places (New): ${json.error.message ?? "unknown error"}`);
+
+  return (json.places ?? []).map(adaptNearbyPlace);
 }
 
 async function fetchGoogleDetails(apiKey: string, placeId: string): Promise<GoogleDetailsResult | null> {
-  const url = new URL(GOOGLE_DETAILS_URL);
-  url.searchParams.set("key", apiKey);
-  url.searchParams.set("place_id", placeId);
-  url.searchParams.set(
-    "fields",
-    "formatted_address,formatted_phone_number,opening_hours,reviews,photos,types,rating,price_level",
-  );
-  const res = await fetch(url.toString());
+  const detailsMask = [
+    "id",
+    "displayName",
+    "formattedAddress",
+    "internationalPhoneNumber",
+    "currentOpeningHours",
+    "reviews",
+    "photos",
+    "types",
+    "rating",
+    "priceLevel",
+  ].join(",");
+
+  const res = await fetch(`${GOOGLE_DETAILS_URL}/${placeId}`, {
+    headers: {
+      "X-Goog-Api-Key": apiKey,
+      "X-Goog-FieldMask": detailsMask,
+    },
+  });
   if (!res.ok) return null;
-  const json = (await res.json()) as { status?: string; result?: GoogleDetailsResult };
-  if (json.status && !["OK", "ZERO_RESULTS"].includes(json.status)) return null;
-  return json.result ?? null;
+
+  const p = (await res.json()) as GooglePlaceNew;
+  if (!p.id) return null;
+
+  return {
+    formatted_address: p.formattedAddress,
+    formatted_phone_number: p.internationalPhoneNumber,
+    opening_hours: p.currentOpeningHours?.weekdayDescriptions?.length
+      ? { weekday_text: p.currentOpeningHours.weekdayDescriptions }
+      : undefined,
+    reviews: p.reviews?.map((r) => ({
+      author_name: r.authorAttribution?.displayName,
+      rating: r.rating,
+      text: r.text?.text,
+      relative_time_description: r.relativePublishTimeDescription,
+    })),
+    photos: p.photos?.map((ph) => ({ photo_reference: ph.name })),
+    types: p.types,
+    rating: p.rating,
+    price_level: parsePriceLevel(p.priceLevel),
+  };
 }
 
 function enrichRestaurant<T extends Record<string, any>>(restaurant: T) {
@@ -746,6 +997,8 @@ async function enrichRestaurantDetailsFromGoogle<T extends {
   phone: string | null;
   openingHours: RestaurantOpeningHour[] | null;
   reviews: RestaurantReview[] | null;
+  googlePlaceId?: string | null;
+  reviewCount?: number | null;
 }>(restaurant: T): Promise<T> {
   const alreadyEnriched =
     Boolean(restaurant.phone) &&
@@ -789,6 +1042,8 @@ async function enrichRestaurantDetailsFromGoogle<T extends {
       phone,
       openingHours: openingHours ?? restaurant.openingHours ?? null,
       reviews: reviews ?? restaurant.reviews ?? null,
+      googlePlaceId: match.place_id || restaurant.googlePlaceId || undefined,
+      reviewCount: details?.reviews?.length ?? restaurant.reviewCount ?? 0,
     });
 
     return (updated as T | undefined) ?? restaurant;
@@ -938,10 +1193,152 @@ export async function registerRoutes(
 
   // Preload API keys from DB into memory store
   await loadFromDb((key) => storage.getAdminConfig(key));
+  const openAiApiKey = process.env.OPENAI_API_KEY?.trim();
+  const openAiModel = process.env.OPENAI_MENU_MODEL?.trim() || "gpt-4o-mini";
+  const openAiClient = openAiApiKey ? new OpenAI({ apiKey: openAiApiKey }) : null;
+
+  async function runMenuGenerationJob(jobId: string, restaurantsToProcess: Array<{
+    id: number;
+    name: string;
+    category: string;
+    description: string;
+    district: string | null;
+    priceLevel: number;
+  }>): Promise<void> {
+    const job = menuGenerateJobs.get(jobId);
+    if (!job) return;
+
+    try {
+      for (const restaurant of restaurantsToProcess) {
+        let restaurantResult: MenuGenerateRestaurantResult | null = null;
+        try {
+          const existingMenus = await storage.listMenusByRestaurant(restaurant.id);
+          const existingRealCount = countRealActiveMenus(existingMenus.map((item) => ({
+            name: item.name,
+            isActive: item.isActive,
+          })));
+
+          if (!job.force && existingRealCount >= 3) {
+            restaurantResult = {
+              restaurantId: restaurant.id,
+              restaurantName: restaurant.name,
+              status: "skipped",
+              reason: "existing_real_menus>=3",
+              existingRealCount,
+              createdCount: 0,
+              createdItemNames: [],
+              missingImages: 0,
+            };
+            job.summary.skippedRestaurants += 1;
+          } else {
+            const targetCount = 5 + (restaurant.id % 4);
+            const cuisineKey = detectCuisineKey(restaurant.category);
+            let llmDishes: MenuTextCandidate[] | undefined;
+            let llmError: string | undefined;
+
+            if (openAiClient) {
+              try {
+                llmDishes = await requestMenuTextFromOpenAI({
+                  client: openAiClient,
+                  model: openAiModel,
+                  restaurant,
+                  cuisineKey,
+                  targetCount,
+                });
+              } catch (error) {
+                llmError = error instanceof Error ? error.message : "openai_error";
+              }
+            } else {
+              llmError = "openai_not_configured";
+            }
+
+            const generated = buildMenuDrafts({
+              restaurant,
+              targetCount,
+              existingNames: existingMenus.map((item) => item.name),
+              llmDishes,
+            });
+
+            if (generated.drafts.length === 0) {
+              restaurantResult = {
+                restaurantId: restaurant.id,
+                restaurantName: restaurant.name,
+                status: "failed",
+                reason: llmError ? `openai_error:${llmError}` : "no_drafts_generated",
+                existingRealCount,
+                createdCount: 0,
+                createdItemNames: [],
+                missingImages: 0,
+              };
+              job.summary.failedRestaurants += 1;
+            } else {
+              const createdNames: string[] = [];
+              for (const draft of generated.drafts) {
+                await storage.createMenu({
+                  restaurantId: restaurant.id,
+                  name: draft.name,
+                  description: draft.description,
+                  imageUrl: draft.imageUrl,
+                  priceApprox: draft.priceApprox,
+                  tags: draft.tags,
+                  dietFlags: draft.dietFlags,
+                  isActive: draft.isActive,
+                  isSponsored: draft.isSponsored,
+                });
+                createdNames.push(draft.name);
+              }
+
+              const reasonParts: string[] = [];
+              if (llmError && generated.usedFallback) reasonParts.push("openai_error_fallback");
+              if (!openAiClient) reasonParts.push("openai_not_configured_template_only");
+              if (generated.usedLlm && generated.usedFallback) reasonParts.push("partial_fallback");
+
+              restaurantResult = {
+                restaurantId: restaurant.id,
+                restaurantName: restaurant.name,
+                status: "generated",
+                reason: reasonParts.length ? reasonParts.join("|") : undefined,
+                existingRealCount,
+                createdCount: createdNames.length,
+                createdItemNames: createdNames,
+                missingImages: generated.missingImages,
+              };
+              job.summary.generatedRestaurants += 1;
+              job.summary.generatedItems += createdNames.length;
+            }
+          }
+        } catch (error) {
+          restaurantResult = {
+            restaurantId: restaurant.id,
+            restaurantName: restaurant.name,
+            status: "failed",
+            reason: error instanceof Error ? error.message : "generation_failed",
+            existingRealCount: 0,
+            createdCount: 0,
+            createdItemNames: [],
+            missingImages: 0,
+          };
+          job.summary.failedRestaurants += 1;
+        } finally {
+          job.summary.processed += 1;
+          if (restaurantResult) job.results.push(restaurantResult);
+        }
+      }
+      job.status = "completed";
+      job.finishedAt = new Date().toISOString();
+    } catch {
+      job.status = "failed";
+      job.finishedAt = new Date().toISOString();
+    } finally {
+      menuGenerateJobs.set(jobId, job);
+      pruneMenuGenerateJobs();
+    }
+  }
 
   // Uploads directory — served at /api/uploads/*
   const UPLOADS_DIR = path.resolve(process.cwd(), "uploads");
   if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+  const MAX_UPLOAD_BYTES = 10 * 1024 * 1024; // 10 MB decoded image size cap
   app.use("/api/uploads", express.static(UPLOADS_DIR));
 
   // Public endpoint — no auth — fetched by frontend to gate UI features
@@ -1004,10 +1401,8 @@ export async function registerRoutes(
     }
   });
 
-  // Admin-only file upload — accepts base64 image, saves to disk, returns public URL
-  app.post("/api/admin/upload", async (req, res) => {
+  async function handleImageUpload(req: Request, res: Response) {
     try {
-      if (!requireAdminSession(req, res)) return;
       const { name, type, data } = z.object({
         name: z.string().min(1).max(200),
         type: z.string().regex(/^image\//),
@@ -1023,6 +1418,9 @@ export async function registerRoutes(
       const filename = `${crypto.randomUUID()}.${ext}`;
       const filePath = path.join(UPLOADS_DIR, filename);
       const buffer = Buffer.from(data, "base64");
+      if (buffer.length > MAX_UPLOAD_BYTES) {
+        return res.status(413).json({ message: "Image too large. Maximum size is 10MB." });
+      }
       fs.writeFileSync(filePath, buffer);
 
       res.json({ url: `/api/uploads/${filename}` });
@@ -1032,6 +1430,24 @@ export async function registerRoutes(
       }
       res.status(500).json({ message: "Upload failed" });
     }
+  }
+
+  // Admin-only file upload — accepts base64 image, saves to disk, returns public URL
+  app.post("/api/admin/upload", async (req, res) => {
+    if (!requireAdminSession(req, res)) return;
+    await handleImageUpload(req, res);
+  });
+
+  // Owner-upload endpoint (requires owner/admin auth; owners must have at least one approved claim)
+  app.post("/api/owner/upload", async (req, res) => {
+    if (!requireOwnerOrAdmin(req, res)) return;
+    if (!req.session?.isAdmin) {
+      const ownerScope = await getOwnerScope(req);
+      if (!ownerScope || ownerScope.approvedRestaurantIds.size === 0) {
+        return res.status(403).json({ message: "Approved claimed restaurant required for uploads" });
+      }
+    }
+    await handleImageUpload(req, res);
   });
 
   app.get("/api/auth/line/verify", async (req, res) => {
@@ -1123,8 +1539,25 @@ export async function registerRoutes(
 
   app.post("/api/menus", async (req, res) => {
     try {
+      if (!requireOwnerOrAdmin(req, res)) return;
       const input = insertMenuSchema.parse(req.body ?? {});
-      const created = await storage.createMenu(input);
+
+      let safeInput = input;
+      if (req.session?.sessionType === "owner") {
+        const ownerScope = await getOwnerScope(req);
+        if (!ownerScope || ownerScope.approvedRestaurantIds.size === 0) {
+          return res.status(403).json({ message: "Approved claimed restaurant required" });
+        }
+        const targetRestaurantId = ownerScope.approvedRestaurantIds.has(input.restaurantId)
+          ? input.restaurantId
+          : ownerScope.activeRestaurantId;
+        if (!targetRestaurantId) {
+          return res.status(403).json({ message: "No approved restaurant available for this owner" });
+        }
+        safeInput = { ...input, restaurantId: targetRestaurantId };
+      }
+
+      const created = await storage.createMenu(safeInput);
       res.status(201).json(created);
     } catch (err) {
       if (err instanceof z.ZodError) {
@@ -1136,9 +1569,26 @@ export async function registerRoutes(
 
   app.put("/api/menus/:id", async (req, res) => {
     try {
+      if (!requireOwnerOrAdmin(req, res)) return;
       const id = Number.parseInt(req.params.id, 10);
       if (!Number.isFinite(id)) return res.status(400).json({ message: "Invalid menu ID" });
       const updates = insertMenuSchema.partial().parse(req.body ?? {});
+
+      if (req.session?.sessionType === "owner") {
+        const ownerScope = await getOwnerScope(req);
+        if (!ownerScope || ownerScope.approvedRestaurantIds.size === 0) {
+          return res.status(403).json({ message: "Approved claimed restaurant required" });
+        }
+        const menu = await storage.getMenuById(id);
+        if (!menu) return res.status(404).json({ message: "Menu not found" });
+        if (!ownerScope.approvedRestaurantIds.has(menu.restaurantId)) {
+          return res.status(403).json({ message: "Not allowed to edit this menu item" });
+        }
+        if (updates.restaurantId && updates.restaurantId !== menu.restaurantId) {
+          return res.status(403).json({ message: "Owners cannot move menu items across restaurants" });
+        }
+      }
+
       const updated = await storage.updateMenu(id, updates);
       if (!updated) return res.status(404).json({ message: "Menu not found" });
       res.json(updated);
@@ -1152,8 +1602,257 @@ export async function registerRoutes(
 
   app.delete("/api/menus/:id", async (req, res) => {
     try {
+      if (!requireOwnerOrAdmin(req, res)) return;
       const id = Number.parseInt(req.params.id, 10);
       if (!Number.isFinite(id)) return res.status(400).json({ message: "Invalid menu ID" });
+
+      if (req.session?.sessionType === "owner") {
+        const ownerScope = await getOwnerScope(req);
+        if (!ownerScope || ownerScope.approvedRestaurantIds.size === 0) {
+          return res.status(403).json({ message: "Approved claimed restaurant required" });
+        }
+        const menu = await storage.getMenuById(id);
+        if (!menu) return res.status(404).json({ message: "Menu not found" });
+        if (!ownerScope.approvedRestaurantIds.has(menu.restaurantId)) {
+          return res.status(403).json({ message: "Not allowed to delete this menu item" });
+        }
+      }
+
+      const deleted = await storage.deleteMenu(id);
+      if (!deleted) return res.status(404).json({ message: "Menu not found" });
+      res.status(204).send();
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.get("/api/owner/restaurant", async (req, res) => {
+    try {
+      if (!requireOwnerOrAdmin(req, res)) return;
+
+      let restaurantId: number | null = null;
+      let allowedRestaurantIds: number[] = [];
+
+      if (req.session?.isAdmin) {
+        const adminRestaurantId = Number(req.query.restaurantId ?? req.query.id);
+        if (!Number.isFinite(adminRestaurantId) || adminRestaurantId <= 0) {
+          return res.status(400).json({ message: "restaurantId is required for admin requests" });
+        }
+        restaurantId = adminRestaurantId;
+      } else {
+        const ownerScope = await getOwnerScope(req);
+        if (!ownerScope || ownerScope.approvedRestaurantIds.size === 0) {
+          return res.status(403).json({ message: "Approved claimed restaurant required" });
+        }
+        restaurantId = ownerScope.activeRestaurantId;
+        allowedRestaurantIds = Array.from(ownerScope.approvedRestaurantIds);
+      }
+
+      if (!restaurantId) {
+        return res.status(404).json({ message: "No restaurant assigned to this owner account" });
+      }
+
+      const restaurant = await storage.getRestaurantById(restaurantId);
+      if (!restaurant) return res.status(404).json({ message: "Restaurant not found" });
+      const menuItems = await storage.listMenusByRestaurant(restaurant.id);
+
+      res.json({
+        restaurant: enrichRestaurant(restaurant),
+        menus: menuItems,
+        allowedRestaurantIds,
+      });
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.patch("/api/owner/restaurant", async (req, res) => {
+    try {
+      if (!requireOwnerOrAdmin(req, res)) return;
+
+      let restaurantId: number | null = null;
+      if (req.session?.isAdmin) {
+        const adminRestaurantId = Number(req.body?.restaurantId ?? req.query.restaurantId);
+        if (!Number.isFinite(adminRestaurantId) || adminRestaurantId <= 0) {
+          return res.status(400).json({ message: "restaurantId is required for admin requests" });
+        }
+        restaurantId = adminRestaurantId;
+      } else {
+        const ownerScope = await getOwnerScope(req);
+        if (!ownerScope || ownerScope.approvedRestaurantIds.size === 0 || !ownerScope.activeRestaurantId) {
+          return res.status(403).json({ message: "Approved claimed restaurant required" });
+        }
+        restaurantId = ownerScope.activeRestaurantId;
+      }
+
+      const current = await storage.getRestaurantById(restaurantId);
+      if (!current) return res.status(404).json({ message: "Restaurant not found" });
+
+      const input = z.object({
+        name: z.string().min(1).max(200).optional(),
+        description: z.string().min(1).max(4000).optional(),
+        imageUrl: z.string().optional(),
+        photos: z.array(z.string()).max(20).optional(),
+        category: z.string().min(1).max(120).optional(),
+        priceLevel: z.number().int().min(1).max(4).optional(),
+        rating: z.string().min(1).max(10).optional(),
+        address: z.string().min(1).max(500).optional(),
+        phone: z.string().nullable().optional(),
+        district: z.string().nullable().optional(),
+        openingHours: z.array(z.object({
+          day: z.string().min(1),
+          hours: z.string().min(1),
+        })).nullable().optional(),
+        reviews: z.array(z.object({
+          author: z.string().min(1),
+          rating: z.number().min(1).max(5),
+          text: z.string().min(1),
+          timeAgo: z.string().optional(),
+        })).nullable().optional(),
+        vibes: z.array(z.string()).optional(),
+      }).parse(req.body ?? {});
+
+      const updates: Partial<InsertRestaurant> = {
+        name: input.name,
+        description: input.description,
+        category: input.category,
+        priceLevel: input.priceLevel,
+        rating: input.rating,
+        address: input.address,
+        phone: input.phone,
+        district: input.district,
+        openingHours: input.openingHours,
+        reviews: input.reviews,
+        vibes: input.vibes,
+      };
+
+      const candidateCover = typeof input.imageUrl === "string" ? input.imageUrl.trim() : current.imageUrl;
+      const candidatePhotos = Array.from(new Set([
+        ...(input.photos ?? current.photos ?? []),
+        candidateCover,
+      ].map((url) => String(url ?? "").trim()).filter(Boolean))).slice(0, 20);
+
+      updates.imageUrl = candidateCover;
+      updates.photos = candidatePhotos;
+
+      const updated = await storage.updateRestaurant(restaurantId, updates);
+      if (!updated) return res.status(404).json({ message: "Restaurant not found" });
+
+      res.json(enrichRestaurant(updated));
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid payload" });
+      }
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.get("/api/owner/menus", async (req, res) => {
+    try {
+      if (!requireOwnerOrAdmin(req, res)) return;
+
+      let restaurantId: number | null = null;
+      if (req.session?.isAdmin) {
+        const adminRestaurantId = Number(req.query.restaurantId);
+        if (!Number.isFinite(adminRestaurantId) || adminRestaurantId <= 0) {
+          return res.status(400).json({ message: "restaurantId is required for admin requests" });
+        }
+        restaurantId = adminRestaurantId;
+      } else {
+        const ownerScope = await getOwnerScope(req);
+        if (!ownerScope || ownerScope.approvedRestaurantIds.size === 0 || !ownerScope.activeRestaurantId) {
+          return res.status(403).json({ message: "Approved claimed restaurant required" });
+        }
+        restaurantId = ownerScope.activeRestaurantId;
+      }
+
+      const menuItems = await storage.listMenusByRestaurant(restaurantId);
+      res.json(menuItems);
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.post("/api/owner/menus", async (req, res) => {
+    try {
+      if (!requireOwnerOrAdmin(req, res)) return;
+
+      let restaurantId: number | null = null;
+      if (req.session?.isAdmin) {
+        const adminRestaurantId = Number(req.body?.restaurantId ?? req.query.restaurantId);
+        if (!Number.isFinite(adminRestaurantId) || adminRestaurantId <= 0) {
+          return res.status(400).json({ message: "restaurantId is required for admin requests" });
+        }
+        restaurantId = adminRestaurantId;
+      } else {
+        const ownerScope = await getOwnerScope(req);
+        if (!ownerScope || ownerScope.approvedRestaurantIds.size === 0 || !ownerScope.activeRestaurantId) {
+          return res.status(403).json({ message: "Approved claimed restaurant required" });
+        }
+        restaurantId = ownerScope.activeRestaurantId;
+      }
+
+      const input = insertMenuSchema.omit({ restaurantId: true }).parse(req.body ?? {});
+      const created = await storage.createMenu({ ...input, restaurantId });
+      res.status(201).json(created);
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid payload" });
+      }
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.patch("/api/owner/menus/:id", async (req, res) => {
+    try {
+      if (!requireOwnerOrAdmin(req, res)) return;
+      const id = Number.parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) return res.status(400).json({ message: "Invalid menu ID" });
+
+      const menu = await storage.getMenuById(id);
+      if (!menu) return res.status(404).json({ message: "Menu not found" });
+
+      if (!req.session?.isAdmin) {
+        const ownerScope = await getOwnerScope(req);
+        if (!ownerScope || ownerScope.approvedRestaurantIds.size === 0) {
+          return res.status(403).json({ message: "Approved claimed restaurant required" });
+        }
+        if (!ownerScope.approvedRestaurantIds.has(menu.restaurantId)) {
+          return res.status(403).json({ message: "Not allowed to edit this menu item" });
+        }
+      }
+
+      const updates = insertMenuSchema.omit({ restaurantId: true }).partial().parse(req.body ?? {});
+      const updated = await storage.updateMenu(id, updates);
+      if (!updated) return res.status(404).json({ message: "Menu not found" });
+      res.json(updated);
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid payload" });
+      }
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.delete("/api/owner/menus/:id", async (req, res) => {
+    try {
+      if (!requireOwnerOrAdmin(req, res)) return;
+      const id = Number.parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) return res.status(400).json({ message: "Invalid menu ID" });
+
+      const menu = await storage.getMenuById(id);
+      if (!menu) return res.status(404).json({ message: "Menu not found" });
+
+      if (!req.session?.isAdmin) {
+        const ownerScope = await getOwnerScope(req);
+        if (!ownerScope || ownerScope.approvedRestaurantIds.size === 0) {
+          return res.status(403).json({ message: "Approved claimed restaurant required" });
+        }
+        if (!ownerScope.approvedRestaurantIds.has(menu.restaurantId)) {
+          return res.status(403).json({ message: "Not allowed to delete this menu item" });
+        }
+      }
+
       const deleted = await storage.deleteMenu(id);
       if (!deleted) return res.status(404).json({ message: "Menu not found" });
       res.status(204).send();
@@ -1217,7 +1916,8 @@ export async function registerRoutes(
           query: input.query,
           mode: input.mode,
           forceRefresh: input.forceRefresh,
-          sourcePreference: input.sourcePreference,
+          // Default to hybrid so baseline data uses both OSM + Google enrichment.
+          sourcePreference: input.sourcePreference ?? "hybrid",
         });
         // Upsert all places into DB in parallel so they get real IDs for detail routing
         const ids = await Promise.all(result.data.map((p) => storage.findOrCreateFromPlace(p)));
@@ -2099,7 +2799,6 @@ export async function registerRoutes(
   app.get("/api/admin/dashboard", async (req, res) => {
     try {
       if (!requireAdminSession(req, res)) return;
-      await ensureDefaultBanners();
       const allRestaurants = await storage.getRestaurants();
       const allProfiles = await storage.listProfiles(2000);
       const events = await buildAnalyticsEvents();
@@ -2381,10 +3080,70 @@ export async function registerRoutes(
   app.patch("/api/campaigns/:id", updateCampaignHandler);
   app.delete("/api/campaigns/:id", deleteCampaignHandler);
 
+  function isBannerCurrentlyLive(banner: { isActive: boolean; startDate: string | null; endDate: string | null }): boolean {
+    if (!banner.isActive) return false;
+    const today = new Date().toISOString().slice(0, 10);
+    const startDate = banner.startDate?.trim().slice(0, 10);
+    const endDate = banner.endDate?.trim().slice(0, 10);
+    if (startDate && startDate > today) return false;
+    if (endDate && endDate < today) return false;
+    return true;
+  }
+
+  app.get("/api/public/banners", async (req, res) => {
+    try {
+      const position = typeof req.query.position === "string" ? req.query.position.trim() : undefined;
+      const limitParam = typeof req.query.limit === "string" ? Number(req.query.limit) : NaN;
+      const limit = Number.isFinite(limitParam)
+        ? Math.min(Math.max(Math.floor(limitParam), 1), 10)
+        : 3;
+
+      const banners = await storage.listPublicActiveBanners(position);
+      res.json(banners.slice(0, limit));
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.post("/api/public/banners/:id/impression", async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id)) return res.status(400).json({ message: "Invalid banner id" });
+
+      const existing = await storage.getBannerById(id);
+      if (!existing || !isBannerCurrentlyLive(existing)) {
+        return res.status(404).json({ message: "Banner not found" });
+      }
+
+      const updated = await storage.incrementBannerImpressions(id);
+      if (!updated) return res.status(404).json({ message: "Banner not found" });
+      res.status(204).send();
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.post("/api/public/banners/:id/click", async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id)) return res.status(400).json({ message: "Invalid banner id" });
+
+      const existing = await storage.getBannerById(id);
+      if (!existing || !isBannerCurrentlyLive(existing)) {
+        return res.status(404).json({ message: "Banner not found" });
+      }
+
+      const updated = await storage.incrementBannerClicks(id);
+      if (!updated) return res.status(404).json({ message: "Banner not found" });
+      res.status(204).send();
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
   app.get("/api/banners", async (req, res) => {
     try {
       if (!requireAdminSession(req, res)) return;
-      await ensureDefaultBanners();
       const banners = await storage.listBanners();
       res.json(banners);
     } catch {
@@ -2679,13 +3438,25 @@ export async function registerRoutes(
       }
 
       if (serviceId === "google_places") {
-        const url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=13.7563,100.5018&radius=100&type=restaurant&key=${encodeURIComponent(key)}`;
-        const r = await fetch(url);
-        const json = await r.json() as { status: string };
-        if (json.status === "REQUEST_DENIED") {
-          return res.json({ ok: false, message: "Key rejected by Google: REQUEST_DENIED" });
+        const probeRes = await fetch("https://places.googleapis.com/v1/places:searchNearby", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": key,
+            "X-Goog-FieldMask": "places.id",
+          },
+          body: JSON.stringify({
+            locationRestriction: { circle: { center: { latitude: 13.7563, longitude: 100.5018 }, radiusMeters: 100 } },
+            includedTypes: ["restaurant"],
+            maxResultCount: 1,
+          }),
+        });
+        const probeJson = await probeRes.json() as { places?: unknown[]; error?: { status?: string; message?: string } };
+        if (!probeRes.ok || probeJson.error) {
+          const msg = probeJson.error?.message ?? `HTTP ${probeRes.status}`;
+          return res.json({ ok: false, message: `Key rejected by Google Places (New): ${msg}` });
         }
-        return res.json({ ok: true, message: `Google Places API responded: ${json.status}` });
+        return res.json({ ok: true, message: "Google Places API (New) responded OK" });
       }
 
       if (serviceId === "line_messaging") {
@@ -2716,6 +3487,96 @@ export async function registerRoutes(
       if (err instanceof z.ZodError) {
         return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid params" });
       }
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.get("/api/admin/menus/stats", async (req, res) => {
+    try {
+      if (!requireAdminSession(req, res)) return;
+      const stats = await storage.getMenuAdminStats();
+      res.json(stats);
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.post("/api/admin/menus/generate", async (req, res) => {
+    try {
+      if (!requireAdminSession(req, res)) return;
+      const input = z.object({
+        restaurantId: z.number().int().positive().optional(),
+        force: z.boolean().optional().default(false),
+      }).parse(req.body ?? {});
+
+      const selectedRestaurants = input.restaurantId
+        ? (() => {
+            const id = input.restaurantId!;
+            return storage.getRestaurantById(id).then((restaurant) => (restaurant ? [restaurant] : []));
+          })()
+        : storage.getRestaurants();
+
+      const restaurants = (await selectedRestaurants).map((restaurant) => ({
+        id: restaurant.id,
+        name: restaurant.name,
+        category: restaurant.category,
+        description: restaurant.description ?? "",
+        district: restaurant.district ?? null,
+        priceLevel: restaurant.priceLevel ?? 2,
+      }));
+
+      if (!restaurants.length) {
+        return res.status(404).json({ message: "No restaurants found for generation scope" });
+      }
+
+      const jobId = createMenuGenerateJobId();
+      const now = new Date().toISOString();
+      const job: MenuGenerateJob = {
+        jobId,
+        status: "running",
+        restaurantId: input.restaurantId ?? null,
+        force: input.force,
+        summary: {
+          selected: restaurants.length,
+          processed: 0,
+          generatedRestaurants: 0,
+          generatedItems: 0,
+          skippedRestaurants: 0,
+          failedRestaurants: 0,
+        },
+        results: [],
+        startedAt: now,
+      };
+      menuGenerateJobs.set(jobId, job);
+      pruneMenuGenerateJobs();
+
+      setTimeout(() => {
+        void runMenuGenerationJob(jobId, restaurants);
+      }, 0);
+
+      res.status(202).json({
+        jobId,
+        status: "running",
+        totalRestaurants: restaurants.length,
+        startedAt: now,
+      });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid payload" });
+      }
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.get("/api/admin/menus/generate/:jobId", async (req, res) => {
+    try {
+      if (!requireAdminSession(req, res)) return;
+      const jobId = String(req.params.jobId ?? "").trim();
+      if (!jobId) return res.status(400).json({ message: "Invalid job id" });
+      const job = menuGenerateJobs.get(jobId);
+      if (!job) return res.status(404).json({ message: "Job not found" });
+      res.json(job);
+    } catch {
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -3170,6 +4031,78 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/admin/restaurants/import/osm", async (req, res) => {
+    try {
+      if (!requireAdminSession(req, res)) return;
+      const input = z.object({
+        lat: z.number().min(-90).max(90),
+        lng: z.number().min(-180).max(180),
+        radius: z.number().int().min(100).max(50000).optional().default(2000),
+        enrichWithGoogle: z.boolean().optional().default(true),
+      }).parse(req.body);
+
+      const osmPlaces = await queryOverpass(input.lat, input.lng, input.radius);
+
+      let googleMap = new Map<string, NormalizedPlace>();
+      if (input.enrichWithGoogle) {
+        const apiKey = process.env.GOOGLE_PLACES_API_KEY?.trim();
+        if (apiKey) {
+          const googlePlaces = await queryGoogle(input.lat, input.lng, input.radius);
+          for (const gp of googlePlaces) {
+            const key = gp.name.toLowerCase().replace(/[^a-z0-9]/g, "");
+            googleMap.set(key, gp);
+          }
+        }
+      }
+
+      let saved = 0;
+      let failed = 0;
+      const results: { name: string; id: number; enriched: boolean }[] = [];
+
+      for (const place of osmPlaces) {
+        try {
+          const key = place.name.toLowerCase().replace(/[^a-z0-9]/g, "");
+          const google = googleMap.get(key);
+          const enriched: NormalizedPlace = {
+            ...place,
+            rating: place.rating ?? google?.rating,
+            priceLevel: place.priceLevel ?? google?.priceLevel,
+            photos: (google?.photos?.length ? google.photos : place.photos) ?? [],
+            phone: place.phone ?? google?.phone,
+          };
+          const id = await storage.findOrCreateFromPlace(enriched);
+          await storage.updateRestaurant(id, {
+            osmId: place.id,
+            ...(google?.photos?.length ? {
+              imageUrl: google.photos[0],
+              photos: google.photos,
+              rating: enriched.rating ?? "N/A",
+              priceLevel: enriched.priceLevel ?? 2,
+              googlePlaceId: google.id.startsWith("google:") ? google.id.slice(7) : undefined,
+            } : {}),
+          });
+          results.push({ name: place.name, id, enriched: !!google });
+          saved += 1;
+        } catch {
+          failed += 1;
+        }
+      }
+
+      await storage.createPlacesRequestLog({
+        source: "osm",
+        cacheHit: false,
+        fallbackUsed: input.enrichWithGoogle,
+        query: "admin-import:osm",
+        resultCount: saved,
+      });
+
+      res.json({ ok: true, fetched: osmPlaces.length, saved, failed, results });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      res.status(500).json({ message });
+    }
+  });
+
   app.post("/api/admin/restaurants/import/google", async (req, res) => {
     const inputSchema = z.object({
       lat: z.number().min(-90).max(90),
@@ -3234,13 +4167,17 @@ export async function registerRoutes(
         logImport(run, `Processing ${i + 1}/${selected.length}: ${placeName} (placeId=${placeId})`);
 
         try {
-          const shouldFetchDetails = input.includeDetails && i < detailsLimit;
-          const details = shouldFetchDetails ? await fetchGoogleDetails(apiKey, place.place_id) : null;
+          // Use rich data already returned by Nearby Search (new API returns it in one call).
+          // Only fall back to a separate Details call if the nearby result lacks the data.
+          const shouldFetchDetails = input.includeDetails && i < detailsLimit && !place._details;
+          const details: GoogleDetailsResult | null = place._details ?? (shouldFetchDetails ? await fetchGoogleDetails(apiKey, place.place_id) : null);
           if (shouldFetchDetails) {
             logImport(
               run,
               `Details ${details ? "loaded" : "not available"} for ${placeName} (placeId=${placeId})`,
             );
+          } else if (place._details) {
+            logImport(run, `Details pre-loaded from Nearby Search for ${placeName}`);
           }
 
           const mergedTypes = details?.types?.length ? details.types : place.types;
@@ -3258,8 +4195,11 @@ export async function registerRoutes(
             );
             continue;
           }
-          const photoRef = details?.photos?.[0]?.photo_reference ?? place.photos?.[0]?.photo_reference;
-          const imageUrl = photoRef ? toPhotoUrl(photoRef, apiKey) : "";
+          const allPhotoRefs = (details?.photos ?? place.photos ?? []).slice(0, 5);
+          const allPhotoUrls = allPhotoRefs
+            .map((p: { photo_reference: string }) => p.photo_reference ? toPhotoUrl(p.photo_reference, apiKey) : null)
+            .filter((u): u is string => !!u);
+          const imageUrl = allPhotoUrls[0] ?? "";
           const openingHours = toOpeningHours(details?.opening_hours?.weekday_text);
           const reviews = toReviews(details?.reviews);
 
@@ -3272,7 +4212,7 @@ export async function registerRoutes(
             category,
             rating,
             priceLevel: safePrice,
-            photos: imageUrl ? [imageUrl] : [],
+            photos: allPhotoUrls,
             phone: details?.formatted_phone_number,
             source: "google",
           };
@@ -3282,6 +4222,7 @@ export async function registerRoutes(
             name: placeName,
             description: category,
             imageUrl,
+            photos: allPhotoUrls,
             lat: String(lat),
             lng: String(lng),
             category,
@@ -3291,6 +4232,8 @@ export async function registerRoutes(
             phone: details?.formatted_phone_number ?? null,
             openingHours: openingHours ?? null,
             reviews: reviews ?? null,
+            googlePlaceId: place.place_id,
+            reviewCount: details?.reviews?.length ?? 0,
           });
           run.summary.saved += 1;
           const detailMode = details ? "detailed" : "basic";
@@ -3472,39 +4415,140 @@ export async function registerRoutes(
     }
   });
 
+  // Re-enrich images: fetch Google photo for restaurants with empty imageUrl
+  app.post("/api/admin/restaurants/re-enrich-images", async (req, res) => {
+    try {
+      if (!requireAdminSession(req, res)) return;
+      const apiKey = process.env.GOOGLE_PLACES_API_KEY?.trim();
+      if (!apiKey) return res.status(400).json({ message: "GOOGLE_PLACES_API_KEY not configured" });
+
+      const input = z.object({
+        limit: z.number().int().min(1).max(200).optional().default(50),
+        includeLegacy: z.boolean().optional().default(true),
+      }).parse(req.body ?? {});
+
+      const all = await storage.getRestaurants();
+      const missing = all
+        .filter((r) => !r.imageUrl || (input.includeLegacy && isLegacyGooglePhotoUrl(r.imageUrl)))
+        .slice(0, input.limit);
+
+      let updated = 0;
+      let failed = 0;
+
+      for (const r of missing) {
+        try {
+          const lat = Number(r.lat);
+          const lng = Number(r.lng);
+          if (!Number.isFinite(lat) || !Number.isFinite(lng)) { failed++; continue; }
+
+          const nearby = await fetchGoogleNearby(apiKey, lat, lng, 50, r.name, 1);
+          if (!nearby.length) { failed++; continue; }
+
+          const photoRef = nearby[0].photos?.[0]?.photo_reference;
+          if (!photoRef) { failed++; continue; }
+
+          const imageUrl = toPhotoUrl(photoRef, apiKey);
+          await storage.updateRestaurant(r.id, { imageUrl, photos: [imageUrl] });
+          updated++;
+        } catch {
+          failed++;
+        }
+      }
+
+      res.json({ ok: true, total: missing.length, updated, failed });
+    } catch (err) {
+      res.status(500).json({ message: err instanceof Error ? err.message : "Unknown error" });
+    }
+  });
+
+  // Auto-assign vibes to ALL restaurants (bulk)
+  app.post("/api/admin/restaurants/auto-assign-vibes/preview", async (req, res) => {
+    try {
+      if (!requireAdminSession(req, res)) return;
+      const input = z.object({
+        limit: z.number().int().min(1).max(1000).optional().default(500),
+        onlyChanged: z.boolean().optional().default(true),
+        search: z.string().optional().default(""),
+      }).parse(req.body ?? {});
+
+      const all = await storage.getRestaurants();
+      const search = input.search.trim().toLowerCase();
+      const filtered = search
+        ? all.filter((r) =>
+            r.name.toLowerCase().includes(search) ||
+            r.category.toLowerCase().includes(search) ||
+            r.address.toLowerCase().includes(search),
+          )
+        : all;
+
+      const selected = filtered.slice(0, input.limit);
+      const rows = selected.map((r) => {
+        const before = normalizeVibes(r.vibes);
+        const after = autoAssignVibes(r);
+        const added = after.filter((v) => !before.includes(v));
+        const removed = before.filter((v) => !after.includes(v));
+        const changed = added.length > 0 || removed.length > 0;
+        return {
+          id: r.id,
+          name: r.name,
+          category: r.category,
+          priceLevel: r.priceLevel,
+          rating: r.rating,
+          before,
+          after,
+          added,
+          removed,
+          changed,
+        };
+      });
+
+      const changedCount = rows.filter((row) => row.changed).length;
+      const items = input.onlyChanged ? rows.filter((row) => row.changed) : rows;
+
+      res.json({
+        scanned: selected.length,
+        changed: changedCount,
+        unchanged: selected.length - changedCount,
+        onlyChanged: input.onlyChanged,
+        items,
+      });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid payload" });
+      }
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
   // Auto-assign vibes to ALL restaurants (bulk)
   app.post("/api/admin/restaurants/auto-assign-vibes", async (req, res) => {
     try {
       if (!requireAdminSession(req, res)) return;
-      const all = await storage.listRestaurants();
-      const CATEGORY_VIBES: Record<string, string[]> = {
-        thai: ["local", "authentic", "spicy"],
-        japanese: ["clean", "fresh", "minimalist"],
-        italian: ["romantic", "cozy", "pasta"],
-        korean: ["social", "bbq", "spicy"],
-        chinese: ["family", "sharing"],
-        seafood: ["fresh", "upscale"],
-        cafe: ["cozy", "casual", "coffee"],
-        coffee: ["cozy", "casual", "coffee"],
-        "street food": ["casual", "quick", "local"],
-        "fine dining": ["upscale", "romantic", "date-night"],
-        burgers: ["casual", "comfort"],
-        pizza: ["casual", "sharing"],
-        healthy: ["fresh", "light", "healthy"],
-        indian: ["spicy", "exotic", "aromatic"],
-        western: ["comfort", "classic"],
-        international: ["trendy", "diverse"],
-      };
+      const input = z.object({
+        ids: z.array(z.number().int().positive()).optional().default([]),
+      }).parse(req.body ?? {});
+
+      const all = await storage.getRestaurants();
+      const targetIds = new Set(input.ids);
+      const targets = targetIds.size > 0 ? all.filter((r) => targetIds.has(r.id)) : all;
       let updated = 0;
-      for (const r of all) {
-        const key = r.category.toLowerCase();
-        const matched = Object.entries(CATEGORY_VIBES).find(([k]) => key.includes(k));
-        const vibes = matched ? matched[1] : ["casual"];
-        await storage.updateRestaurant(r.id, { vibes });
+      let skipped = 0;
+
+      for (const r of targets) {
+        const nextVibes = autoAssignVibes(r);
+        if (sameVibes(r.vibes, nextVibes)) {
+          skipped += 1;
+          continue;
+        }
+        await storage.updateRestaurant(r.id, { vibes: nextVibes });
         updated++;
       }
-      res.json({ updated });
-    } catch {
+
+      res.json({ scanned: targets.length, updated, skipped });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid payload" });
+      }
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -3515,7 +4559,7 @@ export async function registerRoutes(
       const input = z.object({
         name: z.string().min(1),
         description: z.string().min(1),
-        imageUrl: z.string().url(),
+        imageUrl: z.string().min(1),
         lat: z.string().min(1),
         lng: z.string().min(1),
         category: z.string().min(1),
@@ -3524,21 +4568,32 @@ export async function registerRoutes(
         address: z.string().min(1),
         isNew: z.boolean().optional().default(false),
         trendingScore: z.number().int().optional().default(0),
-        phone: z.string().optional(),
+        phone: z.string().nullable().optional(),
         vibes: z.array(z.string()).optional().default([]),
-        district: z.string().optional(),
+        district: z.string().nullable().optional(),
         openingHours: z.array(z.object({
           day: z.string().min(1),
           hours: z.string().min(1),
-        })).optional(),
+        })).nullable().optional(),
         reviews: z.array(z.object({
           author: z.string().min(1),
           rating: z.number().min(1).max(5),
           text: z.string().min(1),
           timeAgo: z.string().optional(),
-        })).optional(),
+        })).nullable().optional(),
+        photos: z.array(z.string()).max(20).optional(),
       }).parse(req.body);
-      const created = await storage.createRestaurant(input);
+      const normalizedCover = input.imageUrl.trim();
+      const normalizedPhotos = Array.from(new Set([
+        ...(input.photos ?? []),
+        normalizedCover,
+      ].map((url) => String(url ?? "").trim()).filter(Boolean))).slice(0, 20);
+
+      const created = await storage.createRestaurant({
+        ...input,
+        imageUrl: normalizedCover,
+        photos: normalizedPhotos,
+      });
       res.status(201).json(created);
     } catch (err) {
       if (err instanceof z.ZodError) {
@@ -3556,27 +4611,7 @@ export async function registerRoutes(
       if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ message: "Invalid restaurant id" });
       const restaurant = await storage.getRestaurantById(id);
       if (!restaurant) return res.status(404).json({ message: "Restaurant not found" });
-      const CATEGORY_VIBES: Record<string, string[]> = {
-        thai: ["local", "authentic", "spicy"],
-        japanese: ["clean", "fresh", "minimalist"],
-        italian: ["romantic", "cozy", "pasta"],
-        korean: ["social", "bbq", "spicy"],
-        chinese: ["family", "sharing"],
-        seafood: ["fresh", "upscale"],
-        cafe: ["cozy", "casual", "coffee"],
-        coffee: ["cozy", "casual", "coffee"],
-        "street food": ["casual", "quick", "local"],
-        "fine dining": ["upscale", "romantic", "date-night"],
-        burgers: ["casual", "comfort"],
-        pizza: ["casual", "sharing"],
-        healthy: ["fresh", "light", "healthy"],
-        indian: ["spicy", "exotic", "aromatic"],
-        western: ["comfort", "classic"],
-        international: ["trendy", "diverse"],
-      };
-      const key = restaurant.category.toLowerCase();
-      const matched = Object.entries(CATEGORY_VIBES).find(([k]) => key.includes(k));
-      const vibes = matched ? matched[1] : ["casual"];
+      const vibes = autoAssignVibes(restaurant);
       const updated = await storage.updateRestaurant(id, { vibes });
       res.json(updated);
     } catch {
@@ -3593,7 +4628,7 @@ export async function registerRoutes(
         .object({
           name: z.string().min(1).optional(),
           description: z.string().min(1).optional(),
-          imageUrl: z.string().url().optional(),
+          imageUrl: z.string().min(1).optional(),
           lat: z.string().min(1).optional(),
           lng: z.string().min(1).optional(),
           category: z.string().min(1).optional(),
@@ -3602,22 +4637,37 @@ export async function registerRoutes(
           address: z.string().min(1).optional(),
           isNew: z.boolean().optional(),
           trendingScore: z.number().int().optional(),
-          phone: z.string().optional(),
+          phone: z.string().nullable().optional(),
           vibes: z.array(z.string()).optional(),
           district: z.string().nullable().optional(),
           openingHours: z.array(z.object({
             day: z.string().min(1),
             hours: z.string().min(1),
-          })).optional(),
+          })).nullable().optional(),
           reviews: z.array(z.object({
             author: z.string().min(1),
             rating: z.number().min(1).max(5),
             text: z.string().min(1),
             timeAgo: z.string().optional(),
-          })).optional(),
+          })).nullable().optional(),
+          photos: z.array(z.string()).max(20).optional(),
         })
         .parse(req.body);
-      const updated = await storage.updateRestaurant(id, updates);
+      const current = await storage.getRestaurantById(id);
+      if (!current) return res.status(404).json({ message: "Restaurant not found" });
+
+      const nextUpdates: Partial<InsertRestaurant> = { ...updates };
+      if (typeof updates.imageUrl === "string" || updates.photos) {
+        const candidateCover = typeof updates.imageUrl === "string" ? updates.imageUrl.trim() : current.imageUrl;
+        const candidatePhotos = Array.from(new Set([
+          ...(updates.photos ?? current.photos ?? []),
+          candidateCover,
+        ].map((url) => String(url ?? "").trim()).filter(Boolean))).slice(0, 20);
+        nextUpdates.imageUrl = candidateCover;
+        nextUpdates.photos = candidatePhotos;
+      }
+
+      const updated = await storage.updateRestaurant(id, nextUpdates);
       if (!updated) return res.status(404).json({ message: "Restaurant not found" });
       res.json(updated);
     } catch (err) {
@@ -5322,10 +6372,10 @@ export async function registerRoutes(
         else if (e.eventType === "order_click" || e.eventType === "booking_click") orderIntent++;
       }
 
-      // Enrich with restaurant data (categories + names)
+      // Enrich with restaurant data (categories + names + district)
       const allRestaurants = await storage.getRestaurants();
-      const restaurantMap: Record<number, { name: string; category: string }> = {};
-      for (const r of allRestaurants) restaurantMap[r.id] = { name: r.name, category: r.category ?? "Other" };
+      const restaurantMap: Record<number, { name: string; category: string; district: string | null }> = {};
+      for (const r of allRestaurants) restaurantMap[r.id] = { name: r.name, category: r.category ?? "Other", district: r.district ?? null };
 
       // Top restaurants by right swipes
       const byRestaurant: Record<number, { rightSwipes: number; views: number }> = {};
@@ -5386,7 +6436,39 @@ export async function registerRoutes(
         }
       }
 
-      return res.json({ funnel: { impressions, swipeViews, rightSwipes, orderIntent }, topRestaurants, cuisineTrend, dayPatterns, heatmap, deliveryTotal });
+      // Geo hotspots by district (split logs into two halves for growth %)
+      const DISTRICT_ABBR: Record<string, string> = {
+        "sukhumvit": "SKV", "silom": "SLM", "siam": "SIM", "thonglor": "TLR",
+        "ari": "ARI", "sathorn": "SAT", "bang rak": "BRK", "pathumwan": "PTW",
+        "chatuchak": "CTK", "ekkamai": "EKK", "on nut": "ONN", "bearing": "BRG",
+      };
+      const midpoint = new Date(Date.now() - (daysParam / 2) * 24 * 60 * 60 * 1000);
+      const byDistrictCurrent: Record<string, number> = {};
+      const byDistrictPrev: Record<string, number> = {};
+      for (const e of logs) {
+        if (!e.itemId) continue;
+        const district = restaurantMap[e.itemId]?.district?.toLowerCase() ?? null;
+        if (!district) continue;
+        if (new Date(e.createdAt) >= midpoint) {
+          byDistrictCurrent[district] = (byDistrictCurrent[district] ?? 0) + 1;
+        } else {
+          byDistrictPrev[district] = (byDistrictPrev[district] ?? 0) + 1;
+        }
+      }
+      const allDistricts = new Set([...Object.keys(byDistrictCurrent), ...Object.keys(byDistrictPrev)]);
+      const geoHotspots = [...allDistricts]
+        .map(district => {
+          const current = byDistrictCurrent[district] ?? 0;
+          const prev = byDistrictPrev[district] ?? 0;
+          const growth = prev > 0 ? Math.round(((current - prev) / prev) * 100) : (current > 0 ? 100 : 0);
+          const abbr = DISTRICT_ABBR[district] ?? district.substring(0, 3).toUpperCase();
+          const zoneName = district.charAt(0).toUpperCase() + district.slice(1);
+          return { zone: zoneName, abbr, count: current + prev, growth };
+        })
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 5);
+
+      return res.json({ funnel: { impressions, swipeViews, rightSwipes, orderIntent }, topRestaurants, cuisineTrend, dayPatterns, heatmap, deliveryTotal, geoHotspots });
     } catch {
       return res.status(500).json({ message: "Internal server error" });
     }

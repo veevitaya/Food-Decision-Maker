@@ -40,6 +40,7 @@ interface AnalyticsEvent {
   eventType: string;
   userId: string | null;
   restaurantId: number | null;
+  restaurantName: string | null;
   metadata: string | null;
   timestamp: string;
 }
@@ -58,6 +59,7 @@ interface OverviewData {
   dayPatterns: { day: string; count: number; pct: number }[];
   heatmap: number[][];
   deliveryTotal: number;
+  geoHotspots?: { zone: string; abbr: string; count: number; growth: number }[];
 }
 
 interface ClickoutsData {
@@ -99,19 +101,29 @@ function formatRelativeTime(timestamp: string): string {
 
 function formatEventDescription(event: AnalyticsEvent): string {
   const user = event.userId || "Anonymous";
+  const restaurant = event.restaurantName
+    ? event.restaurantName
+    : event.restaurantId
+      ? `restaurant #${event.restaurantId}`
+      : "a restaurant";
   switch (event.eventType) {
     case "swipe_right":
-      return `${user} liked restaurant #${event.restaurantId}`;
+    case "swipe":
+      return `${user} liked ${restaurant}`;
     case "swipe_left":
-      return `${user} passed on restaurant #${event.restaurantId}`;
+      return `${user} passed on ${restaurant}`;
     case "view_detail":
-      return `${user} viewed restaurant #${event.restaurantId}`;
+    case "view_card":
+      return `${user} viewed ${restaurant}`;
     case "quiz_start":
       return `${user} started a taste quiz`;
     case "delivery_click":
-      return `${user} clicked delivery for #${event.restaurantId}`;
+    case "deeplink_click":
+      return `${user} clicked delivery for ${restaurant}`;
+    case "order_click":
+      return `${user} placed an order at ${restaurant}`;
     default:
-      return `${user} triggered ${event.eventType}`;
+      return `${user} triggered ${event.eventType.replace(/_/g, " ")}`;
   }
 }
 
@@ -126,50 +138,6 @@ const fallbackDashboard: DashboardData = {
   eventsToday: 0,
 };
 
-const fallbackSegments: UserSegment[] = [
-  { id: "power", name: "Power Users", description: "Highly active users", estimatedCount: 45 },
-  { id: "new", name: "New Users", description: "Joined recently", estimatedCount: 120 },
-  { id: "thai", name: "Thai Food Lovers", description: "Prefer Thai cuisine", estimatedCount: 89 },
-  { id: "budget", name: "Budget Diners", description: "Price-conscious", estimatedCount: 67 },
-];
-
-const CONVERSION_FUNNEL = [
-  { label: "Impressions", value: 12400, pct: 100, bg: "rgba(244, 63, 94, 0.15)", textColor: "text-gray-700" },
-  { label: "Swipe Views", value: 8200, pct: 66, bg: "rgba(244, 63, 94, 0.30)", textColor: "text-gray-800" },
-  { label: "Right Swipes", value: 3100, pct: 25, bg: "rgba(244, 63, 94, 0.55)", textColor: "text-white" },
-  { label: "Detail Views", value: 1800, pct: 15, bg: "rgba(244, 63, 94, 0.75)", textColor: "text-white" },
-  { label: "Orders", value: 420, pct: 3.4, bg: "rgba(244, 63, 94, 1)", textColor: "text-white" },
-];
-
-const GEO_HOTSPOTS = [
-  { zone: "Sukhumvit", abbr: "SKV", orders: 1240, growth: "+18%" },
-  { zone: "Silom", abbr: "SLM", orders: 890, growth: "+12%" },
-  { zone: "Siam", abbr: "SIM", orders: 720, growth: "+8%" },
-  { zone: "Thonglor", abbr: "TLR", orders: 680, growth: "+22%" },
-  { zone: "Ari", abbr: "ARI", orders: 410, growth: "+31%" },
-];
-
-const TRENDING_CUISINES = [
-  { name: "Thai Street", growth: 42, max: 50, color: "var(--admin-cyan)" },
-  { name: "Korean BBQ", growth: 35, max: 50, color: "var(--admin-cyan)" },
-  { name: "Japanese", growth: 28, max: 50, color: "var(--admin-cyan)" },
-  { name: "Italian", growth: 18, max: 50, color: "var(--admin-cyan)" },
-  { name: "Vietnamese", growth: 15, max: 50, color: "var(--admin-cyan)" },
-];
-
-const DELIVERY_ATTRIBUTION = [
-  { name: "Grab", clicks: 2184, pct: 46, color: "#00B14F", avgOrder: "฿285" },
-  { name: "LINE MAN", clicks: 1663, pct: 35, color: "#06C755", avgOrder: "฿310" },
-  { name: "Robinhood", clicks: 892, pct: 19, color: "#6C2BD9", avgOrder: "฿265" },
-];
-
-const TOP_RESTAURANTS = [
-  { name: "Som Tam Nua", swipes: 2410, conversion: 72, trend: "up" as const },
-  { name: "Gaggan Anand", swipes: 2170, conversion: 68, trend: "up" as const },
-  { name: "Jay Fai", swipes: 1980, conversion: 54, trend: "down" as const },
-  { name: "Sorn", swipes: 1560, conversion: 65, trend: "up" as const },
-  { name: "Bo.Lan", swipes: 1260, conversion: 61, trend: "up" as const },
-];
 
 const SEGMENT_COLORS = ["var(--admin-deep-purple)", "var(--admin-deep-purple)", "var(--admin-deep-purple)", "var(--admin-deep-purple)"];
 const SEGMENT_OPACITIES = [1, 0.7, 0.5, 0.3];
@@ -308,14 +276,26 @@ export default function AdminDashboard() {
 
   const stats = dashboard || fallbackDashboard;
   const recentEvents = (events || []).slice(0, 20);
-  const userSegments = segments || fallbackSegments;
-  const totalSegmentUsers = userSegments.reduce((sum, s) => sum + s.estimatedCount, 0);
+  const userSegments = segments ?? [];
+  const totalSegmentUsers = userSegments.reduce((sum, s) => sum + s.estimatedCount, 0) || 1;
   const PLAT_COLORS: Record<string, string> = { grab: "#00B14F", lineman: "#06C755", robinhood: "#6C2BD9" };
   const PLAT_NAMES: Record<string, string> = { grab: "Grab", lineman: "LINE MAN", robinhood: "Robinhood" };
   const PLAT_AVG: Record<string, string> = { grab: "฿285", lineman: "฿310", robinhood: "฿265" };
 
+  // Build real daily event counts for sparklines (last 7 days)
+  const last7Days = useMemo(() => Array.from({ length: 7 }, (_, i) => {
+    const d = new Date();
+    d.setDate(d.getDate() - (6 - i));
+    const dateStr = d.toISOString().slice(0, 10);
+    const dayLabel = d.toLocaleDateString("en", { weekday: "short" });
+    const count = recentEvents.filter((e) => e.timestamp?.startsWith(dateStr)).length;
+    return { dateStr, dayLabel, count };
+  }), [recentEvents]);
+
+  const activitySparkline = last7Days.map(d => d.count);
+
   const liveDelivery = useMemo(() => {
-    if (!clickoutsData?.byPlatform || Object.keys(clickoutsData.byPlatform).length === 0) return DELIVERY_ATTRIBUTION;
+    if (!clickoutsData?.byPlatform || Object.keys(clickoutsData.byPlatform).length === 0) return [];
     const total = clickoutsData.total || 1;
     return Object.entries(clickoutsData.byPlatform).sort((a, b) => b[1] - a[1]).map(([key, count]) => ({
       name: PLAT_NAMES[key] ?? key,
@@ -328,7 +308,6 @@ export default function AdminDashboard() {
 
   const liveTopRestaurants = useMemo(() => {
     const data = overview?.topRestaurants ?? [];
-    if (data.length === 0) return TOP_RESTAURANTS;
     return data.map(r => ({
       name: r.name,
       swipes: r.rightSwipes,
@@ -339,13 +318,12 @@ export default function AdminDashboard() {
 
   const liveCuisines = useMemo(() => {
     const data = overview?.cuisineTrend ?? [];
-    if (data.length === 0) return TRENDING_CUISINES;
     return data.map(c => ({ name: c.cuisine, growth: c.pct, max: 100, color: "var(--admin-cyan)" }));
   }, [overview]);
 
   const liveFunnel = useMemo(() => {
     const f = overview?.funnel;
-    if (!f || f.impressions === 0) return CONVERSION_FUNNEL;
+    if (!f || f.impressions === 0) return [];
     const base = f.impressions || 1;
     return [
       { label: "View Cards", value: f.impressions, pct: 100, bg: "rgba(244,63,94,0.15)", textColor: "text-gray-700" },
@@ -355,65 +333,63 @@ export default function AdminDashboard() {
     ];
   }, [overview]);
 
+  const liveGeoHotspots = useMemo(() => {
+    const data = overview?.geoHotspots ?? [];
+    return data.map(s => ({
+      zone: s.zone,
+      abbr: s.abbr,
+      orders: s.count,
+      growth: s.growth >= 0 ? `+${s.growth}%` : `${s.growth}%`,
+    }));
+  }, [overview]);
+
+  const funnelConversionRate = useMemo(() => {
+    const f = overview?.funnel;
+    if (!f || f.impressions === 0) return null;
+    return ((f.orderIntent / f.impressions) * 100).toFixed(1);
+  }, [overview]);
+
   const maxRestaurantSwipes = Math.max(...liveTopRestaurants.map((r) => r.swipes), 1);
-  const maxGeoOrders = Math.max(...GEO_HOTSPOTS.map((s) => s.orders));
+  const maxGeoOrders = Math.max(...liveGeoHotspots.map((s) => s.orders), 1);
 
   const kpis = [
     {
       label: "Total Users",
       value: stats.totalUsers,
       icon: Users,
-      delta: "+12%",
-      deltaUp: true,
-      sparkline: [18, 24, 32, 28, 35, 42, 48],
+      sparkline: activitySparkline,
       accentColor: "var(--admin-deep-purple)",
     },
     {
       label: "Restaurants",
       value: stats.totalRestaurants,
       icon: Utensils,
-      delta: "+5",
-      deltaUp: true,
-      sparkline: [12, 14, 15, 16, 18, 19, 22],
+      sparkline: activitySparkline,
       accentColor: "var(--admin-blue)",
     },
     {
       label: "Total Swipes",
       value: stats.totalSwipes,
       icon: MousePointerClick,
-      delta: "+340",
-      deltaUp: true,
-      sparkline: [120, 180, 210, 190, 260, 310, 340],
+      sparkline: activitySparkline,
       accentColor: "var(--admin-pink)",
     },
     {
       label: "Delivery Clicks",
       value: overview?.deliveryTotal ?? 0,
       icon: Truck,
-      delta: "+18%",
-      deltaUp: true,
-      sparkline: [320, 380, 410, 390, 450, 480, 520],
+      sparkline: activitySparkline,
       accentColor: "var(--admin-teal)",
     },
     {
       label: "Campaigns",
       value: stats.activeCampaigns,
       icon: Megaphone,
-      delta: "active",
-      deltaUp: true,
-      sparkline: [3, 4, 4, 5, 6, 5, 6],
+      sparkline: activitySparkline,
       accentColor: "var(--admin-cyan)",
     },
   ];
 
-  const last7Days = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date();
-    d.setDate(d.getDate() - (6 - i));
-    const dateStr = d.toISOString().slice(0, 10);
-    const dayLabel = d.toLocaleDateString("en", { weekday: "short" });
-    const count = recentEvents.filter((e) => e.timestamp?.startsWith(dateStr)).length;
-    return { dateStr, dayLabel, count };
-  });
   const maxBarCount = Math.max(...last7Days.map((d) => d.count), 1);
 
   return (
@@ -440,15 +416,6 @@ export default function AdminDashboard() {
               >
                 {dashLoading ? "-" : kpi.value.toLocaleString()}
               </p>
-              <div className="mt-2 flex items-center gap-1.5">
-                {kpi.deltaUp ? (
-                  <ArrowUpRight className="w-3 h-3 text-emerald-500" />
-                ) : (
-                  <ArrowDownRight className="w-3 h-3 text-red-400" />
-                )}
-                <span className={`text-xs font-medium ${kpi.deltaUp ? "text-emerald-500" : "text-red-400"}`}>{kpi.delta}</span>
-                <span className="text-[10px] text-gray-400">vs last period</span>
-              </div>
             </div>
           </div>
         ))}
@@ -545,30 +512,41 @@ export default function AdminDashboard() {
             <h2 className="text-[15px] font-semibold text-gray-800">Conversion Funnel</h2>
             <p className="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Swipe to order</p>
           </div>
-          <div className="flex flex-col items-center gap-1.5">
-            {liveFunnel.map((step, idx) => {
-              const widthPct = Math.max(20, step.pct);
-              return (
-                <div key={step.label} className="w-full flex flex-col items-center" data-testid={`funnel-step-${idx}`}>
-                  <div
-                    className="relative h-8 transition-all"
-                    style={{
-                      width: `${widthPct}%`,
-                      backgroundColor: step.bg,
-                      borderRadius: idx === 0 ? "8px 8px 2px 2px" : idx === liveFunnel.length - 1 ? "2px 2px 8px 8px" : "2px",
-                    }}
-                  />
-                  <span className="text-[11px] font-semibold text-gray-700 mt-0.5 whitespace-nowrap">
-                    {step.label} — {step.value.toLocaleString()}
-                  </span>
+          {liveFunnel.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-32 gap-2 text-gray-400">
+              <Activity className="w-6 h-6 opacity-30" />
+              <p className="text-xs">No activity recorded yet</p>
+            </div>
+          ) : (
+            <>
+              <div className="flex flex-col items-center gap-1.5">
+                {liveFunnel.map((step, idx) => {
+                  const widthPct = Math.max(20, step.pct);
+                  return (
+                    <div key={step.label} className="w-full flex flex-col items-center" data-testid={`funnel-step-${idx}`}>
+                      <div
+                        className="relative h-8 transition-all"
+                        style={{
+                          width: `${widthPct}%`,
+                          backgroundColor: step.bg,
+                          borderRadius: idx === 0 ? "8px 8px 2px 2px" : idx === liveFunnel.length - 1 ? "2px 2px 8px 8px" : "2px",
+                        }}
+                      />
+                      <span className="text-[11px] font-semibold text-gray-700 mt-0.5 whitespace-nowrap">
+                        {step.label} — {step.value.toLocaleString()}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+              {funnelConversionRate !== null && (
+                <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-center gap-2">
+                  <TrendingUp className="w-3 h-3 text-emerald-500" />
+                  <span className="text-[11px] text-gray-500">Overall conversion: <span className="font-semibold text-gray-800">{funnelConversionRate}%</span></span>
                 </div>
-              );
-            })}
-          </div>
-          <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-center gap-2">
-            <TrendingUp className="w-3 h-3 text-emerald-500" />
-            <span className="text-[11px] text-gray-500">Overall conversion: <span className="font-semibold text-gray-800">3.4%</span></span>
-          </div>
+              )}
+            </>
+          )}
         </div>
 
         <div className="bg-white rounded-2xl border border-gray-100 p-6" data-testid="card-delivery-attribution">
@@ -576,28 +554,35 @@ export default function AdminDashboard() {
             <h2 className="text-[15px] font-semibold text-gray-800">Delivery Attribution</h2>
             <p className="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Platform breakdown</p>
           </div>
-          <div className="flex items-start gap-5">
-            <DeliveryRing data={liveDelivery} />
-            <div className="flex-1 grid grid-cols-1 gap-2">
-              {liveDelivery.map((platform) => (
-                <div
-                  key={platform.name}
-                  className="flex items-center gap-3 rounded-xl bg-gray-50 px-3 py-2.5"
-                  data-testid={`delivery-attr-${platform.name.toLowerCase().replace(/\s/g, "-")}`}
-                >
-                  <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: platform.color }} />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-gray-800">{platform.name}</p>
-                    <p className="text-[10px] text-gray-500">Avg {platform.avgOrder}</p>
-                  </div>
-                  <div className="text-right flex-shrink-0">
-                    <p className="text-sm font-bold text-gray-800">{platform.clicks.toLocaleString()}</p>
-                    <p className="text-[10px] text-gray-500">{platform.pct}%</p>
-                  </div>
-                </div>
-              ))}
+          {liveDelivery.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-32 gap-2 text-gray-400">
+              <Truck className="w-6 h-6 opacity-30" />
+              <p className="text-xs">No delivery clicks yet</p>
             </div>
-          </div>
+          ) : (
+            <div className="flex items-start gap-5">
+              <DeliveryRing data={liveDelivery} />
+              <div className="flex-1 grid grid-cols-1 gap-2">
+                {liveDelivery.map((platform) => (
+                  <div
+                    key={platform.name}
+                    className="flex items-center gap-3 rounded-xl bg-gray-50 px-3 py-2.5"
+                    data-testid={`delivery-attr-${platform.name.toLowerCase().replace(/\s/g, "-")}`}
+                  >
+                    <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: platform.color }} />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-gray-800">{platform.name}</p>
+                      <p className="text-[10px] text-gray-500">Avg {platform.avgOrder}</p>
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      <p className="text-sm font-bold text-gray-800">{platform.clicks.toLocaleString()}</p>
+                      <p className="text-[10px] text-gray-500">{platform.pct}%</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -607,36 +592,43 @@ export default function AdminDashboard() {
             <h2 className="text-[15px] font-semibold text-gray-800">Top Restaurants</h2>
             <p className="text-[10px] text-gray-400 uppercase tracking-widest font-bold">By swipe volume</p>
           </div>
-          <div className="space-y-2.5">
-            {liveTopRestaurants.map((r, idx) => (
-              <div key={r.name} data-testid={`top-restaurant-${idx}`}>
-                <div className="flex items-center justify-between gap-1 mb-1">
-                  <div className="flex items-center gap-2">
-                    <span className={`w-5 h-5 rounded flex items-center justify-center text-[9px] font-bold flex-shrink-0 ${idx === 0 ? "text-white" : "bg-gray-100 text-gray-500"}`} style={idx === 0 ? { backgroundColor: "var(--admin-blue)" } : {}}>
-                      {idx + 1}
-                    </span>
-                    <span className="text-xs font-medium text-gray-800">{r.name}</span>
+          {liveTopRestaurants.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-24 gap-2 text-gray-400">
+              <Utensils className="w-6 h-6 opacity-30" />
+              <p className="text-xs">No swipe data yet</p>
+            </div>
+          ) : (
+            <div className="space-y-2.5">
+              {liveTopRestaurants.map((r, idx) => (
+                <div key={r.name} data-testid={`top-restaurant-${idx}`}>
+                  <div className="flex items-center justify-between gap-1 mb-1">
+                    <div className="flex items-center gap-2">
+                      <span className={`w-5 h-5 rounded flex items-center justify-center text-[9px] font-bold flex-shrink-0 ${idx === 0 ? "text-white" : "bg-gray-100 text-gray-500"}`} style={idx === 0 ? { backgroundColor: "var(--admin-blue)" } : {}}>
+                        {idx + 1}
+                      </span>
+                      <span className="text-xs font-medium text-gray-800">{r.name}</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      {r.trend === "up" ? <ArrowUpRight className="w-2.5 h-2.5 text-emerald-500" /> : <ArrowDownRight className="w-2.5 h-2.5 text-red-400" />}
+                      <span className="text-[10px] font-semibold text-gray-800">{r.conversion}%</span>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-1">
-                    {r.trend === "up" ? <ArrowUpRight className="w-2.5 h-2.5 text-emerald-500" /> : <ArrowDownRight className="w-2.5 h-2.5 text-red-400" />}
-                    <span className="text-[10px] font-semibold text-gray-800">{r.conversion}%</span>
+                  <div className="h-4 rounded-md bg-gray-50 overflow-hidden">
+                    <div
+                      className="h-full rounded-md flex items-center justify-end pr-2 transition-all"
+                      style={{
+                        width: `${(r.swipes / maxRestaurantSwipes) * 100}%`,
+                        backgroundColor: "var(--admin-blue)",
+                        opacity: 1 - (idx * 0.15),
+                      }}
+                    >
+                      <span className="text-[9px] font-bold text-white">{r.swipes.toLocaleString()}</span>
+                    </div>
                   </div>
                 </div>
-                <div className="h-4 rounded-md bg-gray-50 overflow-hidden">
-                  <div
-                    className="h-full rounded-md flex items-center justify-end pr-2 transition-all"
-                    style={{
-                      width: `${(r.swipes / maxRestaurantSwipes) * 100}%`,
-                      backgroundColor: "var(--admin-blue)",
-                      opacity: 1 - (idx * 0.15),
-                    }}
-                  >
-                    <span className="text-[9px] font-bold text-white">{r.swipes.toLocaleString()}</span>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
           <Link href="/admin/analytics">
             <button className="w-full mt-3 text-xs font-medium text-gray-500 hover:text-gray-800 flex items-center justify-center gap-1 py-1.5 transition-colors" data-testid="link-view-all-restaurants">
               View all <ArrowRight className="w-3 h-3" />
@@ -649,29 +641,36 @@ export default function AdminDashboard() {
             <h2 className="text-[15px] font-semibold text-gray-800">Geo Hotspots</h2>
             <p className="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Bangkok zones</p>
           </div>
-          <div className="flex items-end gap-2 h-36" data-testid="geo-chart">
-            {GEO_HOTSPOTS.map((spot, idx) => {
-              const heightPct = (spot.orders / maxGeoOrders) * 100;
-              return (
-                <div key={spot.zone} className="flex-1 flex flex-col items-center gap-1" data-testid={`geo-spot-${idx}`}>
-                  <span className="text-[9px] font-semibold text-emerald-500">{spot.growth}</span>
-                  <span className="text-[10px] font-bold text-gray-800">{spot.orders.toLocaleString()}</span>
-                  <div className="w-full flex-1 flex items-end">
-                    <div
-                      className="w-full rounded-t-md transition-all"
-                      style={{
-                        height: `${heightPct}%`,
-                        minHeight: "8px",
-                        backgroundColor: "var(--admin-cyan)",
-                        opacity: 1 - (idx * 0.15),
-                      }}
-                    />
+          {liveGeoHotspots.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-36 gap-2 text-gray-400">
+              <MapPin className="w-6 h-6 opacity-30" />
+              <p className="text-xs">No location data yet</p>
+            </div>
+          ) : (
+            <div className="flex items-end gap-2 h-36" data-testid="geo-chart">
+              {liveGeoHotspots.map((spot, idx) => {
+                const heightPct = (spot.orders / maxGeoOrders) * 100;
+                return (
+                  <div key={spot.zone} className="flex-1 flex flex-col items-center gap-1" data-testid={`geo-spot-${idx}`}>
+                    <span className="text-[9px] font-semibold text-emerald-500">{spot.growth}</span>
+                    <span className="text-[10px] font-bold text-gray-800">{spot.orders.toLocaleString()}</span>
+                    <div className="w-full flex-1 flex items-end">
+                      <div
+                        className="w-full rounded-t-md transition-all"
+                        style={{
+                          height: `${heightPct}%`,
+                          minHeight: "8px",
+                          backgroundColor: "var(--admin-cyan)",
+                          opacity: 1 - (idx * 0.15),
+                        }}
+                      />
+                    </div>
+                    <span className="text-[9px] text-gray-500 font-medium">{spot.abbr}</span>
                   </div>
-                  <span className="text-[9px] text-gray-500 font-medium">{spot.abbr}</span>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         <div className="bg-white rounded-2xl border border-gray-100 p-6" data-testid="card-trending-cuisines">
@@ -679,25 +678,36 @@ export default function AdminDashboard() {
             <h2 className="text-[15px] font-semibold text-gray-800">Trending Cuisines</h2>
             <p className="text-[10px] text-gray-400 uppercase tracking-widest font-bold">30-day growth</p>
           </div>
-          <div className="grid grid-cols-3 gap-x-2 gap-y-4">
-            {liveCuisines.slice(0, 3).map((cuisine) => (
-              <div key={cuisine.name} className="flex flex-col items-center gap-1" data-testid={`trending-cuisine-${cuisine.name.toLowerCase().replace(/\s/g, "-")}`}>
-                <RadialArc value={cuisine.growth} max={cuisine.max} color={cuisine.color} size={52} />
-                <span className="text-[10px] font-medium text-gray-800 text-center leading-tight">{cuisine.name}</span>
+          {liveCuisines.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-24 gap-2 text-gray-400">
+              <Flame className="w-6 h-6 opacity-30" />
+              <p className="text-xs">No cuisine data yet</p>
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-3 gap-x-2 gap-y-4">
+                {liveCuisines.slice(0, 3).map((cuisine) => (
+                  <div key={cuisine.name} className="flex flex-col items-center gap-1" data-testid={`trending-cuisine-${cuisine.name.toLowerCase().replace(/\s/g, "-")}`}>
+                    <RadialArc value={cuisine.growth} max={cuisine.max} color={cuisine.color} size={52} />
+                    <span className="text-[10px] font-medium text-gray-800 text-center leading-tight">{cuisine.name}</span>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-          <div className="grid grid-cols-2 gap-x-2 gap-y-3 mt-4 pt-3 border-t border-gray-100">
-            {liveCuisines.slice(3).map((cuisine) => (
-              <div key={cuisine.name} className="flex items-center gap-2" data-testid={`trending-cuisine-${cuisine.name.toLowerCase().replace(/\s/g, "-")}`}>
-                <RadialArc value={cuisine.growth} max={cuisine.max} color={cuisine.color} size={36} />
-                <div>
-                  <p className="text-[10px] font-medium text-gray-800">{cuisine.name}</p>
-                  <p className="text-[9px] text-emerald-500 font-semibold">+{cuisine.growth}%</p>
+              {liveCuisines.slice(3).length > 0 && (
+                <div className="grid grid-cols-2 gap-x-2 gap-y-3 mt-4 pt-3 border-t border-gray-100">
+                  {liveCuisines.slice(3).map((cuisine) => (
+                    <div key={cuisine.name} className="flex items-center gap-2" data-testid={`trending-cuisine-${cuisine.name.toLowerCase().replace(/\s/g, "-")}`}>
+                      <RadialArc value={cuisine.growth} max={cuisine.max} color={cuisine.color} size={36} />
+                      <div>
+                        <p className="text-[10px] font-medium text-gray-800">{cuisine.name}</p>
+                        <p className="text-[9px] text-emerald-500 font-semibold">+{cuisine.growth}%</p>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              </div>
-            ))}
-          </div>
+              )}
+            </>
+          )}
         </div>
       </div>
 
@@ -707,38 +717,47 @@ export default function AdminDashboard() {
             <h2 className="text-[15px] font-semibold text-gray-800">User Segments</h2>
             <p className="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Audience breakdown</p>
           </div>
-          <div className="h-8 rounded-full bg-gray-100 overflow-hidden flex" data-testid="segment-stacked-bar">
-            {userSegments.map((seg, idx) => {
-              const pct = (seg.estimatedCount / totalSegmentUsers) * 100;
-              return (
-                <div
-                  key={seg.id}
-                  className="h-full transition-all"
-                  style={{
-                    width: `${pct}%`,
-                    backgroundColor: SEGMENT_COLORS[idx % SEGMENT_COLORS.length],
-                    opacity: SEGMENT_OPACITIES[idx % SEGMENT_OPACITIES.length],
-                  }}
-                  title={`${seg.name}: ${seg.estimatedCount} users (${Math.round(pct)}%)`}
-                />
-              );
-            })}
-          </div>
-          <div className="grid grid-cols-2 gap-3 mt-4" data-testid="segments-legend">
-            {userSegments.map((seg, idx) => {
-              const pct = Math.round((seg.estimatedCount / totalSegmentUsers) * 100);
-              return (
-                <div key={seg.id} className="flex items-center gap-2.5 rounded-lg bg-gray-50 px-3 py-2" data-testid={`segment-${seg.id}`}>
-                  <div className="w-3 h-3 rounded-sm flex-shrink-0" style={{ backgroundColor: SEGMENT_COLORS[idx % SEGMENT_COLORS.length], opacity: SEGMENT_OPACITIES[idx % SEGMENT_OPACITIES.length] }} />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-xs font-medium text-gray-800 truncate">{seg.name}</p>
-                    <p className="text-[10px] text-gray-500">{seg.estimatedCount} users</p>
-                  </div>
-                  <span className="text-sm font-bold text-gray-800 flex-shrink-0">{pct}%</span>
-                </div>
-              );
-            })}
-          </div>
+          {userSegments.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-24 gap-2 text-gray-400">
+              <Users className="w-6 h-6 opacity-30" />
+              <p className="text-xs">No user data yet</p>
+            </div>
+          ) : (
+            <>
+              <div className="h-8 rounded-full bg-gray-100 overflow-hidden flex" data-testid="segment-stacked-bar">
+                {userSegments.map((seg, idx) => {
+                  const pct = (seg.estimatedCount / totalSegmentUsers) * 100;
+                  return (
+                    <div
+                      key={seg.id}
+                      className="h-full transition-all"
+                      style={{
+                        width: `${pct}%`,
+                        backgroundColor: SEGMENT_COLORS[idx % SEGMENT_COLORS.length],
+                        opacity: SEGMENT_OPACITIES[idx % SEGMENT_OPACITIES.length],
+                      }}
+                      title={`${seg.name}: ${seg.estimatedCount} users (${Math.round(pct)}%)`}
+                    />
+                  );
+                })}
+              </div>
+              <div className="grid grid-cols-2 gap-3 mt-4" data-testid="segments-legend">
+                {userSegments.map((seg, idx) => {
+                  const pct = Math.round((seg.estimatedCount / totalSegmentUsers) * 100);
+                  return (
+                    <div key={seg.id} className="flex items-center gap-2.5 rounded-lg bg-gray-50 px-3 py-2" data-testid={`segment-${seg.id}`}>
+                      <div className="w-3 h-3 rounded-sm flex-shrink-0" style={{ backgroundColor: SEGMENT_COLORS[idx % SEGMENT_COLORS.length], opacity: SEGMENT_OPACITIES[idx % SEGMENT_OPACITIES.length] }} />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-medium text-gray-800 truncate">{seg.name}</p>
+                        <p className="text-[10px] text-gray-500">{seg.estimatedCount} users</p>
+                      </div>
+                      <span className="text-sm font-bold text-gray-800 flex-shrink-0">{pct}%</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
         </div>
 
         <div className="bg-white rounded-2xl border border-gray-100 p-6" data-testid="recent-activity-card">

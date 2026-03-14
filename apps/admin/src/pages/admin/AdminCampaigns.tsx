@@ -87,16 +87,11 @@ function getPlacement(dealType: string | null): string {
   }
 }
 
-function getMockMetrics(id: number) {
-  const seed = ((id * 7 + 13) % 100) / 100;
-  const impressions = Math.floor(8000 + seed * 52000);
-  const clicks = Math.floor(impressions * (0.03 + seed * 0.05));
-  const ctr = ((clicks / impressions) * 100).toFixed(1);
-  const dailyBudget = Math.floor(500 + seed * 4500);
-  const totalBudget = dailyBudget * 30;
-  const spent = Math.floor(totalBudget * (0.2 + seed * 0.6));
+function getCampaignMetrics(campaign: Campaign) {
+  const { impressions, clicks, dailyBudget, totalBudget, spent } = campaign;
+  const ctr = impressions > 0 ? ((clicks / impressions) * 100).toFixed(1) : "0.0";
   const remaining = totalBudget - spent;
-  const spentPct = Math.min(100, Math.round((spent / totalBudget) * 100));
+  const spentPct = totalBudget > 0 ? Math.min(100, Math.round((spent / totalBudget) * 100)) : 0;
   return { impressions, clicks, ctr, dailyBudget, totalBudget, spent, remaining, spentPct };
 }
 
@@ -104,13 +99,6 @@ function formatNum(n: number): string {
   if (n >= 1000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "K";
   return n.toString();
 }
-
-const kpiCards = [
-  { label: "Total Impressions", value: "248K", icon: Eye, iconColor: "text-[var(--admin-blue)]", iconBg: "bg-[var(--admin-blue-10)]" },
-  { label: "Total Clicks", value: "12.4K", icon: MousePointerClick, iconColor: "text-teal-500", iconBg: "bg-teal-50" },
-  { label: "Avg CTR", value: "5.0%", icon: TrendingUp, iconColor: "text-[var(--admin-blue)]", iconBg: "bg-[var(--admin-blue-10)]" },
-  { label: "Revenue Generated", value: "฿847K", icon: DollarSign, iconColor: "text-emerald-500", iconBg: "bg-emerald-50" },
-];
 
 const dealTypeOptions = [
   { value: "discount", label: "Discount" },
@@ -457,25 +445,40 @@ export default function AdminCampaigns() {
         </div>
       )}
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4" data-testid="section-campaign-kpis">
-        {kpiCards.map((kpi) => (
-          <div
-            key={kpi.label}
-            className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6"
-            data-testid={`kpi-${kpi.label.toLowerCase().replace(/\s+/g, "-")}`}
-          >
-            <div className="flex items-center gap-3">
-              <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${kpi.iconBg}`}>
-                  <kpi.icon className={`w-5 h-5 ${kpi.iconColor}`} />
+      {(() => {
+        const totalImpressions = campaigns.reduce((s, c) => s + (c.impressions ?? 0), 0);
+        const totalClicks = campaigns.reduce((s, c) => s + (c.clicks ?? 0), 0);
+        const avgCtr = totalImpressions > 0 ? ((totalClicks / totalImpressions) * 100).toFixed(1) + "%" : "—";
+        const totalSpent = campaigns.reduce((s, c) => s + (c.spent ?? 0), 0);
+        const activeCampaigns = campaigns.filter(c => c.status === "active").length;
+        const liveKpis = [
+          { label: "Total Impressions", value: formatNum(totalImpressions), icon: Eye, iconColor: "text-[var(--admin-blue)]", iconBg: "bg-[var(--admin-blue-10)]" },
+          { label: "Total Clicks", value: formatNum(totalClicks), icon: MousePointerClick, iconColor: "text-teal-500", iconBg: "bg-teal-50" },
+          { label: "Avg CTR", value: avgCtr, icon: TrendingUp, iconColor: "text-[var(--admin-blue)]", iconBg: "bg-[var(--admin-blue-10)]" },
+          { label: "Budget Spent", value: totalSpent > 0 ? `฿${formatNum(totalSpent)}` : "—", icon: DollarSign, iconColor: "text-emerald-500", iconBg: "bg-emerald-50" },
+        ];
+        return (
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4" data-testid="section-campaign-kpis">
+            {liveKpis.map((kpi) => (
+              <div
+                key={kpi.label}
+                className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6"
+                data-testid={`kpi-${kpi.label.toLowerCase().replace(/\s+/g, "-")}`}
+              >
+                <div className="flex items-center gap-3">
+                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${kpi.iconBg}`}>
+                    <kpi.icon className={`w-5 h-5 ${kpi.iconColor}`} />
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold text-gray-800">{kpi.value}</p>
+                    <p className="text-xs text-muted-foreground">{kpi.label}</p>
+                  </div>
                 </div>
-              <div>
-                <p className="text-2xl font-bold text-gray-800">{kpi.value}</p>
-                <p className="text-xs text-muted-foreground">{kpi.label}</p>
               </div>
-            </div>
+            ))}
           </div>
-        ))}
-      </div>
+        );
+      })()}
 
       <div className="bg-gray-100 rounded-xl p-1 inline-flex gap-1 flex-wrap">
         {statusTabs.map((tab) => (
@@ -511,7 +514,7 @@ export default function AdminCampaigns() {
           {filtered.map((campaign) => {
             const adType = getAdType(campaign.dealType);
             const placement = getPlacement(campaign.dealType);
-            const metrics = getMockMetrics(campaign.id);
+            const metrics = getCampaignMetrics(campaign);
 
             return (
               <div
@@ -625,20 +628,6 @@ export default function AdminCampaigns() {
                           </span>
                         ))
                       }
-                      <span
-                        className="bg-gray-100 text-foreground rounded-full text-xs px-3 py-1 font-medium flex items-center gap-1"
-                        data-testid={`pill-age-${campaign.id}`}
-                      >
-                        <Target className="w-3 h-3" />
-                        Age 25-44
-                      </span>
-                      <span
-                        className="bg-gray-100 text-foreground rounded-full text-xs px-3 py-1 font-medium flex items-center gap-1"
-                        data-testid={`pill-location-${campaign.id}`}
-                      >
-                        <MapPin className="w-3 h-3" />
-                        Bangkok Central
-                      </span>
                     </div>
                   </div>
 

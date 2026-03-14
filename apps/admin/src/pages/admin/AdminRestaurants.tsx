@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -44,10 +44,18 @@ import {
   ExternalLink,
   Sparkles,
   Loader2,
+  ImagePlus,
 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { Restaurant, RestaurantOwner, RestaurantClaim } from "@shared/schema";
+import type { Restaurant as BaseRestaurant, RestaurantOwner, RestaurantClaim, RestaurantOpeningHour } from "@shared/schema";
 import { VIBE_TAGS, VIBE_LABELS, VIBE_EMOJI, BANGKOK_DISTRICTS } from "@shared/vibeConfig";
+
+type Restaurant = BaseRestaurant & {
+  ownerId?: number | null;
+  ownerClaimStatus?: "unclaimed" | "pending" | "approved" | "rejected" | string | null;
+  paymentConnected?: boolean;
+  operatingHours?: string | null;
+};
 
 type VerificationChecklistItem = {
   id: string;
@@ -67,6 +75,78 @@ type EnrichedClaim = RestaurantClaim & {
 
 type TabMode = "restaurants" | "claims";
 
+type OsmImportResult = {
+  ok: boolean;
+  fetched: number;
+  saved: number;
+  failed: number;
+  results: { name: string; id: number; enriched: boolean }[];
+};
+
+type AutoAssignPreviewItem = {
+  id: number;
+  name: string;
+  category: string;
+  priceLevel: number;
+  rating: string;
+  before: string[];
+  after: string[];
+  added: string[];
+  removed: string[];
+  changed: boolean;
+};
+
+type AutoAssignPreviewResponse = {
+  scanned: number;
+  changed: number;
+  unchanged: number;
+  onlyChanged: boolean;
+  items: AutoAssignPreviewItem[];
+};
+
+function openingHoursToText(openingHours: RestaurantOpeningHour[] | null | undefined): string {
+  if (!openingHours || openingHours.length === 0) return "";
+  return openingHours.map((slot) => `${slot.day}: ${slot.hours}`).join("\n");
+}
+
+function parseOpeningHours(text: string): RestaurantOpeningHour[] | null {
+  const lines = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0) return null;
+
+  const parsed = lines
+    .map((line) => {
+      const idx = line.indexOf(":");
+      if (idx === -1) return null;
+      const day = line.slice(0, idx).trim();
+      const hours = line.slice(idx + 1).trim();
+      if (!day || !hours) return null;
+      return { day, hours };
+    })
+    .filter((slot): slot is RestaurantOpeningHour => Boolean(slot));
+
+  return parsed.length > 0 ? parsed : null;
+}
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result ?? "");
+      const base64 = result.includes(",") ? result.split(",")[1] : result;
+      if (!base64) {
+        reject(new Error("Failed to read file"));
+        return;
+      }
+      resolve(base64);
+    };
+    reader.onerror = () => reject(new Error("Failed to read file"));
+    reader.readAsDataURL(file);
+  });
+}
+
 export default function AdminRestaurants() {
   const [search, setSearch] = useState("");
   const [editingRestaurant, setEditingRestaurant] = useState<Restaurant | null>(null);
@@ -74,10 +154,41 @@ export default function AdminRestaurants() {
   const [deleteTarget, setDeleteTarget] = useState<Restaurant | null>(null);
   const [expandedRow, setExpandedRow] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<TabMode>("restaurants");
+  const [osmModalOpen, setOsmModalOpen] = useState(false);
+  const [osmLat, setOsmLat] = useState("13.7563");
+  const [osmLng, setOsmLng] = useState("100.5018");
+  const [osmRadius, setOsmRadius] = useState("2000");
+  const [osmEnrich, setOsmEnrich] = useState(true);
+  const [osmResult, setOsmResult] = useState<OsmImportResult | null>(null);
+  const [autoAssignPreviewOpen, setAutoAssignPreviewOpen] = useState(false);
+  const [autoAssignPreview, setAutoAssignPreview] = useState<AutoAssignPreviewResponse | null>(null);
 
-  const { data: restaurants = [], isLoading } = useQuery<Restaurant[]>({
+  const osmImportMutation = useMutation({
+    mutationFn: () =>
+      apiRequest("POST", "/api/admin/restaurants/import/osm", {
+        lat: parseFloat(osmLat),
+        lng: parseFloat(osmLng),
+        radius: parseInt(osmRadius, 10),
+        enrichWithGoogle: osmEnrich,
+      }),
+    onSuccess: async (data) => {
+      const json = await data.json() as OsmImportResult;
+      setOsmResult(json);
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/restaurants"] });
+    },
+  });
+
+  const reEnrichMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/admin/restaurants/re-enrich-images", { limit: 100 }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/restaurants"] });
+    },
+  });
+
+  const { data: restaurantsData, isLoading } = useQuery<{ items: Restaurant[]; total: number; page: number; pageSize: number; totalPages: number }>({
     queryKey: ["/api/admin/restaurants"],
   });
+  const restaurants = restaurantsData?.items ?? [];
 
   const { data: owners = [] } = useQuery<RestaurantOwner[]>({
     queryKey: ["/api/admin/owners"],
@@ -93,9 +204,29 @@ export default function AdminRestaurants() {
 
   const pendingClaims = claims.filter((c) => c.status === "pending");
 
+  const previewAutoAssignMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/admin/restaurants/auto-assign-vibes/preview", {
+      limit: 1000,
+      onlyChanged: true,
+      search,
+    }),
+    onSuccess: async (res) => {
+      const json = await res.json() as AutoAssignPreviewResponse;
+      setAutoAssignPreview(json);
+      setAutoAssignPreviewOpen(true);
+    },
+  });
+
   const bulkAutoAssignMutation = useMutation({
-    mutationFn: () => apiRequest("POST", "/api/admin/restaurants/auto-assign-vibes"),
+    mutationFn: (payload?: { ids?: number[] }) =>
+      apiRequest(
+        "POST",
+        "/api/admin/restaurants/auto-assign-vibes",
+        payload?.ids?.length ? { ids: payload.ids } : undefined,
+      ),
     onSuccess: () => {
+      setAutoAssignPreviewOpen(false);
+      setAutoAssignPreview(null);
       queryClient.invalidateQueries({ queryKey: ["/api/admin/restaurants"] });
     },
   });
@@ -140,7 +271,15 @@ export default function AdminRestaurants() {
       ownerId: null,
       ownerClaimStatus: "unclaimed",
       paymentConnected: false,
+      phone: null,
+      openingHours: null,
+      reviews: null,
+      isSponsored: false,
+      sponsoredUntil: null,
       googlePlaceId: null,
+      osmId: null,
+      reviewCount: 0,
+      photos: [],
       vibes: [],
       district: null,
       operatingHours: null,
@@ -206,21 +345,202 @@ export default function AdminRestaurants() {
               Add New
             </button>
             <button
-              onClick={() => bulkAutoAssignMutation.mutate()}
-              disabled={bulkAutoAssignMutation.isPending}
+              onClick={() => {
+                setAutoAssignPreview(null);
+                previewAutoAssignMutation.mutate();
+              }}
+              disabled={previewAutoAssignMutation.isPending || bulkAutoAssignMutation.isPending}
               data-testid="button-auto-assign-all"
               className="inline-flex items-center gap-1.5 bg-[#FFCC02]/20 border border-[#FFCC02]/40 text-gray-800 rounded-xl px-5 py-2 text-sm font-medium transition-colors hover:bg-[#FFCC02]/30 disabled:opacity-50"
             >
-              {bulkAutoAssignMutation.isPending ? (
+              {previewAutoAssignMutation.isPending ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : (
                 <Sparkles className="w-4 h-4" />
               )}
-              {bulkAutoAssignMutation.isPending ? "Assigning..." : "Auto-Assign All"}
+              {previewAutoAssignMutation.isPending ? "Analyzing..." : "Preview Auto-Assign"}
+            </button>
+            <button
+              onClick={() => { setOsmModalOpen(true); setOsmResult(null); }}
+              data-testid="button-import-osm"
+              className="inline-flex items-center gap-1.5 bg-blue-50 border border-blue-200 text-blue-700 rounded-xl px-5 py-2 text-sm font-medium transition-colors hover:bg-blue-100"
+            >
+              <MapPin className="w-4 h-4" />
+              Import OSM
+            </button>
+            <button
+              onClick={() => reEnrichMutation.mutate()}
+              disabled={reEnrichMutation.isPending}
+              data-testid="button-re-enrich-images"
+              className="inline-flex items-center gap-1.5 bg-purple-50 border border-purple-200 text-purple-700 rounded-xl px-5 py-2 text-sm font-medium transition-colors hover:bg-purple-100 disabled:opacity-50"
+            >
+              {reEnrichMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Star className="w-4 h-4" />}
+              {reEnrichMutation.isPending ? "Fetching..." : "Fix Images"}
             </button>
           </div>
         )}
       </div>
+
+      {osmModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setOsmModalOpen(false)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h2 className="text-base font-semibold">Import from OpenStreetMap</h2>
+              <button onClick={() => setOsmModalOpen(false)} className="text-muted-foreground hover:text-foreground">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label className="text-xs">Latitude</Label>
+                <Input value={osmLat} onChange={(e) => setOsmLat(e.target.value)} placeholder="13.7563" className="rounded-xl border-gray-100" />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Longitude</Label>
+                <Input value={osmLng} onChange={(e) => setOsmLng(e.target.value)} placeholder="100.5018" className="rounded-xl border-gray-100" />
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Radius (meters)</Label>
+              <Input value={osmRadius} onChange={(e) => setOsmRadius(e.target.value)} placeholder="2000" className="rounded-xl border-gray-100" />
+            </div>
+            <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+              <input type="checkbox" checked={osmEnrich} onChange={(e) => setOsmEnrich(e.target.checked)} className="rounded" />
+              Enrich with Google Places (rating, photos, price)
+            </label>
+            {osmResult && (
+              <div className="rounded-xl bg-green-50 border border-green-200 px-4 py-3 text-sm space-y-1">
+                <p className="font-medium text-green-800">Import complete</p>
+                <p className="text-green-700">Fetched: {osmResult.fetched} · Saved: {osmResult.saved} · Failed: {osmResult.failed}</p>
+                <p className="text-green-600 text-xs">Enriched with Google: {osmResult.results.filter((r) => r.enriched).length}</p>
+              </div>
+            )}
+            {osmImportMutation.isError && (
+              <p className="text-sm text-red-600">Import failed. Check that lat/lng/radius are valid.</p>
+            )}
+            <Button
+              onClick={() => osmImportMutation.mutate()}
+              disabled={osmImportMutation.isPending}
+              className="w-full rounded-xl"
+            >
+              {osmImportMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+              {osmImportMutation.isPending ? "Importing..." : "Start Import"}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {autoAssignPreviewOpen && autoAssignPreview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setAutoAssignPreviewOpen(false)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-6xl max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between gap-4">
+              <div>
+                <h2 className="text-base font-semibold text-foreground">Auto-Assign Preview</h2>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Scanned {autoAssignPreview.scanned} restaurants · {autoAssignPreview.changed} will change · {autoAssignPreview.unchanged} unchanged
+                </p>
+              </div>
+              <button onClick={() => setAutoAssignPreviewOpen(false)} className="text-muted-foreground hover:text-foreground">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="px-6 py-4 overflow-auto">
+              {autoAssignPreview.items.length === 0 ? (
+                <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-8 text-center">
+                  <p className="text-sm text-muted-foreground">No vibe changes needed for this selection.</p>
+                </div>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-100">
+                      <th className="text-left py-2 pr-3 text-[10px] uppercase tracking-widest text-muted-foreground/60">Restaurant</th>
+                      <th className="text-left py-2 pr-3 text-[10px] uppercase tracking-widest text-muted-foreground/60">Current Vibes</th>
+                      <th className="text-left py-2 pr-3 text-[10px] uppercase tracking-widest text-muted-foreground/60">New Vibes</th>
+                      <th className="text-left py-2 text-[10px] uppercase tracking-widest text-muted-foreground/60">Diff</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {autoAssignPreview.items.map((row) => (
+                      <tr key={row.id} className="border-b border-gray-100 align-top">
+                        <td className="py-3 pr-3">
+                          <div className="font-medium text-foreground">{row.name}</div>
+                          <div className="text-xs text-muted-foreground mt-0.5">
+                            {row.category} · {"฿".repeat(row.priceLevel)} · ★ {row.rating}
+                          </div>
+                        </td>
+                        <td className="py-3 pr-3">
+                          <div className="flex flex-wrap gap-1.5">
+                            {row.before.length > 0 ? row.before.map((vibe) => (
+                              <Badge key={`${row.id}-before-${vibe}`} variant="secondary" className="bg-gray-100 text-gray-700 text-[10px]">
+                                {VIBE_EMOJI[vibe as keyof typeof VIBE_EMOJI] ?? "✨"} {VIBE_LABELS[vibe as keyof typeof VIBE_LABELS] ?? vibe}
+                              </Badge>
+                            )) : <span className="text-xs text-muted-foreground/70">None</span>}
+                          </div>
+                        </td>
+                        <td className="py-3 pr-3">
+                          <div className="flex flex-wrap gap-1.5">
+                            {row.after.length > 0 ? row.after.map((vibe) => (
+                              <Badge key={`${row.id}-after-${vibe}`} variant="secondary" className="bg-[#FFCC02]/20 border border-[#FFCC02]/40 text-gray-800 text-[10px]">
+                                {VIBE_EMOJI[vibe as keyof typeof VIBE_EMOJI] ?? "✨"} {VIBE_LABELS[vibe as keyof typeof VIBE_LABELS] ?? vibe}
+                              </Badge>
+                            )) : <span className="text-xs text-muted-foreground/70">None</span>}
+                          </div>
+                        </td>
+                        <td className="py-3">
+                          <div className="space-y-1">
+                            <div className="flex flex-wrap gap-1.5">
+                              {row.added.map((vibe) => (
+                                <Badge key={`${row.id}-add-${vibe}`} variant="secondary" className="bg-emerald-100 text-emerald-700 text-[10px]">
+                                  + {VIBE_LABELS[vibe as keyof typeof VIBE_LABELS] ?? vibe}
+                                </Badge>
+                              ))}
+                            </div>
+                            <div className="flex flex-wrap gap-1.5">
+                              {row.removed.map((vibe) => (
+                                <Badge key={`${row.id}-remove-${vibe}`} variant="secondary" className="bg-red-100 text-red-700 text-[10px]">
+                                  - {VIBE_LABELS[vibe as keyof typeof VIBE_LABELS] ?? vibe}
+                                </Badge>
+                              ))}
+                            </div>
+                            {row.added.length === 0 && row.removed.length === 0 && (
+                              <span className="text-xs text-muted-foreground/70">No change</span>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            <div className="px-6 py-4 border-t border-gray-100 flex items-center justify-between gap-3">
+              <p className="text-xs text-muted-foreground">
+                This preview only affects currently matched restaurants{search.trim() ? ` for search "${search.trim()}"` : ""}.
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  className="rounded-xl"
+                  onClick={() => setAutoAssignPreviewOpen(false)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  className="rounded-xl"
+                  onClick={() => bulkAutoAssignMutation.mutate({ ids: autoAssignPreview.items.map((row) => row.id) })}
+                  disabled={bulkAutoAssignMutation.isPending || autoAssignPreview.items.length === 0}
+                  data-testid="button-apply-auto-assign"
+                >
+                  {bulkAutoAssignMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Sparkles className="w-4 h-4 mr-2" />}
+                  {bulkAutoAssignMutation.isPending ? "Applying..." : `Apply ${autoAssignPreview.items.length} Changes`}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {activeTab === "restaurants" ? (
         <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden" data-testid="table-restaurants">
@@ -260,9 +580,8 @@ export default function AdminRestaurants() {
                     const owner = getOwnerForRestaurant(r.id);
                     const isExpanded = expandedRow === r.id;
                     return (
-                      <>
+                      <React.Fragment key={r.id}>
                         <tr
-                          key={r.id}
                           className="border-b border-gray-100 transition-colors hover:bg-gray-50 cursor-pointer"
                           data-testid={`row-restaurant-${r.id}`}
                           onClick={() => setExpandedRow(isExpanded ? null : r.id)}
@@ -275,12 +594,19 @@ export default function AdminRestaurants() {
                             )}
                           </td>
                           <td className="px-4 py-3">
-                            <img
-                              src={r.imageUrl}
-                              alt={r.name}
-                              className="w-12 h-12 rounded-xl object-cover"
-                              data-testid={`img-restaurant-${r.id}`}
-                            />
+                            {r.imageUrl ? (
+                              <img
+                                src={r.imageUrl}
+                                alt={r.name}
+                                className="w-12 h-12 rounded-xl object-cover"
+                                data-testid={`img-restaurant-${r.id}`}
+                                onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                              />
+                            ) : (
+                              <div className="w-12 h-12 rounded-xl bg-gray-100 flex items-center justify-center" data-testid={`img-restaurant-${r.id}`}>
+                                <Utensils className="w-5 h-5 text-gray-300" />
+                              </div>
+                            )}
                           </td>
                           <td className="px-4 py-3 font-medium text-foreground" data-testid={`text-restaurant-name-${r.id}`}>
                             {r.name}
@@ -367,7 +693,7 @@ export default function AdminRestaurants() {
                             </td>
                           </tr>
                         )}
-                      </>
+                      </React.Fragment>
                     );
                   })
                 )}
@@ -638,6 +964,16 @@ function EditPanel({
 }) {
   const [form, setForm] = useState({ ...restaurant });
   const [activeSection, setActiveSection] = useState<"details" | "owner" | "claim" | "payment">("details");
+  const [openingHoursText, setOpeningHoursText] = useState(openingHoursToText(restaurant.openingHours));
+  const [uploadingCover, setUploadingCover] = useState(false);
+  const [uploadingGallery, setUploadingGallery] = useState(false);
+  const coverInputRef = useRef<HTMLInputElement>(null);
+  const galleryInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setForm({ ...restaurant });
+    setOpeningHoursText(openingHoursToText(restaurant.openingHours));
+  }, [restaurant]);
 
   const owner = owners.find((o) => o.restaurantId === restaurant.id);
   const restaurantClaims = claims.filter((c) => c.restaurantId === restaurant.id);
@@ -665,18 +1001,79 @@ function EditPanel({
 
   const autoAssignVibesMutation = useMutation({
     mutationFn: () => apiRequest("POST", `/api/admin/restaurants/${restaurant.id}/auto-assign-vibes`),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["/api/admin/restaurants"] });
-      const updatedRestaurants = queryClient.getQueryData<Restaurant[]>(["/api/admin/restaurants"]);
-      const updated = updatedRestaurants?.find((r) => r.id === restaurant.id);
-      if (updated) {
-        setForm((prev) => ({ ...prev, vibes: updated.vibes || [], district: updated.district, operatingHours: updated.operatingHours }));
-      }
+    onSuccess: async (res) => {
+      const updated = await res.json() as Restaurant;
+      setForm((prev) => ({ ...prev, vibes: updated.vibes || [] }));
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/restaurants"] });
     },
   });
 
   const update = (field: keyof Restaurant, value: string | number | boolean | null | string[]) => {
     setForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const uploadImage = async (file: File): Promise<string> => {
+    const data = await fileToBase64(file);
+    const res = await fetch("/api/admin/upload", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({
+        name: file.name,
+        type: file.type,
+        data,
+      }),
+    });
+    if (!res.ok) throw new Error("Upload failed");
+    const json = await res.json() as { url: string };
+    return json.url;
+  };
+
+  const handleCoverUpload = async (file: File | null) => {
+    if (!file) return;
+    setUploadingCover(true);
+    try {
+      const url = await uploadImage(file);
+      setForm((prev) => ({
+        ...prev,
+        imageUrl: url,
+        photos: Array.from(new Set([url, ...(prev.photos ?? [])])).slice(0, 20),
+      }));
+    } catch {
+      // Keep panel responsive even when upload fails.
+    } finally {
+      setUploadingCover(false);
+      if (coverInputRef.current) coverInputRef.current.value = "";
+    }
+  };
+
+  const handleGalleryUpload = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setUploadingGallery(true);
+    try {
+      const uploaded = await Promise.all(Array.from(files).map((file) => uploadImage(file)));
+      setForm((prev) => ({
+        ...prev,
+        photos: Array.from(new Set([...(prev.photos ?? []), ...uploaded])).slice(0, 20),
+      }));
+    } catch {
+      // Keep panel responsive even when upload fails.
+    } finally {
+      setUploadingGallery(false);
+      if (galleryInputRef.current) galleryInputRef.current.value = "";
+    }
+  };
+
+  const removeGalleryImage = (url: string) => {
+    setForm((prev) => {
+      const nextPhotos = (prev.photos ?? []).filter((photo) => photo !== url);
+      const nextCover = prev.imageUrl === url ? (nextPhotos[0] ?? "") : prev.imageUrl;
+      return {
+        ...prev,
+        imageUrl: nextCover,
+        photos: nextPhotos,
+      };
+    });
   };
 
   const toggleVibe = (vibe: string) => {
@@ -690,8 +1087,18 @@ function EditPanel({
   };
 
   const handleSave = () => {
-    const { id, ...rest } = form;
-    saveMutation.mutate(rest);
+    const { id, operatingHours: _operatingHours, ...rest } = form;
+    const normalizedCover = String(form.imageUrl ?? "").trim() || String((form.photos ?? [])[0] ?? "").trim();
+    const normalizedPhotos = Array.from(new Set([
+      ...(form.photos ?? []),
+      normalizedCover,
+    ].map((url) => String(url ?? "").trim()).filter(Boolean))).slice(0, 20);
+    saveMutation.mutate({
+      ...rest,
+      imageUrl: normalizedCover,
+      photos: normalizedPhotos,
+      openingHours: parseOpeningHours(openingHoursText),
+    });
   };
 
   const sections = [
@@ -759,13 +1166,95 @@ function EditPanel({
                   data-testid="input-edit-description"
                 />
               </Field>
-              <Field label="Image URL">
-                <Input
-                  value={form.imageUrl}
-                  onChange={(e) => update("imageUrl", e.target.value)}
-                  className="rounded-xl border-gray-100 focus-visible:ring-foreground/20"
-                  data-testid="input-edit-imageUrl"
-                />
+              <Field label="Cover Image">
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Input
+                      value={form.imageUrl}
+                      onChange={(e) => update("imageUrl", e.target.value)}
+                      className="rounded-xl border-gray-100 focus-visible:ring-foreground/20"
+                      data-testid="input-edit-imageUrl"
+                    />
+                    <input
+                      ref={coverInputRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => void handleCoverUpload(e.target.files?.[0] ?? null)}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="shrink-0 rounded-xl"
+                      onClick={() => coverInputRef.current?.click()}
+                      disabled={uploadingCover}
+                      data-testid="button-upload-cover-admin"
+                    >
+                      {uploadingCover ? <Loader2 className="w-4 h-4 animate-spin" /> : <ImagePlus className="w-4 h-4" />}
+                    </Button>
+                  </div>
+                  {form.imageUrl ? (
+                    <img
+                      src={form.imageUrl}
+                      alt="Cover preview"
+                      className="h-28 w-full rounded-xl object-cover border border-gray-100"
+                      data-testid="img-admin-cover-preview"
+                    />
+                  ) : null}
+                </div>
+              </Field>
+
+              <Field label="Gallery Images">
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs text-muted-foreground">
+                      {(form.photos ?? []).length}/20 images
+                    </p>
+                    <input
+                      ref={galleryInputRef}
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      className="hidden"
+                      onChange={(e) => void handleGalleryUpload(e.target.files)}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="rounded-xl"
+                      onClick={() => galleryInputRef.current?.click()}
+                      disabled={uploadingGallery}
+                      data-testid="button-upload-gallery-admin"
+                    >
+                      {uploadingGallery ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <ImagePlus className="w-4 h-4 mr-1" />}
+                      Add Images
+                    </Button>
+                  </div>
+                  {(form.photos ?? []).length > 0 ? (
+                    <div className="grid grid-cols-4 gap-2">
+                      {(form.photos ?? []).map((photo, idx) => (
+                        <div key={`${photo}-${idx}`} className="relative group">
+                          <img
+                            src={photo}
+                            alt={`Gallery ${idx + 1}`}
+                            className="h-16 w-full rounded-lg object-cover border border-gray-100"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => removeGalleryImage(photo)}
+                            className="absolute -top-1 -right-1 rounded-full bg-black/70 text-white w-5 h-5 text-xs hidden group-hover:block"
+                            data-testid={`button-remove-gallery-admin-${idx}`}
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">No gallery images yet.</p>
+                  )}
+                </div>
               </Field>
               <div className="grid grid-cols-2 gap-3">
                 <Field label="Latitude">
@@ -860,13 +1349,13 @@ function EditPanel({
                 </select>
               </Field>
 
-              <Field label="Operating Hours">
-                <Input
-                  value={form.operatingHours || ""}
-                  onChange={(e) => update("operatingHours", e.target.value || null)}
-                  placeholder="e.g. 09:00-22:00"
-                  className="rounded-xl border-gray-100 focus-visible:ring-foreground/20"
-                  data-testid="input-edit-operatingHours"
+              <Field label="Opening Hours">
+                <Textarea
+                  value={openingHoursText}
+                  onChange={(e) => setOpeningHoursText(e.target.value)}
+                  placeholder={"Mon: 09:00-22:00\nTue: 09:00-22:00"}
+                  className="rounded-xl border-gray-100 focus-visible:ring-foreground/20 text-sm min-h-[88px]"
+                  data-testid="input-edit-openingHours"
                 />
               </Field>
 

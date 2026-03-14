@@ -10,6 +10,7 @@ import { BottomNav } from "@/components/BottomNav";
 import { SaveBucketPicker } from "@/components/SaveBucketPicker";
 import { useSavedRestaurants } from "@/hooks/use-saved-restaurants";
 import { RestaurantCampaignBanner } from "@/components/CampaignBanner";
+import { PublicBannerSlot } from "@/components/PublicBannerSlot";
 import { useFeatureFlags } from "@/hooks/use-feature-flags";
 import noodsPhoto1 from "@assets/IMG_9279_1772025468067.jpeg";
 import noodsPhoto2 from "@assets/IMG_9280_1772025468067.jpeg";
@@ -413,6 +414,7 @@ export default function RestaurantDetail() {
         </div>
 
         <RestaurantCampaignBanner restaurantId={restaurant.id} />
+        <PublicBannerSlot position="detail_bottom" className="mb-6" />
 
         <div className="border-t border-gray-100/80 pt-5 mb-5">
           <button

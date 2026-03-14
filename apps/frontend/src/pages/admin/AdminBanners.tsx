@@ -16,8 +16,7 @@ import {
 import type { AdBanner } from "@shared/schema";
 import {
   Plus, Pencil, Trash2, X, Eye, MousePointer, Image,
-  DollarSign, Target, BarChart3, Layers, Calendar, Zap,
-  ShoppingCart, TrendingUp,
+  DollarSign, Target, BarChart3, Layers, Calendar, Zap, TrendingUp,
 } from "lucide-react";
 
 const positions = [
@@ -104,39 +103,6 @@ const emptyForm: BannerFormData = {
   bidType: "cpc",
   variantName: "",
   abVariant: "A",
-};
-
-function getMockPerformance(bannerId: number) {
-  const seed = bannerId * 7 + 3;
-  const impressions = 2000 + (seed * 137) % 15000;
-  const clicks = Math.round(impressions * (0.02 + (seed % 8) * 0.005));
-  const conversions = Math.round(clicks * (0.08 + (seed % 5) * 0.03));
-  const revenue = conversions * (120 + (seed % 10) * 35);
-  const dailyBudget = 500 + (seed % 5) * 200;
-  const totalBudget = dailyBudget * 30;
-  const spent = Math.round(totalBudget * (0.3 + (seed % 6) * 0.1));
-  const format = adFormats[seed % adFormats.length].value;
-  const variant = seed % 3 === 0 ? "B" : "A";
-  const targeting = {
-    age: ageRanges[seed % (ageRanges.length - 1)].label,
-    gender: seed % 2 === 0 ? "All" : "Female",
-    userType: userTypeOptions[seed % userTypeOptions.length],
-  };
-  return { impressions, clicks, conversions, revenue, dailyBudget, totalBudget, spent, format, variant, targeting };
-}
-
-const formatBadgeColors: Record<string, { bg: string; text: string }> = {
-  display_banner: { bg: "bg-gray-100 dark:bg-muted", text: "text-indigo-600 dark:text-indigo-400" },
-  swipe_card: { bg: "bg-gray-100 dark:bg-muted", text: "text-cyan-600 dark:text-cyan-400" },
-  interstitial: { bg: "bg-gray-100 dark:bg-muted", text: "text-violet-600 dark:text-violet-400" },
-  native_feed: { bg: "bg-gray-100 dark:bg-muted", text: "text-muted-foreground" },
-};
-
-const formatLabels: Record<string, string> = {
-  display_banner: "Display",
-  swipe_card: "Swipe Card",
-  interstitial: "Interstitial",
-  native_feed: "Native Feed",
 };
 
 export default function AdminBanners() {
@@ -608,13 +574,12 @@ export default function AdminBanners() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {banners.map((banner) => {
-            const mock = getMockPerformance(banner.id);
-            const ctr =
-              banner.impressions && banner.impressions > 0
-                ? ((banner.clicks || 0) / banner.impressions * 100).toFixed(1)
-                : ((mock.clicks / mock.impressions) * 100).toFixed(1);
-            const spentPct = Math.min(100, Math.round((mock.spent / mock.totalBudget) * 100));
-            const fmtColors = formatBadgeColors[mock.format] || formatBadgeColors.display_banner;
+            const impressions = banner.impressions ?? 0;
+            const clicks = banner.clicks ?? 0;
+            const ctr = impressions > 0 ? ((clicks / impressions) * 100).toFixed(1) : "0.0";
+            const scheduleLabel = banner.startDate || banner.endDate
+              ? `${banner.startDate || "Any"} - ${banner.endDate || "Any"}`
+              : "Always on";
 
             return (
               <div
@@ -632,19 +597,11 @@ export default function AdminBanners() {
                     />
                     <div className="absolute top-3 left-3 flex items-center gap-2">
                       <span
-                        className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${fmtColors.bg} ${fmtColors.text}`}
-                        data-testid={`badge-format-${banner.id}`}
+                        className="inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold bg-gray-100 dark:bg-muted text-muted-foreground"
+                        data-testid={`badge-position-${banner.id}`}
                       >
-                        {formatLabels[mock.format] || "Display"}
+                        {positions.find((p) => p.value === banner.position)?.label || banner.position || "Unassigned"}
                       </span>
-                      {mock.variant === "B" && (
-                        <span
-                          className="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold bg-gray-100 dark:bg-muted text-muted-foreground"
-                          data-testid={`badge-variant-${banner.id}`}
-                        >
-                          A/B
-                        </span>
-                      )}
                     </div>
                   </div>
                 )}
@@ -678,23 +635,23 @@ export default function AdminBanners() {
                     <div className="bg-gray-50 dark:bg-muted rounded-xl py-2 px-1">
                       <Eye className="w-3.5 h-3.5 text-muted-foreground mx-auto mb-0.5" />
                       <p className="text-xs font-semibold text-foreground">
-                        {mock.impressions.toLocaleString()}
+                        {impressions.toLocaleString()}
                       </p>
-                      <p className="text-[10px] text-muted-foreground">Views</p>
+                      <p className="text-[10px] text-muted-foreground">Impr.</p>
                     </div>
                     <div className="bg-gray-50 dark:bg-muted rounded-xl py-2 px-1">
                       <MousePointer className="w-3.5 h-3.5 text-muted-foreground mx-auto mb-0.5" />
                       <p className="text-xs font-semibold text-foreground">
-                        {mock.clicks.toLocaleString()}
+                        {clicks.toLocaleString()}
                       </p>
                       <p className="text-[10px] text-muted-foreground">Clicks</p>
                     </div>
                     <div className="bg-gray-50 dark:bg-muted rounded-xl py-2 px-1">
-                      <ShoppingCart className="w-3.5 h-3.5 text-muted-foreground mx-auto mb-0.5" />
+                      <Calendar className="w-3.5 h-3.5 text-muted-foreground mx-auto mb-0.5" />
                       <p className="text-xs font-semibold text-foreground">
-                        {mock.conversions}
+                        {banner.isActive ? "Live" : "Off"}
                       </p>
-                      <p className="text-[10px] text-muted-foreground">Conv.</p>
+                      <p className="text-[10px] text-muted-foreground">Status</p>
                     </div>
                     <div className="bg-[#FFCC02]/15 rounded-xl py-2 px-1">
                       <TrendingUp className="w-3.5 h-3.5 text-foreground mx-auto mb-0.5" />
@@ -705,42 +662,8 @@ export default function AdminBanners() {
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-1 text-xs text-muted-foreground" data-testid={`revenue-${banner.id}`}>
-                    <DollarSign className="w-3 h-3 text-green-500" />
-                    <span>Revenue: </span>
-                    <span className="font-semibold text-foreground">
-                      {mock.revenue.toLocaleString()} THB
-                    </span>
-                  </div>
-
-                  <div data-testid={`budget-bar-${banner.id}`}>
-                    <div className="flex items-center justify-between text-[10px] text-muted-foreground mb-1">
-                      <span>Budget: {mock.spent.toLocaleString()} / {mock.totalBudget.toLocaleString()} THB</span>
-                      <span className="font-medium">{spentPct}%</span>
-                    </div>
-                    <div className="w-full h-1.5 bg-gray-100 dark:bg-muted rounded-full overflow-hidden">
-                      <div
-                        className="h-full rounded-full transition-all"
-                        style={{
-                          width: `${spentPct}%`,
-                          background: spentPct > 80
-                            ? "hsl(350, 89%, 60%)"
-                            : "linear-gradient(90deg, hsl(222, 47%, 20%), hsl(222, 47%, 35%))",
-                        }}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-1.5 flex-wrap" data-testid={`targeting-pills-${banner.id}`}>
-                    <span className="inline-flex items-center rounded-full bg-gray-100 dark:bg-muted text-foreground px-2.5 py-0.5 text-[10px] font-medium">
-                      Age {mock.targeting.age}
-                    </span>
-                    <span className="inline-flex items-center rounded-full bg-gray-100 dark:bg-muted text-foreground px-2.5 py-0.5 text-[10px] font-medium">
-                      {mock.targeting.gender}
-                    </span>
-                    <span className="inline-flex items-center rounded-full bg-gray-100 dark:bg-muted text-foreground px-2.5 py-0.5 text-[10px] font-medium">
-                      {mock.targeting.userType}
-                    </span>
+                  <div className="text-xs text-muted-foreground" data-testid={`schedule-${banner.id}`}>
+                    Schedule: <span className="font-medium text-foreground">{scheduleLabel}</span>
                   </div>
 
                   <div className="flex items-center gap-1 flex-wrap border-t border-gray-100 dark:border-border pt-3">

@@ -76,6 +76,14 @@ function makeRestaurant(overrides: Partial<Restaurant> = {}): Restaurant {
     phone: null,
     openingHours: null,
     reviews: null,
+    isSponsored: false,
+    sponsoredUntil: null,
+    vibes: [],
+    district: null,
+    photos: [],
+    googlePlaceId: null,
+    osmId: null,
+    reviewCount: 0,
     ...overrides,
   };
 }

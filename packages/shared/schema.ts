@@ -34,6 +34,10 @@ export const restaurants = pgTable("restaurants", {
   sponsoredUntil: text("sponsored_until"),
   vibes: text("vibes").array().default([]),
   district: text("district"),
+  photos: text("photos").array().default([]),
+  googlePlaceId: text("google_place_id"),
+  osmId: text("osm_id"),
+  reviewCount: integer("review_count").notNull().default(0),
 });
 
 export const insertRestaurantSchema = createInsertSchema(restaurants).omit({ id: true });

@@ -132,6 +132,7 @@ export async function query(params: PlacesQuery): Promise<PlacesResult> {
 
 async function fetchAndCache(params: PlacesQuery, cacheKey: string): Promise<PlacesResult> {
   const { lat, lng, radius = 2000, query: q = "restaurant", sourcePreference } = params;
+  const preference = sourcePreference ?? "hybrid";
 
   let osmPlaces: NormalizedPlace[] = [];
   let googlePlaces: NormalizedPlace[] = [];
@@ -139,7 +140,7 @@ async function fetchAndCache(params: PlacesQuery, cacheKey: string): Promise<Pla
 
   const providerFallback = getProviderFallback();
 
-  if (sourcePreference === "google-first") {
+  if (preference === "google-first") {
     googlePlaces = await queryGoogle(lat, lng, radius);
     if (googlePlaces.length === 0 && providerFallback !== "none") {
       try {
@@ -149,7 +150,7 @@ async function fetchAndCache(params: PlacesQuery, cacheKey: string): Promise<Pla
       }
     }
   } else {
-    // osm-first (default) or hybrid
+    // osm-first or hybrid (default)
     try {
       osmPlaces = await queryOverpass(lat, lng, radius);
     } catch {
@@ -158,7 +159,7 @@ async function fetchAndCache(params: PlacesQuery, cacheKey: string): Promise<Pla
 
     const shouldFallback =
       providerFallback !== "none" &&
-      (osmPlaces.length === 0 || sourcePreference === "hybrid");
+      (osmPlaces.length === 0 || preference === "hybrid");
 
     if (shouldFallback) {
       googlePlaces = await queryGoogle(lat, lng, radius);

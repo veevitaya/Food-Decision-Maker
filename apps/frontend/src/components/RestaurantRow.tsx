@@ -114,13 +114,22 @@ export function RestaurantRow({ title, subtitle, restaurants, isLoading, size = 
             <div
               className={`w-full ${imageHeight} rounded-2xl overflow-hidden relative active:scale-[0.97] transition-transform duration-200`}
             >
-              <img
-                src={rest.imageUrl}
-                alt={rest.name}
-                loading="lazy"
-                className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-                draggable={false}
-              />
+              {rest.imageUrl ? (
+                <img
+                  src={rest.imageUrl}
+                  alt={rest.name}
+                  loading="lazy"
+                  className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                  draggable={false}
+                  onError={(e) => {
+                    const el = e.target as HTMLImageElement;
+                    el.style.display = "none";
+                    el.parentElement?.classList.add("bg-gray-100");
+                  }}
+                />
+              ) : (
+                <div className="w-full h-full bg-gray-100" />
+              )}
               <div className="absolute inset-0 bg-gradient-to-t from-black/20 via-transparent to-transparent" />
               {rest.isNew && (
                 <div className="absolute top-2.5 left-2.5 bg-white/95 backdrop-blur-sm rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-foreground"

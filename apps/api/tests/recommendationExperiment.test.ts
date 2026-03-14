@@ -28,6 +28,12 @@ function makeRestaurant(overrides: Partial<Restaurant>): Restaurant {
     reviews: null,
     isSponsored: false,
     sponsoredUntil: null,
+    vibes: [],
+    district: null,
+    photos: [],
+    googlePlaceId: null,
+    osmId: null,
+    reviewCount: 0,
     ...overrides,
   };
 }

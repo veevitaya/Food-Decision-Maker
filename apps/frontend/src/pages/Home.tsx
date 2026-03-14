@@ -15,6 +15,7 @@ import { useRestaurants, useSuggestions } from "@/hooks/use-restaurants";
 import { useVibeFrequency } from "@/hooks/use-vibe-frequency";
 import { SaveBucketPicker } from "@/components/SaveBucketPicker";
 import { FoodIconFromEmoji } from "@/components/FoodIcon";
+import { PublicBannerSlot } from "@/components/PublicBannerSlot";
 import { useSavedRestaurants } from "@/hooks/use-saved-restaurants";
 import { useLineProfile } from "@/lib/useLineProfile";
 import { useSessions } from "@/lib/sessionStore";
@@ -845,6 +846,10 @@ export default function Home() {
             </div>
           </div>
 
+          <div className="px-6 pb-1">
+            <PublicBannerSlot position="home_top" />
+          </div>
+
           <div className="px-6 pt-2 pb-4">
             <motion.h2
               initial={{ opacity: 0 }}
@@ -1110,6 +1115,10 @@ export default function Home() {
             size="xl"
             category="New"
           />
+
+          <div className="px-6 pt-5 pb-0">
+            <PublicBannerSlot position="home_bottom" />
+          </div>
 
           {resumableGroupSession && (
             <div className="px-6 pt-5 pb-0">
@@ -1456,4 +1465,3 @@ export default function Home() {
     </div>
   );
 }
-

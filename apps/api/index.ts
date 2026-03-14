@@ -196,7 +196,8 @@ app.use((req, res, next) => {
 
 app.use(
   express.json({
-    limit: "50kb",
+    // Allow base64 image payloads for admin/owner upload endpoints.
+    limit: process.env.API_JSON_LIMIT ?? "20mb",
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },

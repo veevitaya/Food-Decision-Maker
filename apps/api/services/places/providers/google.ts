@@ -1,15 +1,14 @@
 import type { NormalizedPlace } from "../types.js";
 import { getKey } from "../../../lib/apiKeyStore.js";
 
-const PLACES_NEARBY_URL =
-  "https://maps.googleapis.com/maps/api/place/nearbysearch/json";
-const PHOTO_URL = "https://maps.googleapis.com/maps/api/place/photo";
+const PLACES_NEARBY_URL = "https://places.googleapis.com/v1/places:searchNearby";
+const PHOTO_BASE_URL    = "https://places.googleapis.com/v1";
 
 const getPhotoEnrichLimit = () => Number(process.env.PHOTO_ENRICH_LIMIT ?? 20);
 const getDailyBudget = () => Number(process.env.GOOGLE_DAILY_BUDGET_USD ?? 5.0);
 
-// Cost per call in USD (approximate Google Places pricing)
-const COST_NEARBY_SEARCH = 0.032;
+// Cost per call in USD — Advanced SKU (photos/reviews in FieldMask)
+const COST_NEARBY_SEARCH = 0.035;
 const COST_PHOTO = 0.007;
 
 // Module-level daily counters — reset at midnight
@@ -35,15 +34,27 @@ function photoLimitReached(): boolean {
   return dailyPhotoCount >= getPhotoEnrichLimit();
 }
 
+// Places API (New) response shape
 interface GooglePlace {
-  place_id: string;
-  name: string;
-  geometry: { location: { lat: number; lng: number } };
-  vicinity?: string;
+  id: string;
+  displayName?: { text?: string };
+  location?: { latitude?: number; longitude?: number };
+  shortFormattedAddress?: string;
   types?: string[];
   rating?: number;
-  price_level?: number;
-  photos?: { photo_reference: string }[];
+  priceLevel?: string; // enum string e.g. "PRICE_LEVEL_MODERATE"
+  photos?: { name: string }[];
+}
+
+function parsePriceLevel(priceLevel?: string): number | undefined {
+  switch (priceLevel) {
+    case "PRICE_LEVEL_FREE":
+    case "PRICE_LEVEL_INEXPENSIVE":    return 1;
+    case "PRICE_LEVEL_MODERATE":       return 2;
+    case "PRICE_LEVEL_EXPENSIVE":      return 3;
+    case "PRICE_LEVEL_VERY_EXPENSIVE": return 4;
+    default:                           return undefined;
+  }
 }
 
 function toCategory(types: string[]): string {
@@ -67,14 +78,22 @@ export async function queryGoogle(
     return [];
   }
 
-  const url = new URL(PLACES_NEARBY_URL);
-  url.searchParams.set("location", `${lat},${lng}`);
-  url.searchParams.set("radius", String(radius));
-  url.searchParams.set("type", "restaurant");
-  url.searchParams.set("key", apiKey);
-
   try {
-    const res = await fetch(url.toString());
+    const res = await fetch(PLACES_NEARBY_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": apiKey,
+        "X-Goog-FieldMask": "places.id,places.displayName,places.location,places.shortFormattedAddress,places.rating,places.priceLevel,places.photos,places.types",
+      },
+      body: JSON.stringify({
+        locationRestriction: { circle: { center: { latitude: lat, longitude: lng }, radiusMeters: radius } },
+        includedTypes: ["restaurant"],
+        maxResultCount: 20,
+        rankPreference: "DISTANCE",
+      }),
+    });
+
     if (!res.ok) return [];
 
     dailySpend += COST_NEARBY_SEARCH;
@@ -82,22 +101,25 @@ export async function queryGoogle(
       console.warn(`[google] Daily spend at ${((dailySpend / getDailyBudget()) * 100).toFixed(0)}% of budget`);
     }
 
-    const json = (await res.json()) as { results: GooglePlace[]; status: string };
-    if (json.status !== "OK" && json.status !== "ZERO_RESULTS") return [];
+    const json = (await res.json()) as { places?: GooglePlace[]; error?: { message?: string } };
+    if (json.error) {
+      console.warn("[google] Places API (New) error:", json.error.message);
+      return [];
+    }
 
-    const results = json.results ?? [];
+    const results = json.places ?? [];
 
     return results.map((p): NormalizedPlace => {
       const photos = enrichPhotos(p, apiKey);
       return {
-        id: `google:${p.place_id}`,
-        name: p.name,
-        lat: p.geometry.location.lat,
-        lng: p.geometry.location.lng,
-        address: p.vicinity ?? "",
+        id: `google:${p.id}`,
+        name: p.displayName?.text ?? "",
+        lat: p.location?.latitude ?? 0,
+        lng: p.location?.longitude ?? 0,
+        address: p.shortFormattedAddress ?? "",
         category: toCategory(p.types ?? []),
         rating: p.rating != null ? String(p.rating) : undefined,
-        priceLevel: p.price_level,
+        priceLevel: parsePriceLevel(p.priceLevel),
         photos,
         source: "google",
         isFallback: true,
@@ -121,12 +143,8 @@ export function _getDailySpend(): number {
 
 function enrichPhotos(place: GooglePlace, apiKey: string): string[] {
   if (!place.photos?.length || photoLimitReached()) return [];
-  const ref = place.photos[0].photo_reference;
+  const photoName = place.photos[0].name; // e.g. "places/ChIJ.../photos/AUc7tXx"
   dailyPhotoCount += 1;
   dailySpend += COST_PHOTO;
-  const url = new URL(PHOTO_URL);
-  url.searchParams.set("maxwidth", "400");
-  url.searchParams.set("photo_reference", ref);
-  url.searchParams.set("key", apiKey);
-  return [url.toString()];
+  return [`${PHOTO_BASE_URL}/${photoName}/media?maxWidthPx=400&key=${encodeURIComponent(apiKey)}`];
 }

@@ -96,6 +96,12 @@ export interface IStorage {
   createMenu(data: InsertMenu): Promise<Menu>;
   updateMenu(id: number, updates: Partial<InsertMenu>): Promise<Menu | undefined>;
   deleteMenu(id: number): Promise<boolean>;
+  getMenuAdminStats(): Promise<{
+    total: number;
+    active: number;
+    qualityFlags: { missingImages: number; noPrice: number; missingTags: number; noDescription: number; staleData: number };
+    items: Array<Menu & { restaurantName: string }>;
+  }>;
   listPromotionsByRestaurant(restaurantId: number, activeOnly?: boolean): Promise<Promotion[]>;
   createPromotion(data: InsertPromotion): Promise<Promotion>;
   updatePromotion(id: number, updates: Partial<InsertPromotion>): Promise<Promotion | undefined>;
@@ -135,8 +141,12 @@ export interface IStorage {
   updateCampaign(id: number, updates: Partial<InsertCampaign>): Promise<Campaign | undefined>;
   deleteCampaign(id: number): Promise<boolean>;
   listBanners(): Promise<AdBanner[]>;
+  getBannerById(id: number): Promise<AdBanner | undefined>;
+  listPublicActiveBanners(position?: string): Promise<AdBanner[]>;
   createBanner(data: InsertAdBanner): Promise<AdBanner>;
   updateBanner(id: number, updates: Partial<InsertAdBanner>): Promise<AdBanner | undefined>;
+  incrementBannerImpressions(id: number): Promise<AdBanner | undefined>;
+  incrementBannerClicks(id: number): Promise<AdBanner | undefined>;
   deleteBanner(id: number): Promise<boolean>;
   getAdminConfig(configKey: string): Promise<AdminConfig | undefined>;
   upsertAdminConfig(configKey: string, value: Record<string, unknown>): Promise<AdminConfig>;
@@ -271,6 +281,45 @@ export class DatabaseStorage implements IStorage {
   async deleteMenu(id: number): Promise<boolean> {
     const deleted = await db.delete(menus).where(eq(menus.id, id)).returning({ id: menus.id });
     return deleted.length > 0;
+  }
+
+  async getMenuAdminStats() {
+    const ninetyDaysAgo = new Date();
+    ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+
+    const rows = await db
+      .select({
+        id: menus.id,
+        restaurantId: menus.restaurantId,
+        name: menus.name,
+        description: menus.description,
+        imageUrl: menus.imageUrl,
+        priceApprox: menus.priceApprox,
+        tags: menus.tags,
+        dietFlags: menus.dietFlags,
+        isActive: menus.isActive,
+        isSponsored: menus.isSponsored,
+        createdAt: menus.createdAt,
+        restaurantName: restaurants.name,
+      })
+      .from(menus)
+      .leftJoin(restaurants, eq(menus.restaurantId, restaurants.id))
+      .orderBy(desc(menus.createdAt));
+
+    const total = rows.length;
+    const active = rows.filter((r) => r.isActive).length;
+    const missingImages = rows.filter((r) => !r.imageUrl).length;
+    const noPrice = rows.filter((r) => r.priceApprox == null).length;
+    const missingTags = rows.filter((r) => !r.tags || r.tags.length === 0).length;
+    const noDescription = rows.filter((r) => !r.description).length;
+    const staleData = rows.filter((r) => r.createdAt < ninetyDaysAgo).length;
+
+    return {
+      total,
+      active,
+      qualityFlags: { missingImages, noPrice, missingTags, noDescription, staleData },
+      items: rows.map((r) => ({ ...r, restaurantName: r.restaurantName ?? "Unknown" })),
+    };
   }
 
   async listPromotionsByRestaurant(restaurantId: number, activeOnly = false): Promise<Promotion[]> {
@@ -535,6 +584,7 @@ export class DatabaseStorage implements IStorage {
         const updates: Partial<InsertRestaurant> = {};
 
         if (!c.imageUrl && place.photos?.[0]) updates.imageUrl = place.photos[0];
+        if (place.photos?.length) updates.photos = place.photos;
         if ((!c.rating || c.rating === "N/A") && place.rating) updates.rating = place.rating;
         if ((!c.address || c.address === "N/A") && place.address) updates.address = place.address;
         if (!c.priceLevel && place.priceLevel) updates.priceLevel = place.priceLevel;
@@ -558,6 +608,7 @@ export class DatabaseStorage implements IStorage {
         name: place.name,
         description: place.category,
         imageUrl: place.photos?.[0] ?? "",
+        photos: place.photos ?? [],
         lat: String(place.lat),
         lng: String(place.lng),
         category: place.category,
@@ -605,6 +656,32 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(adBanners).orderBy(desc(adBanners.createdAt));
   }
 
+  async getBannerById(id: number): Promise<AdBanner | undefined> {
+    const [banner] = await db.select().from(adBanners).where(eq(adBanners.id, id)).limit(1);
+    return banner;
+  }
+
+  async listPublicActiveBanners(position?: string): Promise<AdBanner[]> {
+    const today = new Date().toISOString().slice(0, 10);
+    const conditions: SQL[] = [eq(adBanners.isActive, true)];
+    const normalizedPosition = position?.trim();
+    if (normalizedPosition) conditions.push(eq(adBanners.position, normalizedPosition));
+
+    const rows = await db
+      .select()
+      .from(adBanners)
+      .where(and(...conditions))
+      .orderBy(desc(adBanners.createdAt));
+
+    return rows.filter((banner) => {
+      const startDate = banner.startDate?.trim();
+      const endDate = banner.endDate?.trim();
+      if (startDate && startDate > today) return false;
+      if (endDate && endDate < today) return false;
+      return true;
+    });
+  }
+
   async createBanner(data: InsertAdBanner): Promise<AdBanner> {
     const [created] = await db.insert(adBanners).values(data).returning();
     return created;
@@ -612,6 +689,24 @@ export class DatabaseStorage implements IStorage {
 
   async updateBanner(id: number, updates: Partial<InsertAdBanner>): Promise<AdBanner | undefined> {
     const [updated] = await db.update(adBanners).set(updates).where(eq(adBanners.id, id)).returning();
+    return updated;
+  }
+
+  async incrementBannerImpressions(id: number): Promise<AdBanner | undefined> {
+    const [updated] = await db
+      .update(adBanners)
+      .set({ impressions: sql`${adBanners.impressions} + 1` })
+      .where(eq(adBanners.id, id))
+      .returning();
+    return updated;
+  }
+
+  async incrementBannerClicks(id: number): Promise<AdBanner | undefined> {
+    const [updated] = await db
+      .update(adBanners)
+      .set({ clicks: sql`${adBanners.clicks} + 1` })
+      .where(eq(adBanners.id, id))
+      .returning();
     return updated;
   }
 
