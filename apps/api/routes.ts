@@ -32,6 +32,7 @@ import { getKey, getSource, setKey, ALLOWED_SERVICE_IDS, loadFromDb } from "./li
 import { persistAnalyticsQualityReport } from "./jobs/analyticsQuality";
 import { appendSecurityAudit } from "./lib/opsLog";
 import { checkSLOs } from "./lib/slo";
+import { broadcastDataChange } from "./socket";
 import { sendAlert } from "./lib/alerting";
 import { ingestBatchSchema } from "./lib/eventIngestSchema";
 import {
@@ -40,6 +41,7 @@ import {
   replayDlq,
   shouldUseRedisIngest,
 } from "./lib/eventQueue";
+import { reverseGeocodeDistrict } from "./lib/locationCluster";
 import { processEventIngestBatch } from "./lib/eventIngestBatch";
 import {
   DEFAULT_RECOMMENDATION_EXPERIMENT_KEY,
@@ -73,8 +75,9 @@ import {
 } from "./services/payment/paymentService";
 import { stripeWebhookHandler } from "./services/payment/stripeWebhook";
 import { omiseWebhookHandler } from "./services/payment/omiseWebhook";
-import { paymentTransactions, restaurantOwners, restaurants } from "@shared/schema";
-import { eq, desc, and, inArray } from "drizzle-orm";
+import { paymentTransactions, restaurantOwners, restaurants, trendingFeedCache, consentLogs as consentLogs_, eventLogs as eventLogs_ } from "@shared/schema";
+import { eq, desc, and, inArray, sql } from "drizzle-orm";
+import { refreshTrendingCache } from "./jobs/trendingJob";
 
 const isDev = process.env.NODE_ENV !== "production";
 const execFileAsync = promisify(execFile);
@@ -651,9 +654,13 @@ const OWNERS_CONFIG_KEY = "restaurant_owners";
 const CLAIMS_CONFIG_KEY = "restaurant_claims";
 
 async function buildAnalyticsEvents(): Promise<AnalyticsEventRecord[]> {
+  console.log("[buildAnalyticsEvents] listEventLogs...");
   const logs = await storage.listEventLogs(500);
+  console.log("[buildAnalyticsEvents] listEventLogs ok:", logs.length);
   if (logs.length > 0) {
+    console.log("[buildAnalyticsEvents] getRestaurants for name map...");
     const allRestaurants = await storage.getRestaurants();
+    console.log("[buildAnalyticsEvents] getRestaurants ok:", allRestaurants.length);
     const restaurantNames: Record<number, string> = {};
     for (const r of allRestaurants) restaurantNames[r.id] = r.name;
     return logs.map((log) => ({
@@ -667,7 +674,9 @@ async function buildAnalyticsEvents(): Promise<AnalyticsEventRecord[]> {
     }));
   }
 
+  console.warn("[buildAnalyticsEvents] ⚠️  event_logs is EMPTY — dashboard is showing FAKE data from placesRequestLogs (Google Places API calls, not real user swipes). Fix: use the app to generate events via POST /api/events/batch.");
   const fallbackLogs = await storage.listPlacesRequestLogs(200);
+  console.log("[buildAnalyticsEvents] placesRequestLogs ok:", fallbackLogs.length);
   return fallbackLogs.map((log) => ({
     id: log.id,
     eventType: log.cacheHit ? "swipe_right" : log.fallbackUsed ? "swipe_left" : "view_detail",
@@ -830,7 +839,8 @@ type GooglePlaceNew = {
   reviews?: Array<{
     authorAttribution?: { displayName?: string; photoUri?: string };
     rating?: number;
-    text?: { text?: string };
+    text?: { text?: string; languageCode?: string };
+    originalText?: { text?: string; languageCode?: string };
     relativePublishTimeDescription?: string;
     publishTime?: string;
   }>;
@@ -913,6 +923,11 @@ type GoogleDetailsResult = {
     author_photo?: string;
     rating?: number;
     text?: string;
+    text_language_code?: string;
+    original_text?: string;
+    original_text_language_code?: string;
+    translated_text?: string;
+    translated_language_code?: string;
     relative_time_description?: string;
     publish_time?: string;
   }>;
@@ -992,13 +1007,30 @@ function toReviews(reviews?: GoogleDetailsResult["reviews"]): RestaurantReview[]
   if (!reviews?.length) return undefined;
   const mapped: RestaurantReview[] = reviews
     .slice(0, 10)
-    .map((r) => ({
-      author: r.author_name?.trim() || "Google User",
-      authorPhoto: r.author_photo?.trim() || undefined,
-      rating: Math.max(1, Math.min(5, Number(r.rating ?? 5))),
-      text: r.text?.trim() || "",
-      timeAgo: r.relative_time_description?.trim() || r.publish_time?.trim() || undefined,
-    }))
+    .map((r) => {
+      const rawText = r.text?.trim() || "";
+      const originalText =
+        r.original_text?.trim() ||
+        (r.text_language_code?.toLowerCase().startsWith("th") ? rawText : undefined);
+      const translatedText =
+        r.translated_text?.trim() ||
+        (r.text_language_code?.toLowerCase().startsWith("en") ? rawText : undefined);
+      return {
+        author: r.author_name?.trim() || "Google User",
+        authorPhoto: r.author_photo?.trim() || undefined,
+        rating: Math.max(1, Math.min(5, Number(r.rating ?? 5))),
+        text: translatedText || rawText || originalText || "",
+        timeAgo: r.relative_time_description?.trim() || r.publish_time?.trim() || undefined,
+        originalText,
+        translatedText,
+        originalLanguageCode:
+          r.original_text_language_code?.trim() ||
+          (r.text_language_code?.toLowerCase().startsWith("th") ? r.text_language_code : undefined),
+        translatedLanguageCode:
+          r.translated_language_code?.trim() ||
+          (r.text_language_code?.toLowerCase().startsWith("en") ? r.text_language_code : undefined),
+      };
+    })
     .filter((r) => r.text.length > 0);
   return mapped.length > 0 ? mapped : undefined;
 }
@@ -1018,6 +1050,54 @@ function isLegacyGooglePhotoUrl(url?: string | null): boolean {
 
 function normalizeVibes(vibes?: string[] | null): string[] {
   return Array.from(new Set((vibes ?? []).filter((v) => Boolean(v && v.trim().length > 0)))).sort();
+}
+
+const BANGKOK_DISTRICT_KEYWORDS: Array<{ district: string; keywords: string[] }> = [
+  { district: "Watthana", keywords: ["watthana", "วัฒนา"] },
+  { district: "Khlong Toei", keywords: ["khlong toei", "คลองเตย"] },
+  { district: "Pathum Wan", keywords: ["pathum wan", "ปทุมวัน"] },
+  { district: "Bang Rak", keywords: ["bang rak", "บางรัก"] },
+  { district: "Sathon", keywords: ["sathon", "sathorn", "สาทร"] },
+  { district: "Ratchathewi", keywords: ["ratchathewi", "ราชเทวี"] },
+  { district: "Huai Khwang", keywords: ["huai khwang", "ห้วยขวาง"] },
+  { district: "Phaya Thai", keywords: ["phaya thai", "พญาไท"] },
+  { district: "Phra Nakhon", keywords: ["phra nakhon", "พระนคร"] },
+  { district: "Samphanthawong", keywords: ["samphanthawong", "สัมพันธวงศ์", "chinatown", "yaowarat"] },
+  { district: "Khlong San", keywords: ["khlong san", "คลองสาน"] },
+  { district: "Bang Kapi", keywords: ["bang kapi", "บางกะปิ"] },
+  { district: "Suan Luang", keywords: ["suan luang", "สวนหลวง"] },
+  { district: "Chatuchak", keywords: ["chatuchak", "จตุจักร"] },
+];
+
+function detectDistrictFromText(value?: string | null): string | null {
+  const lower = String(value ?? "").trim().toLowerCase();
+  if (!lower) return null;
+  for (const item of BANGKOK_DISTRICT_KEYWORDS) {
+    if (item.keywords.some((kw) => lower.includes(kw))) return item.district;
+  }
+  return null;
+}
+
+async function resolveRestaurantDistrict(args: {
+  currentDistrict?: string | null;
+  addressCandidates?: Array<string | null | undefined>;
+  lat?: number;
+  lng?: number;
+}): Promise<string | null> {
+  const current = args.currentDistrict?.trim();
+  if (current) return current;
+
+  for (const candidate of args.addressCandidates ?? []) {
+    const found = detectDistrictFromText(candidate);
+    if (found) return found;
+  }
+
+  if (Number.isFinite(args.lat) && Number.isFinite(args.lng)) {
+    const reverse = await reverseGeocodeDistrict(Number(args.lat), Number(args.lng));
+    if (reverse?.trim()) return reverse.trim();
+  }
+
+  return null;
 }
 
 function sameVibes(a?: string[] | null, b?: string[] | null): boolean {
@@ -1164,6 +1244,17 @@ function adaptNearbyPlace(p: GooglePlaceNew): GoogleNearbyResult {
       author_photo: r.authorAttribution?.photoUri,
       rating: r.rating,
       text: r.text?.text,
+      text_language_code: r.text?.languageCode,
+      original_text: r.originalText?.text,
+      original_text_language_code: r.originalText?.languageCode,
+      translated_text:
+        r.originalText?.text && r.text?.text && r.originalText.text !== r.text.text
+          ? r.text.text
+          : undefined,
+      translated_language_code:
+        r.originalText?.text && r.text?.text && r.originalText.text !== r.text.text
+          ? r.text?.languageCode
+          : undefined,
       relative_time_description: r.relativePublishTimeDescription,
       publish_time: r.publishTime,
     })),
@@ -1337,6 +1428,17 @@ async function fetchGoogleDetails(apiKey: string, placeId: string): Promise<Goog
       author_photo: r.authorAttribution?.photoUri,
       rating: r.rating,
       text: r.text?.text,
+      text_language_code: r.text?.languageCode,
+      original_text: r.originalText?.text,
+      original_text_language_code: r.originalText?.languageCode,
+      translated_text:
+        r.originalText?.text && r.text?.text && r.originalText.text !== r.text.text
+          ? r.text.text
+          : undefined,
+      translated_language_code:
+        r.originalText?.text && r.text?.text && r.originalText.text !== r.text.text
+          ? r.text?.languageCode
+          : undefined,
       relative_time_description: r.relativePublishTimeDescription,
       publish_time: r.publishTime,
     })),
@@ -1466,6 +1568,7 @@ async function enrichRestaurantDetailsFromGoogle<T extends {
   reviews: RestaurantReview[] | null;
   googlePlaceId?: string | null;
   reviewCount?: number | null;
+  district?: string | null;
 }>(restaurant: T): Promise<T> {
   const alreadyEnriched =
     Boolean(restaurant.phone) &&
@@ -1498,10 +1601,17 @@ async function enrichRestaurantDetailsFromGoogle<T extends {
     const openingHours = toOpeningHours(details?.opening_hours?.weekday_text);
     const reviews = toReviews(details?.reviews);
     const phone = details?.formatted_phone_number ?? restaurant.phone ?? null;
+    const district = await resolveRestaurantDistrict({
+      currentDistrict: restaurant.district ?? null,
+      addressCandidates: [details?.formatted_address, match.vicinity, restaurant.address],
+      lat,
+      lng,
+    });
 
     const updated = await storage.updateRestaurant(restaurant.id, {
       imageUrl,
       address,
+      district,
       category,
       description: restaurant.category || category,
       priceLevel: Math.max(1, Math.min(4, Number(priceLevel || 2))),
@@ -1572,10 +1682,17 @@ async function hydrateRestaurantFromGooglePlace(place: NormalizedPlace, restaura
   const imageUrl = photoRef ? toPhotoUrl(photoRef, apiKey) : (existing.imageUrl || place.photos?.[0] || "");
   const openingHours = toOpeningHours(details.opening_hours?.weekday_text);
   const reviews = toReviews(details.reviews);
+  const district = await resolveRestaurantDistrict({
+    currentDistrict: existing.district ?? null,
+    addressCandidates: [details.formatted_address, place.address, existing.address],
+    lat: Number(existing.lat),
+    lng: Number(existing.lng),
+  });
 
   await storage.updateRestaurant(restaurantId, {
     imageUrl,
     address,
+    district,
     category,
     description: existing.description || category,
     priceLevel,
@@ -2112,10 +2229,12 @@ export async function registerRoutes(
 
       if (req.session?.isAdmin) {
         const adminRestaurantId = Number(req.query.restaurantId ?? req.query.id);
-        if (!Number.isFinite(adminRestaurantId) || adminRestaurantId <= 0) {
-          return res.status(400).json({ message: "restaurantId is required for admin requests" });
+        if (Number.isFinite(adminRestaurantId) && adminRestaurantId > 0) {
+          restaurantId = adminRestaurantId;
+        } else {
+          const allRestaurants = await storage.getRestaurants();
+          restaurantId = allRestaurants[0]?.id ?? null;
         }
-        restaurantId = adminRestaurantId;
       } else {
         const ownerScope = await getOwnerScope(req);
         if (!ownerScope || ownerScope.approvedRestaurantIds.size === 0) {
@@ -2184,6 +2303,10 @@ export async function registerRoutes(
           author: z.string().min(1),
           rating: z.number().min(1).max(5),
           text: z.string().min(1),
+          originalText: z.string().optional(),
+          translatedText: z.string().optional(),
+          originalLanguageCode: z.string().optional(),
+          translatedLanguageCode: z.string().optional(),
           timeAgo: z.string().optional(),
         })).nullable().optional(),
         vibes: z.array(z.string()).optional(),
@@ -3280,8 +3403,8 @@ export async function registerRoutes(
       const allRestaurants = await storage.getRestaurants();
       const allProfiles = await storage.listProfiles(2000);
       const events = await buildAnalyticsEvents();
-      const campaigns = await storage.listCampaigns();
-      const banners = await storage.listBanners();
+      const campaigns = await storage.listCampaigns().catch(() => []);
+      const banners = await storage.listBanners().catch(() => []);
       const now = Date.now();
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
@@ -3353,6 +3476,7 @@ export async function registerRoutes(
     status: z.enum(["draft", "active", "paused", "ended"]).optional().default("draft"),
     dealType: z.string().nullable().optional().default(null),
     dealValue: z.string().nullable().optional().default(null),
+    imageUrl: z.string().nullable().optional().default(null),
     restaurantOwnerKey: z.string().min(1),
     startDate: z.string().nullable().optional().default(null),
     endDate: z.string().nullable().optional().default(null),
@@ -3369,6 +3493,7 @@ export async function registerRoutes(
     status: z.enum(["draft", "active", "paused", "ended"]).optional(),
     dealType: z.string().nullable().optional(),
     dealValue: z.string().nullable().optional(),
+    imageUrl: z.string().nullable().optional(),
     restaurantOwnerKey: z.string().min(1).optional(),
     startDate: z.string().nullable().optional(),
     endDate: z.string().nullable().optional(),
@@ -3470,6 +3595,7 @@ export async function registerRoutes(
           ip: req.ip,
         },
       });
+      broadcastDataChange(["/api/campaigns", "/api/campaigns/active"]);
       res.status(201).json(created);
     } catch (err) {
       if (err instanceof z.ZodError) {
@@ -3499,6 +3625,7 @@ export async function registerRoutes(
           ip: req.ip,
         },
       });
+      broadcastDataChange(["/api/campaigns", "/api/campaigns/active"]);
       res.json(updated);
     } catch (err) {
       if (err instanceof z.ZodError) {
@@ -3526,6 +3653,7 @@ export async function registerRoutes(
           ip: req.ip,
         },
       });
+      broadcastDataChange(["/api/campaigns", "/api/campaigns/active"]);
       res.json(updated);
     } catch (err) {
       if (err instanceof z.ZodError) {
@@ -3811,18 +3939,34 @@ export async function registerRoutes(
   });
 
   app.get("/api/analytics/summary", async (req, res) => {
+    console.log("[analytics/summary] START");
     try {
       if (!requireAdminSession(req, res)) return;
+
+      console.log("[analytics/summary] step 1: getRestaurants");
       const allRestaurants = await storage.getRestaurants();
+      console.log("[analytics/summary] step 1 ok:", allRestaurants.length);
+
+      console.log("[analytics/summary] step 2: listProfiles");
       const allProfiles = await storage.listProfiles(2000);
+      console.log("[analytics/summary] step 2 ok:", allProfiles.length);
+
+      console.log("[analytics/summary] step 3: buildAnalyticsEvents");
       const events = await buildAnalyticsEvents();
+      console.log("[analytics/summary] step 3 ok:", events.length);
+
+      console.log("[analytics/summary] step 4: listCampaigns");
       const campaigns = await storage.listCampaigns();
+      console.log("[analytics/summary] step 4 ok:", campaigns.length);
+
+      console.log("[analytics/summary] step 5: building response");
       const eventBreakdown = events.reduce<Record<string, number>>((acc, event) => {
         acc[event.eventType] = (acc[event.eventType] ?? 0) + 1;
         return acc;
       }, {});
       const totalSwipes = (eventBreakdown.swipe ?? 0) + (eventBreakdown.swipe_left ?? 0) + (eventBreakdown.swipe_right ?? 0);
 
+      console.log("[analytics/summary] DONE - sending response");
       res.json({
         totalUsers: allProfiles.length,
         totalRestaurants: allRestaurants.length,
@@ -3831,8 +3975,13 @@ export async function registerRoutes(
         totalEvents: events.length,
         eventBreakdown,
       });
-    } catch {
-      res.status(500).json({ message: "Internal server error" });
+    } catch (err) {
+      console.log("[analytics/summary] FAILED at step above ^");
+      console.log("[analytics/summary] error name:", (err as any)?.name);
+      console.log("[analytics/summary] error message:", (err as any)?.message);
+      console.log("[analytics/summary] error code:", (err as any)?.code);
+      console.log("[analytics/summary] error detail:", (err as any)?.detail);
+      res.status(500).json({ message: "Internal server error", detail: String(err) });
     }
   });
 
@@ -4353,6 +4502,7 @@ export async function registerRoutes(
         });
       }
 
+      broadcastDataChange(["/api/admin/claims", "/api/admin/restaurants", "/api/admin/owners"]);
       res.json(updated as any);
     } catch (err) {
       if (err instanceof z.ZodError) {
@@ -4451,6 +4601,7 @@ export async function registerRoutes(
       if (!requireOwnerOrAdmin(req, res)) return;
       const ownerEmail = req.session?.ownerEmail ?? "";
       if (!ownerEmail) return res.status(401).json({ message: "Owner session required" });
+      const scope = await getOwnerScope(req);
 
       const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
       const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
@@ -4467,18 +4618,23 @@ export async function registerRoutes(
       if (!owner) return res.status(404).json({ message: "Owner not found" });
 
       const ownerClaims = allClaims.filter((c) => c.ownerId === owner.id);
-      const restaurant = owner.restaurantId
-        ? allRestaurants.find((r) => r.id === owner.restaurantId) ?? null
+      const resolvedRestaurantId =
+        scope?.activeRestaurantId ??
+        owner.restaurantId ??
+        ownerClaims.find((c) => c.status === "approved")?.restaurantId ??
+        null;
+      const restaurant = resolvedRestaurantId
+        ? allRestaurants.find((r) => r.id === resolvedRestaurantId) ?? null
         : null;
       const ownerCampaigns = campaigns.filter((c) =>
-        owner.restaurantId ? c.restaurantOwnerKey === `owner_${owner.restaurantId}` : false
+        resolvedRestaurantId ? c.restaurantOwnerKey === ("owner_" + resolvedRestaurantId) : false
       );
 
-      const eventsThis = owner.restaurantId
-        ? allRecentEvents.filter((e) => e.itemId === owner.restaurantId && new Date(e.createdAt) >= sevenDaysAgo)
+      const eventsThis = resolvedRestaurantId
+        ? allRecentEvents.filter((e) => e.itemId === resolvedRestaurantId && new Date(e.createdAt) >= sevenDaysAgo)
         : [];
-      const eventsPrev = owner.restaurantId
-        ? allRecentEvents.filter((e) => e.itemId === owner.restaurantId && new Date(e.createdAt) < sevenDaysAgo)
+      const eventsPrev = resolvedRestaurantId
+        ? allRecentEvents.filter((e) => e.itemId === resolvedRestaurantId && new Date(e.createdAt) < sevenDaysAgo)
         : [];
 
       function ownerStatCount(evs: typeof eventsThis, types: string[]) {
@@ -4520,8 +4676,8 @@ export async function registerRoutes(
 
       // Real insights computed from event data
       const insights: { title: string; why: string; action: string; href: string; accent: string }[] = [];
-      if (owner.restaurantId && allSwipeEvents.length > 0) {
-        const mySwipes = allSwipeEvents.filter(e => e.itemId === owner.restaurantId && e.eventType === "swipe");
+      if (resolvedRestaurantId && allSwipeEvents.length > 0) {
+        const mySwipes = allSwipeEvents.filter(e => e.itemId === resolvedRestaurantId && e.eventType === "swipe");
         const myRight = mySwipes.filter(e => (e.metadata as Record<string, unknown> | null)?.direction === "right").length;
         const myWinRate = mySwipes.length >= 5 ? Math.round((myRight / mySwipes.length) * 100) : null;
 
@@ -4587,7 +4743,7 @@ export async function registerRoutes(
           email: owner.email,
           displayName: owner.displayName,
           phone: owner.phone ?? null,
-          restaurantId: owner.restaurantId || null,
+          restaurantId: resolvedRestaurantId,
           isVerified: owner.isVerified ?? false,
           verificationStatus: owner.verificationStatus ?? "pending",
           subscriptionTier: owner.subscriptionTier ?? "free",
@@ -4799,6 +4955,11 @@ export async function registerRoutes(
           const imageUrl = allPhotoUrls[0] ?? "";
           const openingHours = toOpeningHours(details?.opening_hours?.weekday_text);
           const reviews = toReviews(details?.reviews);
+          const district = await resolveRestaurantDistrict({
+            addressCandidates: [details?.formatted_address, place.vicinity, address],
+            lat,
+            lng,
+          });
 
           const normalized: NormalizedPlace = {
             id: `google:${place.place_id}`,
@@ -4826,6 +4987,7 @@ export async function registerRoutes(
             priceLevel: safePrice,
             rating,
             address,
+            district,
             phone: details?.formatted_phone_number ?? null,
             openingHours: openingHours ?? null,
             reviews: reviews ?? null,
@@ -4987,6 +5149,11 @@ export async function registerRoutes(
           source: "google",
         };
         const id = await storage.findOrCreateFromPlace(normalized);
+        const district = await resolveRestaurantDistrict({
+          addressCandidates: [item.address],
+          lat: Number(item.lat),
+          lng: Number(item.lng),
+        });
         await storage.updateRestaurant(id, {
           name: item.name,
           description: item.description,
@@ -4997,6 +5164,7 @@ export async function registerRoutes(
           priceLevel: item.priceLevel,
           rating: item.rating,
           address: item.address,
+          district,
           isNew: item.isNew,
           trendingScore: item.trendingScore,
         });
@@ -5068,7 +5236,14 @@ export async function registerRoutes(
         .filter((u): u is string => !!u);
 
       const ratingNum = details.rating ?? 0;
+      const district = await resolveRestaurantDistrict({
+        currentDistrict: restaurant.district ?? null,
+        addressCandidates: [details.formatted_address, restaurant.address],
+        lat: Number(restaurant.lat),
+        lng: Number(restaurant.lng),
+      });
       const updates: Record<string, unknown> = {
+        ...(district ? { district } : {}),
         ...(photoUrls.length > 0 ? { imageUrl: photoUrls[0], photos: photoUrls } : {}),
         ...(details.formatted_address ? { address: details.formatted_address } : {}),
         ...(details.formatted_phone_number ? { phone: details.formatted_phone_number } : {}),
@@ -5105,6 +5280,74 @@ export async function registerRoutes(
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
       res.status(500).json({ message });
+    }
+  });
+
+  // ── District backfill: derive district for legacy rows ──────────────────────
+  app.post("/api/admin/restaurants/backfill-districts", async (req, res) => {
+    try {
+      if (!requireAdminSession(req, res)) return;
+      const input = z.object({
+        limit: z.number().int().min(1).max(5000).optional().default(1000),
+        force: z.boolean().optional().default(false),
+      }).parse(req.body ?? {});
+
+      const all = await storage.getRestaurants();
+      const targets = input.force
+        ? all
+        : all.filter((r) => !r.district || r.district.trim().length === 0);
+      const selected = targets.slice(0, input.limit);
+
+      let updated = 0;
+      let skipped = 0;
+      let failed = 0;
+      const sample: Array<{ id: number; name: string; district: string | null; status: "updated" | "skipped" | "failed" }> = [];
+
+      for (const r of selected) {
+        try {
+          const lat = Number(r.lat);
+          const lng = Number(r.lng);
+          const district = await resolveRestaurantDistrict({
+            currentDistrict: input.force ? null : (r.district ?? null),
+            addressCandidates: [r.address],
+            lat,
+            lng,
+          });
+
+          if (!district) {
+            skipped += 1;
+            if (sample.length < 25) sample.push({ id: r.id, name: r.name, district: null, status: "skipped" });
+            continue;
+          }
+          if (!input.force && r.district?.trim() === district) {
+            skipped += 1;
+            if (sample.length < 25) sample.push({ id: r.id, name: r.name, district, status: "skipped" });
+            continue;
+          }
+
+          await storage.updateRestaurant(r.id, { district });
+          updated += 1;
+          if (sample.length < 25) sample.push({ id: r.id, name: r.name, district, status: "updated" });
+        } catch {
+          failed += 1;
+          if (sample.length < 25) sample.push({ id: r.id, name: r.name, district: null, status: "failed" });
+        }
+      }
+
+      res.json({
+        ok: true,
+        scanned: selected.length,
+        updated,
+        skipped,
+        failed,
+        remainingCandidates: Math.max(0, targets.length - selected.length),
+        sample,
+      });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid payload" });
+      }
+      res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -5356,6 +5599,10 @@ export async function registerRoutes(
           author: z.string().min(1),
           rating: z.number().min(1).max(5),
           text: z.string().min(1),
+          originalText: z.string().optional(),
+          translatedText: z.string().optional(),
+          originalLanguageCode: z.string().optional(),
+          translatedLanguageCode: z.string().optional(),
           timeAgo: z.string().optional(),
         })).nullable().optional(),
         photos: z.array(z.string()).max(20).optional(),
@@ -5371,6 +5618,7 @@ export async function registerRoutes(
         imageUrl: normalizedCover,
         photos: normalizedPhotos,
       });
+      broadcastDataChange(["/api/admin/restaurants"]);
       res.status(201).json(created);
     } catch (err) {
       if (err instanceof z.ZodError) {
@@ -5425,6 +5673,10 @@ export async function registerRoutes(
             author: z.string().min(1),
             rating: z.number().min(1).max(5),
             text: z.string().min(1),
+            originalText: z.string().optional(),
+            translatedText: z.string().optional(),
+            originalLanguageCode: z.string().optional(),
+            translatedLanguageCode: z.string().optional(),
             timeAgo: z.string().optional(),
           })).nullable().optional(),
           photos: z.array(z.string()).max(20).optional(),
@@ -5446,6 +5698,7 @@ export async function registerRoutes(
 
       const updated = await storage.updateRestaurant(id, nextUpdates);
       if (!updated) return res.status(404).json({ message: "Restaurant not found" });
+      broadcastDataChange(["/api/admin/restaurants"]);
       res.json(updated);
     } catch (err) {
       if (err instanceof z.ZodError) {
@@ -5462,6 +5715,7 @@ export async function registerRoutes(
       if (!Number.isFinite(id)) return res.status(400).json({ message: "Invalid restaurant id" });
       const ok = await storage.deleteRestaurant(id);
       if (!ok) return res.status(404).json({ message: "Restaurant not found" });
+      broadcastDataChange(["/api/admin/restaurants"]);
       res.status(204).send();
     } catch {
       res.status(500).json({ message: "Internal server error" });
@@ -5473,7 +5727,38 @@ export async function registerRoutes(
       if (!requirePermission("manage_users")(req, res)) return;
       const limit = Math.min(Number(req.query.limit || 200), 500);
       const search = String(req.query.search || "").toLowerCase().trim();
-      const profiles = await storage.listProfiles(limit);
+
+      let profiles = await storage.listProfiles(limit);
+      console.log("[admin/users] listProfiles returned %d rows", profiles.length);
+
+      // Backfill: if no profiles exist yet, create stubs from event_logs so
+      // users who have activity but never saved a profile still appear here.
+      if (profiles.length === 0) {
+        console.log("[admin/users] no profiles found — backfilling stubs from event_logs");
+        const rows = await db.execute(sql`
+          SELECT DISTINCT user_id
+          FROM event_logs
+          WHERE user_id IS NOT NULL
+          LIMIT 500
+        `);
+        console.log("[admin/users] distinct user_ids in event_logs:", rows.rows?.length ?? 0);
+        for (const row of rows.rows ?? []) {
+          const userId = (row as { user_id: string }).user_id;
+          await storage.upsertProfile({
+            lineUserId: userId,
+            displayName: userId.slice(0, 12) + "…",
+            pictureUrl: null,
+            role: "user",
+            dietaryRestrictions: [],
+            cuisinePreferences: [],
+            defaultBudget: 2,
+            defaultDistance: "5km",
+          }).catch(() => {});
+        }
+        profiles = await storage.listProfiles(limit);
+        console.log("[admin/users] after backfill: %d profiles", profiles.length);
+      }
+
       const filtered = search
         ? profiles.filter(
             (p) =>
@@ -5482,8 +5767,9 @@ export async function registerRoutes(
           )
         : profiles;
       res.json(filtered);
-    } catch {
-      res.status(500).json({ message: "Internal server error" });
+    } catch (err) {
+      console.error("[admin/users] error:", err);
+      res.status(500).json({ message: "Internal server error", detail: String(err) });
     }
   });
 
@@ -5494,6 +5780,101 @@ export async function registerRoutes(
       if (!profile) return res.status(404).json({ message: "Profile not found" });
       res.json(profile);
     } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.get("/api/admin/users/:lineUserId/analytics", async (req, res) => {
+    try {
+      if (!requirePermission("manage_users")(req, res)) return;
+      const { lineUserId } = req.params;
+
+      const [profile, userEvents, latestConsent] = await Promise.all([
+        storage.getProfile(lineUserId),
+        storage.listEventLogsByUser(lineUserId, 500),
+        db.select().from(consentLogs_).where(eq(consentLogs_.userId, lineUserId)).orderBy(desc(consentLogs_.createdAt)).limit(1),
+      ]);
+
+      if (!profile) return res.status(404).json({ message: "Profile not found" });
+
+      const consent = latestConsent[0] ?? null;
+      const totalEvents = userEvents.length;
+      const firstSeen = userEvents.length ? userEvents[userEvents.length - 1].createdAt : null;
+      const lastSeen = userEvents.length ? userEvents[0].createdAt : null;
+
+      const eventsByType: Record<string, number> = {};
+      const eventsByDay: Record<string, number> = {};
+      const restaurantCounts: Record<string, { id: number; name: string; count: number }> = {};
+      const categoryCounts: Record<string, number> = {};
+      let swipeRight = 0;
+      let swipeLeft = 0;
+
+      for (const e of userEvents) {
+        eventsByType[e.eventType] = (eventsByType[e.eventType] ?? 0) + 1;
+        const day = new Date(e.createdAt).toISOString().slice(0, 10);
+        eventsByDay[day] = (eventsByDay[day] ?? 0) + 1;
+        const meta = (e.metadata ?? {}) as Record<string, unknown>;
+        const dir = meta.direction as string | undefined;
+        if (e.eventType === "swipe") {
+          if (dir === "right") swipeRight++;
+          else if (dir === "left") swipeLeft++;
+        }
+        if (e.itemId) {
+          const key = String(e.itemId);
+          if (!restaurantCounts[key]) restaurantCounts[key] = { id: e.itemId, name: String(meta.restaurantName ?? e.itemId), count: 0 };
+          restaurantCounts[key].count++;
+        }
+        const cat = meta.category as string | undefined;
+        if (cat) categoryCounts[cat] = (categoryCounts[cat] ?? 0) + 1;
+      }
+
+      // Sessions: events separated by > 30 min
+      const SESSION_GAP = 30 * 60 * 1000;
+      let sessions = userEvents.length > 0 ? 1 : 0;
+      let sessionDurationMs = 0;
+      let sessionStart = userEvents.length ? new Date(userEvents[userEvents.length - 1].createdAt).getTime() : 0;
+      let prevTs = sessionStart;
+      for (let i = userEvents.length - 2; i >= 0; i--) {
+        const ts = new Date(userEvents[i].createdAt).getTime();
+        if (ts - prevTs > SESSION_GAP) { sessionDurationMs += prevTs - sessionStart; sessions++; sessionStart = ts; }
+        prevTs = ts;
+      }
+      if (userEvents.length > 0) sessionDurationMs += prevTs - sessionStart;
+
+      const activityLast30Days = Array.from({ length: 30 }, (_, i) => {
+        const d = new Date(); d.setDate(d.getDate() - (29 - i));
+        const key = d.toISOString().slice(0, 10);
+        return { date: key, count: eventsByDay[key] ?? 0 };
+      });
+
+      res.json({
+        profile,
+        consent: consent ? { granted: consent.granted, version: consent.version, grantedAt: consent.createdAt } : null,
+        summary: {
+          totalEvents,
+          firstSeen,
+          lastSeen,
+          totalSessions: sessions,
+          avgSessionMinutes: sessions > 0 ? Math.round(sessionDurationMs / sessions / 60000 * 10) / 10 : 0,
+          swipeRight,
+          swipeLeft,
+          swipeTotal: swipeRight + swipeLeft,
+          likeRate: swipeRight + swipeLeft > 0 ? Math.round(swipeRight / (swipeRight + swipeLeft) * 100) : 0,
+          favoriteCategory: Object.entries(categoryCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null,
+          eventsByType,
+          topRestaurants: Object.values(restaurantCounts).sort((a, b) => b.count - a.count).slice(0, 10),
+          activityLast30Days,
+        },
+        recentEvents: userEvents.slice(0, 100).map(e => ({
+          id: e.id,
+          eventType: e.eventType,
+          itemId: e.itemId,
+          metadata: e.metadata,
+          createdAt: e.createdAt,
+        })),
+      });
+    } catch (err) {
+      console.error("[admin/users/analytics]", err);
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -6281,20 +6662,18 @@ export async function registerRoutes(
       // Week-over-week change for stat cards
       const thisWeekEvents = myEvents.filter(e => new Date(e.createdAt) >= weekAgo);
       const lastWeekEvents = myEvents.filter(e => new Date(e.createdAt) < weekAgo);
-      const weekChange = (type: string) => {
-        const tw = thisWeekEvents.filter(e => e.eventType === type).length;
-        const lw = lastWeekEvents.filter(e => e.eventType === type).length;
+      const weekChangeByPredicate = (predicate: (e: (typeof myEvents)[number]) => boolean) => {
+        const tw = thisWeekEvents.filter(predicate).length;
+        const lw = lastWeekEvents.filter(predicate).length;
         return lw > 0 ? Math.round(((tw - lw) / lw) * 100) : 0;
       };
 
-      const viewChange = weekChange("view_card");
-      const likeChange = weekChange("swipe_right");
-      const saveChange = weekChange("favorite");
-      const deliveryChange = (() => {
-        const tw = thisWeekEvents.filter(e => ["order_click", "booking_click"].includes(e.eventType)).length;
-        const lw = lastWeekEvents.filter(e => ["order_click", "booking_click"].includes(e.eventType)).length;
-        return lw > 0 ? Math.round(((tw - lw) / lw) * 100) : 0;
-      })();
+      const viewChange = weekChangeByPredicate((e) => ["view_card", "view_detail"].includes(e.eventType));
+      const likeChange = weekChangeByPredicate((e) =>
+        e.eventType === "swipe_right" || (e.eventType === "swipe" && (e.metadata as any)?.direction === "right")
+      );
+      const saveChange = weekChangeByPredicate((e) => e.eventType === "favorite");
+      const deliveryChange = weekChangeByPredicate((e) => ["order_click", "booking_click", "deeplink_click"].includes(e.eventType));
 
       res.json({ dailyViews, peakHours, topSources, weekChange: { viewChange, likeChange, saveChange, deliveryChange } });
     } catch (err) {
@@ -6639,6 +7018,7 @@ export async function registerRoutes(
     try {
       const ownerId = (req.session as any)?.ownerId;
       if (!ownerId) {
+        if (req.session?.isAdmin) return res.json({ notifications: [] });
         res.status(400).json({ message: "Owner ID not found in session" });
         return;
       }
@@ -6657,6 +7037,7 @@ export async function registerRoutes(
       const notificationId = parseInt(req.params.id, 10);
       const ownerId = (req.session as any)?.ownerId;
       if (!ownerId) {
+        if (req.session?.isAdmin) return res.json({ success: true, notification: null });
         res.status(400).json({ message: "Owner ID not found in session" });
         return;
       }
@@ -6678,6 +7059,7 @@ export async function registerRoutes(
     try {
       const ownerId = (req.session as any)?.ownerId;
       if (!ownerId) {
+        if (req.session?.isAdmin) return res.json({ success: true, markedRead: 0 });
         res.status(400).json({ message: "Owner ID not found in session" });
         return;
       }
@@ -6693,6 +7075,7 @@ export async function registerRoutes(
     try {
       const ownerId = (req.session as any)?.ownerId;
       if (!ownerId) {
+        if (req.session?.isAdmin) return res.json({ count: 0 });
         res.status(400).json({ message: "Owner ID not found in session" });
         return;
       }
@@ -7608,6 +7991,30 @@ export async function registerRoutes(
   app.post("/api/events/batch", async (req, res) => {
     try {
       const input = ingestBatchSchema.parse(req.body ?? {});
+      console.log("[events/batch] received events=%d actorProfile=%s ingestMode=%s",
+        input.events.length,
+        input.actorProfile?.userId ?? "none",
+        shouldUseRedisIngest() ? "redis" : "direct",
+      );
+
+      // Auto-upsert a stub profile so the user appears in the admin user list
+      // even if they never visited the Profile setup page.
+      if (input.actorProfile) {
+        const { userId, displayName, pictureUrl } = input.actorProfile;
+        storage.upsertProfile({
+          lineUserId: userId,
+          displayName,
+          pictureUrl: pictureUrl ?? null,
+          role: "user",
+          dietaryRestrictions: [],
+          cuisinePreferences: [],
+          defaultBudget: 2,
+          defaultDistance: "5km",
+        }).catch((err) => {
+          console.warn("[events/batch] profile upsert failed:", err);
+        });
+      }
+
       const result = await processEventIngestBatch(input.events, (err) => {
         void sendAlert({
           source: "event-ingest",
@@ -7616,6 +8023,10 @@ export async function registerRoutes(
           metadata: { error: String(err) },
         });
       });
+      console.log("[events/batch] result: accepted=%d skipped=%d ingestion=%s queueUnavailable=%s reasons=%s",
+        result.accepted, result.skipped, result.ingestion, result.queueUnavailable,
+        JSON.stringify(result.reasonCounts),
+      );
       if (result.queueUnavailable) {
         return res.status(503).json({ message: "Event queue unavailable" });
       }
@@ -9471,7 +9882,7 @@ export async function registerRoutes(
   app.get("/api/recommendations/personalized", async (req, res) => {
     try {
       const input = z.object({
-        userId: z.string().min(1),
+        userId: z.string().min(1).optional(),
         lat: z.coerce.number().optional(),
         lng: z.coerce.number().optional(),
         hour: z.coerce.number().int().min(0).max(23).optional(),
@@ -9487,22 +9898,24 @@ export async function registerRoutes(
         experiments: parseExperimentConfigs(experimentsConfig?.value?.experiments),
         recommendationWeights: parseRecommendationWeightsConfig(recommendationWeightsConfig?.value),
         experimentKey: DEFAULT_RECOMMENDATION_EXPERIMENT_KEY,
-        seed: input.userId,
+        seed: input.userId ?? "anonymous",
       });
 
       // Check per-user cache first (TTL: 5 min, invalidated on feature-snapshot rebuild)
-      const cacheKey = `${input.userId}:${resolvedExperiment.experimentKey}:${resolvedExperiment.variant}:${input.lat ?? ""}:${input.lng ?? ""}:${input.hour ?? ""}:${input.day ?? ""}:${input.limit}`;
+      const cacheKey = `${input.userId ?? "anon"}:${resolvedExperiment.experimentKey}:${resolvedExperiment.variant}:${input.lat ?? ""}:${input.lng ?? ""}:${input.hour ?? ""}:${input.day ?? ""}:${input.limit}`;
       const cached = getRecCache(cacheKey);
       if (cached) return res.json(cached);
 
-      const latestConsent = await storage.getLatestConsent(input.userId, "behavior_tracking");
+      const latestConsent = input.userId
+        ? await storage.getLatestConsent(input.userId, "behavior_tracking")
+        : null;
       const restaurants = await storage.getRestaurants("trending");
 
       let source: "personalized" | "sparse_blend" | "segment" | "trending" = "trending";
       let items: Array<any> = [];
       const now = new Date();
 
-      if (latestConsent?.granted) {
+      if (latestConsent?.granted && input.userId) {
         const feature = await storage.getUserFeatureSnapshot(input.userId);
         const result = buildPersonalizedRecommendations({
           restaurants,
@@ -9744,20 +10157,46 @@ export async function registerRoutes(
     try {
       const allCampaigns = await storage.listCampaigns();
       const today = new Date().toISOString().slice(0, 10);
-      const active = allCampaigns
-        .filter((c) => c.status === "active" && (!c.endDate || c.endDate >= today))
-        .map((c) => ({
-          id: String(c.id),
-          title: c.title,
-          dealType: c.dealType ?? "fixedAmount",
-          dealValue: c.dealValue ?? "",
-          endDate: c.endDate ?? "",
-          restaurantOwnerKey: c.restaurantOwnerKey,
-          restaurantName: c.restaurantOwnerKey.split("@")[0] ?? c.title,
-          restaurantImage: "",
-          description: "",
-          accentColor: "#1E293B",
-        }));
+      const activeCampaigns = allCampaigns.filter(
+        (c) => c.status === "active" && (!c.endDate || c.endDate >= today)
+      );
+
+      const active = await Promise.all(
+        activeCampaigns.map(async (c) => {
+          let restaurantName = c.restaurantOwnerKey.split("@")[0] ?? c.title;
+          let restaurantImage = "";
+          let restaurantId: number | null = null;
+
+          try {
+            const owner = await storage.getRestaurantOwnerByEmail(c.restaurantOwnerKey);
+            if (owner?.restaurantId) {
+              const restaurant = await storage.getRestaurantById(owner.restaurantId);
+              if (restaurant) {
+                restaurantName = restaurant.name;
+                restaurantImage = restaurant.imageUrl ?? restaurant.photos?.[0] ?? "";
+                restaurantId = restaurant.id;
+              }
+            }
+          } catch {
+            // fall through with defaults
+          }
+
+          return {
+            id: String(c.id),
+            title: c.title,
+            dealType: c.dealType ?? "fixedAmount",
+            dealValue: c.dealValue ?? "",
+            endDate: c.endDate ?? "",
+            restaurantOwnerKey: c.restaurantOwnerKey,
+            restaurantId,
+            restaurantName,
+            restaurantImage: c.imageUrl || restaurantImage,
+            description: c.dealValue ? `${c.dealValue} deal at ${restaurantName}` : "",
+            accentColor: "#1E293B",
+          };
+        })
+      );
+
       res.json(active);
     } catch {
       res.status(500).json({ message: "Internal server error" });
@@ -10371,7 +10810,16 @@ export async function registerRoutes(
       const restaurant = await storage.getRestaurantById(owner.restaurantId);
       if (!restaurant) return res.json({ stats: { avgRating: 0, total: 0, unreplied: 0, responseRate: 0 }, reviews: [] });
 
-      const rawReviews: Array<{ author: string; rating: number; text: string; timeAgo?: string }> = restaurant.reviews ?? [];
+      const rawReviews: Array<{
+        author: string;
+        rating: number;
+        text: string;
+        timeAgo?: string;
+        originalText?: string;
+        translatedText?: string;
+        originalLanguageCode?: string;
+        translatedLanguageCode?: string;
+      }> = restaurant.reviews ?? [];
       const replies: Record<string, { text: string; repliedAt: string }> = (restaurant as any).reviewReplies ?? {};
 
       const reviews = rawReviews.map((r, i) => {
@@ -10384,6 +10832,10 @@ export async function registerRoutes(
           author: r.author,
           rating: r.rating,
           text: r.text,
+          originalText: r.originalText ?? null,
+          translatedText: r.translatedText ?? null,
+          originalLanguageCode: r.originalLanguageCode ?? null,
+          translatedLanguageCode: r.translatedLanguageCode ?? null,
           timeAgo: r.timeAgo ?? "",
           ownerReply: reply ? reply.text : null,
           repliedAt: reply ? reply.repliedAt : null,
@@ -10428,6 +10880,96 @@ export async function registerRoutes(
     } catch (err) {
       console.error("[owner/reviews/reply POST]", err);
       res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // ── Trending feed ───────────────────────────────────────────────────────────
+
+  app.get("/api/trending/feed", async (_req, res) => {
+    try {
+      const [row] = await db
+        .select()
+        .from(trendingFeedCache)
+        .orderBy(desc(trendingFeedCache.builtAt))
+        .limit(1);
+
+      if (row && new Date(row.expiresAt) > new Date()) {
+        return res.json({ posts: row.posts, builtAt: row.builtAt, cached: true });
+      }
+
+      // Cache miss or expired — rebuild inline (first request after restart)
+      await refreshTrendingCache();
+      const [fresh] = await db
+        .select()
+        .from(trendingFeedCache)
+        .orderBy(desc(trendingFeedCache.builtAt))
+        .limit(1);
+
+      if (fresh) {
+        return res.json({ posts: fresh.posts, builtAt: fresh.builtAt, cached: false });
+      }
+
+      return res.json({ posts: [], builtAt: null, cached: false });
+    } catch (err) {
+      console.error("[GET /api/trending/feed]", err);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.post("/api/trending/feed/refresh", async (req, res) => {
+    if (!requireAdminSession(req, res)) return;
+    try {
+      await refreshTrendingCache();
+      return res.json({ ok: true });
+    } catch (err) {
+      console.error("[POST /api/trending/feed/refresh]", err);
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // User saves
+  app.get("/api/user/saved", async (req, res) => {
+    const lineUserId = req.query.lineUserId as string;
+    if (!lineUserId) return res.status(400).json({ message: "lineUserId required" });
+    try {
+      const ids = await storage.getSavedRestaurants(lineUserId);
+      return res.json({ restaurantIds: ids });
+    } catch (err) {
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.post("/api/user/saved/toggle", async (req, res) => {
+    const { lineUserId, restaurantId } = req.body ?? {};
+    if (!lineUserId || !restaurantId) return res.status(400).json({ message: "lineUserId and restaurantId required" });
+    try {
+      const saved = await storage.toggleSavedRestaurant(lineUserId, Number(restaurantId));
+      return res.json({ saved });
+    } catch (err) {
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // User likes
+  app.get("/api/user/liked", async (req, res) => {
+    const lineUserId = req.query.lineUserId as string;
+    if (!lineUserId) return res.status(400).json({ message: "lineUserId required" });
+    try {
+      const ids = await storage.getLikedRestaurants(lineUserId);
+      return res.json({ restaurantIds: ids });
+    } catch (err) {
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.post("/api/user/liked/toggle", async (req, res) => {
+    const { lineUserId, restaurantId } = req.body ?? {};
+    if (!lineUserId || !restaurantId) return res.status(400).json({ message: "lineUserId and restaurantId required" });
+    try {
+      const liked = await storage.toggleLikedRestaurant(lineUserId, Number(restaurantId));
+      return res.json({ liked });
+    } catch (err) {
+      return res.status(500).json({ message: "Internal server error" });
     }
   });
 

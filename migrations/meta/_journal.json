@@ -85,6 +85,34 @@
       "when": 1773567006000,
       "tag": "0010_notifications",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1773567007000,
+      "tag": "0011_restaurant_review_replies",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1773567008000,
+      "tag": "0012_google_places_details",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1773567009000,
+      "tag": "0013_campaign_image",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1742169600000,
+      "tag": "0014_trending_feed_cache",
+      "breakpoints": true
     }
   ]
 }

@@ -12,36 +12,36 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { RestaurantResponse } from "@shared/routes";
 
 const DIETARY_OPTIONS = [
-  { value: "halal", label: "Halal", emoji: "🕌" },
-  { value: "vegetarian", label: "Vegetarian", emoji: "🥬" },
-  { value: "vegan", label: "Vegan", emoji: "🌱" },
-  { value: "gluten_free", label: "Gluten Free", emoji: "🌾" },
-  { value: "dairy_free", label: "Dairy Free", emoji: "🥛" },
-  { value: "nut_free", label: "Nut Free", emoji: "🥜" },
-  { value: "shellfish_free", label: "No Shellfish", emoji: "🦐" },
-  { value: "pescatarian", label: "Pescatarian", emoji: "🐟" },
+  { value: "halal", labelKey: "profile.dietary_halal", emoji: "🕌" },
+  { value: "vegetarian", labelKey: "profile.dietary_vegetarian", emoji: "🥬" },
+  { value: "vegan", labelKey: "profile.dietary_vegan", emoji: "🌱" },
+  { value: "gluten_free", labelKey: "profile.dietary_gluten_free", emoji: "🌾" },
+  { value: "dairy_free", labelKey: "profile.dietary_dairy_free", emoji: "🥛" },
+  { value: "nut_free", labelKey: "profile.dietary_nut_free", emoji: "🥜" },
+  { value: "shellfish_free", labelKey: "profile.dietary_shellfish_free", emoji: "🦐" },
+  { value: "pescatarian", labelKey: "profile.dietary_pescatarian", emoji: "🐟" },
 ];
 
 const CUISINE_OPTIONS = [
-  { value: "thai", label: "Thai", emoji: "🇹🇭" },
-  { value: "japanese", label: "Japanese", emoji: "🇯🇵" },
-  { value: "korean", label: "Korean", emoji: "🇰🇷" },
-  { value: "italian", label: "Italian", emoji: "🇮🇹" },
-  { value: "mexican", label: "Mexican", emoji: "🇲🇽" },
-  { value: "indian", label: "Indian", emoji: "🇮🇳" },
-  { value: "chinese", label: "Chinese", emoji: "🇨🇳" },
-  { value: "american", label: "American", emoji: "🇺🇸" },
-  { value: "french", label: "French", emoji: "🇫🇷" },
-  { value: "vietnamese", label: "Vietnamese", emoji: "🇻🇳" },
-  { value: "middle_eastern", label: "Middle Eastern", emoji: "🧆" },
-  { value: "street_food", label: "Street Food", emoji: "🛒" },
+  { value: "thai", labelKey: "profile.cuisine_thai", emoji: "🇹🇭" },
+  { value: "japanese", labelKey: "profile.cuisine_japanese", emoji: "🇯🇵" },
+  { value: "korean", labelKey: "profile.cuisine_korean", emoji: "🇰🇷" },
+  { value: "italian", labelKey: "profile.cuisine_italian", emoji: "🇮🇹" },
+  { value: "mexican", labelKey: "profile.cuisine_mexican", emoji: "🇲🇽" },
+  { value: "indian", labelKey: "profile.cuisine_indian", emoji: "🇮🇳" },
+  { value: "chinese", labelKey: "profile.cuisine_chinese", emoji: "🇨🇳" },
+  { value: "american", labelKey: "profile.cuisine_american", emoji: "🇺🇸" },
+  { value: "french", labelKey: "profile.cuisine_french", emoji: "🇫🇷" },
+  { value: "vietnamese", labelKey: "profile.cuisine_vietnamese", emoji: "🇻🇳" },
+  { value: "middle_eastern", labelKey: "profile.cuisine_middle_eastern", emoji: "🧆" },
+  { value: "street_food", labelKey: "profile.cuisine_street_food", emoji: "🛒" },
 ];
 
 const BUDGET_OPTIONS = [
-  { value: 1, label: "฿", description: "Budget" },
-  { value: 2, label: "฿฿", description: "Moderate" },
-  { value: 3, label: "฿฿฿", description: "Upscale" },
-  { value: 4, label: "฿฿฿฿", description: "Fine dining" },
+  { value: 1, label: "฿", descKey: "profile.budget_budget" },
+  { value: 2, label: "฿฿", descKey: "profile.budget_moderate" },
+  { value: 3, label: "฿฿฿", descKey: "profile.budget_upscale" },
+  { value: 4, label: "฿฿฿฿", descKey: "profile.budget_fine_dining" },
 ];
 
 const DISTANCE_OPTIONS = [
@@ -49,7 +49,7 @@ const DISTANCE_OPTIONS = [
   { value: "3km", label: "3 km" },
   { value: "5km", label: "5 km" },
   { value: "10km", label: "10 km" },
-  { value: "any", label: "Anywhere" },
+  { value: "any", label: "", labelKey: "profile.distance_anywhere" },
 ];
 
 const PROFILE_STORAGE_KEY = "toast_user_profile";
@@ -324,7 +324,7 @@ export default function Profile() {
             className="text-[11px] font-bold uppercase tracking-[0.2em] text-muted-foreground/40"
             data-testid="text-profile-label"
           >
-            {isOwnerMode ? "Business" : "Profile"}
+            {isOwnerMode ? t("profile.business_label") : t("nav.profile")}
           </p>
           <div className="flex items-center gap-2">
             <button
@@ -389,24 +389,24 @@ export default function Profile() {
             )}
           </div>
           {isOwnerMode ? (
-            <p className="text-[22px] font-bold tracking-tight">Business Dashboard</p>
+            <p className="text-[22px] font-bold tracking-tight">{t("profile.business_dashboard")}</p>
           ) : (
             <>
               <input
                 type="text"
                 value={localProfile.displayName}
                 onChange={(e) => updateProfile({ displayName: e.target.value })}
-                placeholder="Your name"
+                placeholder={t("profile.name_placeholder")}
                 className="text-[22px] font-bold bg-transparent border-none outline-none text-center w-full placeholder:text-muted-foreground/30 tracking-tight"
                 data-testid="input-display-name"
               />
               {!liffAvailable && !lineProfile && (
-                <p className="text-[11px] text-muted-foreground/50 mt-1">Open in LINE for full features</p>
+                <p className="text-[11px] text-muted-foreground/50 mt-1">{t("profile.open_in_line")}</p>
               )}
               {lineProfile && (
                 <p className="text-[11px] text-[#06C755] font-medium mt-1.5 flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-[#06C755] inline-block" />
-                  Connected via LINE
+                  {t("profile.connected_line")}
                 </p>
               )}
             </>
@@ -468,11 +468,11 @@ export default function Profile() {
                       🥗
                     </div>
                     <div className="flex-1 text-left">
-                      <p className="font-bold text-[15px]">Dietary</p>
+                      <p className="font-bold text-[15px]">{t("profile.dietary")}</p>
                       <p className="text-[11px] text-muted-foreground mt-0.5">
                         {localProfile.dietaryRestrictions.length > 0
-                          ? localProfile.dietaryRestrictions.map(v => DIETARY_OPTIONS.find(o => o.value === v)?.label).filter(Boolean).join(", ")
-                          : "No restrictions"}
+                          ? localProfile.dietaryRestrictions.map(v => { const o = DIETARY_OPTIONS.find(o => o.value === v); return o ? t(o.labelKey) : null; }).filter(Boolean).join(", ")
+                          : t("profile.no_restrictions")}
                       </p>
                     </div>
                     <ChevronRight className={`w-4 h-4 text-muted-foreground/40 transition-transform duration-300 ${activeSection === "dietary" ? "rotate-90" : ""}`} />
@@ -501,7 +501,7 @@ export default function Profile() {
                                 style={localProfile.dietaryRestrictions.includes(opt.value) ? { boxShadow: "0 2px 8px rgba(0,0,0,0.15)" } : {}}
                               >
                                 <span className="text-sm">{opt.emoji}</span>
-                                {opt.label}
+                                {t(opt.labelKey)}
                               </button>
                             ))}
                           </div>
@@ -521,11 +521,11 @@ export default function Profile() {
                       🍜
                     </div>
                     <div className="flex-1 text-left">
-                      <p className="font-bold text-[15px]">Cuisines</p>
+                      <p className="font-bold text-[15px]">{t("profile.cuisines")}</p>
                       <p className="text-[11px] text-muted-foreground mt-0.5">
                         {localProfile.cuisinePreferences.length > 0
                           ? localProfile.cuisinePreferences.map(v => CUISINE_OPTIONS.find(o => o.value === v)?.emoji).filter(Boolean).join("  ")
-                          : "All cuisines"}
+                          : t("profile.all_cuisines")}
                       </p>
                     </div>
                     <ChevronRight className={`w-4 h-4 text-muted-foreground/40 transition-transform duration-300 ${activeSection === "cuisines" ? "rotate-90" : ""}`} />
@@ -554,7 +554,7 @@ export default function Profile() {
                                 style={localProfile.cuisinePreferences.includes(opt.value) ? { boxShadow: "0 2px 8px rgba(0,0,0,0.15)" } : {}}
                               >
                                 <span className="text-lg">{opt.emoji}</span>
-                                {opt.label}
+                                {t(opt.labelKey)}
                               </button>
                             ))}
                           </div>
@@ -578,7 +578,7 @@ export default function Profile() {
                       ⚙️
                     </div>
                     <div className="flex-1 text-left">
-                      <p className="font-bold text-[15px]">Settings</p>
+                      <p className="font-bold text-[15px]">{t("profile.settings")}</p>
                       <p className="text-[11px] text-muted-foreground mt-0.5">
                         {"฿".repeat(localProfile.defaultBudget)} · {localProfile.defaultDistance}
                       </p>
@@ -596,7 +596,7 @@ export default function Profile() {
                       >
                         <div className="px-5 pb-5 space-y-5">
                           <div>
-                            <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">Budget Level</p>
+                            <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">{t("profile.budget_level")}</p>
                             <div className="grid grid-cols-4 gap-2">
                               {BUDGET_OPTIONS.map(opt => (
                                 <button
@@ -611,14 +611,14 @@ export default function Profile() {
                                   style={localProfile.defaultBudget === opt.value ? { boxShadow: "0 4px 12px rgba(0,0,0,0.15)" } : {}}
                                 >
                                   <p className="text-sm font-semibold">{opt.label}</p>
-                                  <p className={`text-[8px] mt-0.5 ${localProfile.defaultBudget === opt.value ? "text-white/60" : "text-muted-foreground/50"}`}>{opt.description}</p>
+                                  <p className={`text-[8px] mt-0.5 ${localProfile.defaultBudget === opt.value ? "text-white/60" : "text-muted-foreground/50"}`}>{t(opt.descKey)}</p>
                                 </button>
                               ))}
                             </div>
                           </div>
 
                           <div>
-                            <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">Search Radius</p>
+                            <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">{t("profile.search_radius")}</p>
                             <div className="flex gap-2">
                               {DISTANCE_OPTIONS.map(opt => (
                                 <button
@@ -632,7 +632,7 @@ export default function Profile() {
                                   }`}
                                   style={localProfile.defaultDistance === opt.value ? { boxShadow: "0 2px 8px rgba(0,0,0,0.15)" } : {}}
                                 >
-                                  {opt.label}
+                                  {opt.labelKey ? t(opt.labelKey) : opt.label}
                                 </button>
                               ))}
                             </div>
@@ -672,8 +672,8 @@ export default function Profile() {
                   💕
                 </div>
                 <div>
-                  <h3 className="text-lg font-semibold tracking-tight">Link Partner</h3>
-                  <p className="text-xs text-muted-foreground">Enter their display name</p>
+                  <h3 className="text-lg font-semibold tracking-tight">{t("profile.partner_modal_title")}</h3>
+                  <p className="text-xs text-muted-foreground">{t("profile.partner_modal_subtitle")}</p>
                 </div>
               </div>
 
@@ -681,7 +681,7 @@ export default function Profile() {
                 type="text"
                 value={partnerInput}
                 onChange={(e) => setPartnerInput(e.target.value)}
-                placeholder="Partner's name"
+                placeholder={t("profile.partner_name_placeholder")}
                 className="w-full px-5 py-3.5 rounded-2xl bg-gray-50 dark:bg-muted border border-transparent focus:border-gray-200 dark:focus:border-border outline-none text-foreground font-medium placeholder:text-muted-foreground/40 mb-5 transition-colors"
                 data-testid="input-partner-name"
                 autoFocus
@@ -693,7 +693,7 @@ export default function Profile() {
                   className="flex-1 py-3.5 rounded-2xl bg-gray-100 dark:bg-muted text-foreground font-semibold text-sm active:scale-[0.97] transition-transform"
                   data-testid="button-cancel-partner"
                 >
-                  Cancel
+                  {t("profile.cancel")}
                 </button>
                 <button
                   onClick={linkPartner}
@@ -702,7 +702,7 @@ export default function Profile() {
                   style={{ boxShadow: "0 4px 14px rgba(0,0,0,0.15)" }}
                   data-testid="button-confirm-partner"
                 >
-                  Link
+                  {t("profile.link")}
                 </button>
               </div>
             </motion.div>
@@ -716,6 +716,7 @@ export default function Profile() {
 }
 
 function ProfileToggle({ isOwnerMode, onToggle }: { isOwnerMode: boolean; onToggle: (v: boolean) => void }) {
+  const { t } = useLanguage();
   return (
     <div
       className="relative flex items-center bg-gray-100 dark:bg-muted rounded-2xl p-1 mb-2"
@@ -734,7 +735,7 @@ function ProfileToggle({ isOwnerMode, onToggle }: { isOwnerMode: boolean; onTogg
         data-testid="button-user-mode"
       >
         <User className="w-4 h-4" />
-        Diner
+        {t("profile.toggle_diner")}
       </button>
       <button
         onClick={() => onToggle(true)}
@@ -743,7 +744,7 @@ function ProfileToggle({ isOwnerMode, onToggle }: { isOwnerMode: boolean; onTogg
         data-testid="button-owner-mode"
       >
         <Store className="w-4 h-4" />
-        Owner
+        {t("profile.toggle_owner")}
       </button>
     </div>
   );
@@ -765,6 +766,7 @@ function MiniBarChart({ data, maxVal, color = "bg-foreground" }: { data: number[
 }
 
 function OwnerDashboard() {
+  const { t } = useLanguage();
   const [ownerProfile, setOwnerProfile] = useState<OwnerProfile>(getStoredOwnerProfile);
   const [activeSection, setActiveSection] = useState<string | null>(null);
   const [selectedPackage, setSelectedPackage] = useState<string | null>(null);
@@ -876,7 +878,7 @@ function OwnerDashboard() {
     console.error("[OwnerDashboard] failed to load insights", insightsErrorObj);
     return (
       <div className="flex flex-col items-center justify-center py-16 px-4 gap-3">
-        <p className="text-sm font-semibold text-red-500">Failed to load analytics</p>
+        <p className="text-sm font-semibold text-red-500">{t("owner.failed_analytics")}</p>
         <pre className="text-[10px] text-muted-foreground bg-gray-50 rounded-xl p-3 max-w-full overflow-x-auto whitespace-pre-wrap break-all">
           {insightsErrorObj ? String(insightsErrorObj) : "insights is undefined"}
         </pre>
@@ -892,18 +894,18 @@ function OwnerDashboard() {
       <div className="mb-4">
         <div className="bg-white dark:bg-card rounded-2xl overflow-hidden border border-gray-100 dark:border-border">
           <div className="px-5 py-4">
-            <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">Restaurant Setup</p>
+            <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">{t("owner.restaurant_setup")}</p>
 
             <input
               type="text"
               value={ownerProfile.restaurantName}
               onChange={(e) => updateOwner({ restaurantName: e.target.value })}
-              placeholder="Restaurant name"
+              placeholder={t("owner.restaurant_name_placeholder")}
               className="w-full text-[17px] font-bold bg-transparent border-none outline-none placeholder:text-muted-foreground/30 tracking-tight mb-4"
               data-testid="input-restaurant-name"
             />
 
-            <p className="text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-widest mb-2">Category</p>
+            <p className="text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-widest mb-2">{t("owner.category")}</p>
             <div ref={categoryRef} className="relative mb-4" data-testid="input-restaurant-category">
               {selectedCategoryObj ? (
                 <div className="flex items-center gap-2">
@@ -928,7 +930,7 @@ function OwnerDashboard() {
                       value={categorySearch}
                       onChange={(e) => { setCategorySearch(e.target.value); setCategoryDropdownOpen(true); }}
                       onFocus={() => setCategoryDropdownOpen(true)}
-                      placeholder="Search category..."
+                      placeholder={t("owner.search_category")}
                       className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/40"
                       data-testid="input-category-search"
                     />
@@ -945,7 +947,7 @@ function OwnerDashboard() {
                       >
                         <div className="max-h-48 overflow-y-auto py-1">
                           {filteredCategories.length === 0 ? (
-                            <p className="px-4 py-3 text-sm text-muted-foreground text-center">No matches</p>
+                            <p className="px-4 py-3 text-sm text-muted-foreground text-center">{t("owner.no_matches")}</p>
                           ) : (
                             filteredCategories.map((cat) => (
                               <button
@@ -971,7 +973,7 @@ function OwnerDashboard() {
               )}
             </div>
 
-            <p className="text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-widest mb-2">Tags</p>
+            <p className="text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-widest mb-2">{t("owner.tags")}</p>
             <div ref={tagRef} className="relative mb-4" data-testid="input-restaurant-tags">
               {(ownerProfile.tags || []).length > 0 && (
                 <div className="flex flex-wrap gap-1.5 mb-2">
@@ -1003,7 +1005,7 @@ function OwnerDashboard() {
                   value={tagSearch}
                   onChange={(e) => { setTagSearch(e.target.value); setTagDropdownOpen(true); }}
                   onFocus={() => setTagDropdownOpen(true)}
-                  placeholder="Search tags..."
+                  placeholder={t("owner.search_tags")}
                   className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/40"
                   data-testid="input-tag-search"
                 />
@@ -1020,7 +1022,7 @@ function OwnerDashboard() {
                   >
                     <div className="max-h-48 overflow-y-auto py-1">
                       {filteredTags.length === 0 ? (
-                        <p className="px-4 py-3 text-sm text-muted-foreground text-center">No more tags</p>
+                        <p className="px-4 py-3 text-sm text-muted-foreground text-center">{t("owner.no_more_tags")}</p>
                       ) : (
                         filteredTags.map((tag) => (
                           <button
@@ -1044,14 +1046,14 @@ function OwnerDashboard() {
               </AnimatePresence>
             </div>
 
-            <p className="text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-widest mb-2">Address</p>
+            <p className="text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-widest mb-2">{t("owner.address")}</p>
             <div className="flex items-center gap-2 mb-1">
               <MapPin className="w-4 h-4 text-muted-foreground/40 flex-shrink-0" />
               <input
                 type="text"
                 value={ownerProfile.address}
                 onChange={(e) => updateOwner({ address: e.target.value })}
-                placeholder="e.g. 123 Sukhumvit Rd, Bangkok"
+                placeholder={t("owner.address_placeholder")}
                 className="flex-1 px-3.5 py-2.5 rounded-xl bg-gray-50 dark:bg-muted text-sm outline-none placeholder:text-muted-foreground/40"
                 data-testid="input-restaurant-address"
               />
@@ -1067,8 +1069,8 @@ function OwnerDashboard() {
           >
             <Image className="w-5 h-5 text-blue-500" />
             <div className="flex-1 text-left">
-              <p className="font-bold text-[15px]">Photos</p>
-              <p className="text-[11px] text-muted-foreground mt-0.5">Manage your restaurant photos</p>
+              <p className="font-bold text-[15px]">{t("owner.photos")}</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">{t("owner.photos_desc")}</p>
             </div>
             <ChevronRight className={`w-4 h-4 text-muted-foreground/40 transition-transform duration-300 ${activeSection === "photos" ? "rotate-90" : ""}`} />
           </button>
@@ -1090,11 +1092,11 @@ function OwnerDashboard() {
                         data-testid={`button-upload-photo-${i}`}
                       >
                         <Plus className="w-5 h-5 text-muted-foreground/40" />
-                        <span className="text-[9px] text-muted-foreground/40 font-medium">Upload</span>
+                        <span className="text-[9px] text-muted-foreground/40 font-medium">{t("owner.upload")}</span>
                       </div>
                     ))}
                   </div>
-                  <p className="text-[11px] text-muted-foreground mt-3">Add up to 10 photos of your restaurant, food, and ambiance</p>
+                  <p className="text-[11px] text-muted-foreground mt-3">{t("owner.add_photos_desc")}</p>
                 </div>
               </motion.div>
             )}
@@ -1111,8 +1113,8 @@ function OwnerDashboard() {
               🍽️
             </div>
             <div className="flex-1 text-left">
-              <p className="font-bold text-[15px]">Menus</p>
-              <p className="text-[11px] text-muted-foreground mt-0.5">Add and manage your dishes</p>
+              <p className="font-bold text-[15px]">{t("owner.menus")}</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">{t("owner.menus_desc")}</p>
             </div>
             <ChevronRight className={`w-4 h-4 text-muted-foreground/40 transition-transform duration-300 ${activeSection === "menus" ? "rotate-90" : ""}`} />
           </button>
@@ -1131,9 +1133,9 @@ function OwnerDashboard() {
                     data-testid="button-add-menu-item"
                   >
                     <Plus className="w-4 h-4" />
-                    Add menu item
+                    {t("owner.add_menu_item")}
                   </button>
-                  <p className="text-[11px] text-muted-foreground mt-3">Add dishes with photos and prices to appear in swipe cards</p>
+                  <p className="text-[11px] text-muted-foreground mt-3">{t("owner.add_dishes_desc")}</p>
                 </div>
               </motion.div>
             )}
@@ -1143,7 +1145,7 @@ function OwnerDashboard() {
 
       <div className="mb-4">
         <div className="flex items-center justify-between mb-3 px-1">
-          <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest">Performance Snapshot</p>
+          <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest">{t("owner.performance_snapshot")}</p>
           <div className="flex items-center gap-1">
             <Zap className="w-3 h-3 text-[#FFCC02]" />
             <span className="text-[10px] font-semibold text-[#FFCC02]">{insights.currentPeakHour}</span>
@@ -1175,7 +1177,7 @@ function OwnerDashboard() {
       <div className="mb-4">
         <div className="bg-white dark:bg-card rounded-2xl border border-gray-100 dark:border-border p-4">
           <div className="flex items-center justify-between mb-3">
-            <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest">Today's Activity</p>
+            <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest">{t("owner.todays_activity")}</p>
             <p className="text-[10px] text-muted-foreground">{new Date().toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}</p>
           </div>
           <MiniBarChart data={hourlyValues} maxVal={maxHourly} />
@@ -1192,20 +1194,20 @@ function OwnerDashboard() {
       <div className="mb-4">
         <div className="bg-white dark:bg-card rounded-2xl border border-gray-100 dark:border-border overflow-hidden">
           <div className="px-4 pt-4 pb-2 flex items-center justify-between">
-            <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest">Quick Stats</p>
+            <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest">{t("owner.quick_stats")}</p>
           </div>
           <div className="grid grid-cols-3 gap-0">
             <div className="text-center py-3 border-r border-gray-100 dark:border-border">
               <p className="text-lg font-bold tracking-tight">{insights.conversionRate}%</p>
-              <p className="text-[9px] text-muted-foreground mt-0.5">Conversion</p>
+              <p className="text-[9px] text-muted-foreground mt-0.5">{t("owner.conversion")}</p>
             </div>
             <div className="text-center py-3 border-r border-gray-100 dark:border-border">
               <p className="text-lg font-bold tracking-tight">{insights.avgTimeOnPage ?? "—"}</p>
-              <p className="text-[9px] text-muted-foreground mt-0.5">Avg. Time</p>
+              <p className="text-[9px] text-muted-foreground mt-0.5">{t("owner.avg_time")}</p>
             </div>
             <div className="text-center py-3">
               <p className="text-lg font-bold tracking-tight">{insights.returnVisitors}</p>
-              <p className="text-[9px] text-muted-foreground mt-0.5">Returning</p>
+              <p className="text-[9px] text-muted-foreground mt-0.5">{t("owner.returning")}</p>
             </div>
           </div>
         </div>
@@ -1213,7 +1215,7 @@ function OwnerDashboard() {
 
       <div className="mb-4">
         <div className="bg-white dark:bg-card rounded-2xl border border-gray-100 dark:border-border p-4">
-          <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">Engagement Funnel</p>
+          <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">{t("owner.engagement_funnel")}</p>
           <div className="space-y-2.5">
             {insights.engagementFunnel.map((step: any, i: number) => (
               <div key={step.stage} data-testid={`funnel-${i}`}>
@@ -1246,7 +1248,7 @@ function OwnerDashboard() {
 
       <div className="mb-4">
         <div className="bg-white dark:bg-card rounded-2xl border border-gray-100 dark:border-border p-4">
-          <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">Delivery Platform Breakdown</p>
+          <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">{t("owner.delivery_breakdown")}</p>
           <div className="space-y-3">
             {[
               { name: "Grab", emoji: "🟢", color: "#00B14F", pct: 52 },
@@ -1283,14 +1285,14 @@ function OwnerDashboard() {
 
       <div className="mb-4">
         <div className="bg-white dark:bg-card rounded-2xl border border-gray-100 dark:border-border p-4">
-          <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">Revenue Insights</p>
+          <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">{t("owner.revenue_insights")}</p>
           <div className="grid grid-cols-2 gap-3 mb-3">
             <div className="bg-gradient-to-br from-green-50 to-emerald-50 dark:from-green-900/20 dark:to-emerald-900/20 rounded-xl p-3.5">
-              <p className="text-[10px] text-green-600 dark:text-green-400 font-semibold mb-1">Est. Weekly Revenue</p>
+              <p className="text-[10px] text-green-600 dark:text-green-400 font-semibold mb-1">{t("owner.est_weekly")}</p>
               <p className="text-xl font-bold tracking-tight text-green-700 dark:text-green-300" data-testid="text-est-revenue">฿{insights.revenueEstimate.estimatedRevenue.toLocaleString()}</p>
             </div>
             <div className="bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 rounded-xl p-3.5">
-              <p className="text-[10px] text-blue-600 dark:text-blue-400 font-semibold mb-1">Projected Monthly</p>
+              <p className="text-[10px] text-blue-600 dark:text-blue-400 font-semibold mb-1">{t("owner.proj_monthly")}</p>
               <p className="text-xl font-bold tracking-tight text-blue-700 dark:text-blue-300" data-testid="text-proj-monthly">฿{insights.revenueEstimate.projectedMonthly.toLocaleString()}</p>
             </div>
           </div>
@@ -1300,7 +1302,7 @@ function OwnerDashboard() {
                 <Tag className="w-3.5 h-3.5 text-muted-foreground" />
               </div>
               <div>
-                <p className="text-[10px] text-muted-foreground">Avg Order</p>
+                <p className="text-[10px] text-muted-foreground">{t("owner.avg_order")}</p>
                 <p className="text-[13px] font-bold">฿{insights.revenueEstimate.avgOrderValue}</p>
               </div>
             </div>
@@ -1309,7 +1311,7 @@ function OwnerDashboard() {
                 <ArrowUpRight className="w-3.5 h-3.5 text-green-500" />
               </div>
               <div>
-                <p className="text-[10px] text-muted-foreground">Growth</p>
+                <p className="text-[10px] text-muted-foreground">{t("owner.growth")}</p>
                 <p className="text-[13px] font-bold text-green-500">+{insights.revenueEstimate.revenueGrowth}%</p>
               </div>
             </div>
@@ -1320,7 +1322,7 @@ function OwnerDashboard() {
       {insights.audienceDemographics?.length > 0 && (
         <div className="mb-4">
           <div className="bg-white dark:bg-card rounded-2xl border border-gray-100 dark:border-border p-4">
-            <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">Audience Demographics</p>
+            <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">{t("owner.audience_demographics")}</p>
             <div className="flex items-center gap-1 h-5 rounded-full overflow-hidden mb-3">
               {insights.audienceDemographics.map((demo: any) => (
                 <div
@@ -1346,7 +1348,7 @@ function OwnerDashboard() {
       <div className="mb-4">
         <div className="grid grid-cols-2 gap-2.5">
           <div className="bg-white dark:bg-card rounded-2xl border border-gray-100 dark:border-border p-4">
-            <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-2">Visitor Loyalty</p>
+            <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-2">{t("owner.visitor_loyalty")}</p>
             <div className="flex items-center gap-3 mb-2.5">
               <div className="relative w-14 h-14">
                 <svg viewBox="0 0 36 36" className="w-14 h-14 -rotate-90">
@@ -1356,29 +1358,29 @@ function OwnerDashboard() {
                 <span className="absolute inset-0 flex items-center justify-center text-[11px] font-bold">{insights.repeatVisitors.returning}%</span>
               </div>
               <div>
-                <p className="text-[11px] font-semibold">Returning</p>
-                <p className="text-[10px] text-muted-foreground">{insights.repeatVisitors.avgVisitsPerUser} avg visits</p>
+                <p className="text-[11px] font-semibold">{t("owner.returning_label")}</p>
+                <p className="text-[10px] text-muted-foreground">{t("owner.avg_visits", { count: insights.repeatVisitors.avgVisitsPerUser })}</p>
               </div>
             </div>
             <div className="flex items-center gap-1.5">
               <Star className="w-3 h-3 text-amber-400" />
-              <p className="text-[10px] text-muted-foreground">Loyalty: <span className="font-bold text-foreground">{insights.repeatVisitors.loyaltyScore}/100</span></p>
+              <p className="text-[10px] text-muted-foreground">{t("owner.loyalty")} <span className="font-bold text-foreground">{insights.repeatVisitors.loyaltyScore}/100</span></p>
             </div>
           </div>
           <div className="bg-white dark:bg-card rounded-2xl border border-gray-100 dark:border-border p-4">
-            <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-2">Category Rank</p>
+            <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-2">{t("owner.category_rank")}</p>
             <div className="flex items-center gap-3 mb-2.5">
               <div className="w-14 h-14 rounded-2xl flex items-center justify-center" style={{ background: "linear-gradient(135deg, hsl(40,85%,95%) 0%, hsl(35,80%,85%) 100%)" }}>
                 <span className="text-2xl font-black text-amber-700" data-testid="text-category-rank">#{insights.competitorBenchmark.yourRank}</span>
               </div>
               <div>
-                <p className="text-[11px] font-semibold">of {insights.competitorBenchmark.totalInCategory}</p>
-                <p className="text-[10px] text-muted-foreground">restaurants</p>
+                <p className="text-[11px] font-semibold">{t("owner.of")} {insights.competitorBenchmark.totalInCategory}</p>
+                <p className="text-[10px] text-muted-foreground">{t("owner.restaurants")}</p>
               </div>
             </div>
             <div className="flex items-center gap-1.5">
               <TrendingUp className="w-3 h-3 text-green-500" />
-              <p className="text-[10px] text-muted-foreground">Top <span className="font-bold text-foreground">{100 - insights.competitorBenchmark.percentile}%</span> percentile</p>
+              <p className="text-[10px] text-muted-foreground">{t("owner.top_percentile")} <span className="font-bold text-foreground">{100 - insights.competitorBenchmark.percentile}%</span> {t("owner.percentile")}</p>
             </div>
           </div>
         </div>
@@ -1387,7 +1389,7 @@ function OwnerDashboard() {
       <div className="mb-4">
         <div className="bg-white dark:bg-card rounded-2xl border border-gray-100 dark:border-border overflow-hidden">
           <div className="px-4 pt-4 pb-2">
-            <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">User Interactions</p>
+            <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">{t("owner.user_interactions")}</p>
           </div>
           {insights.userActions.map((action: any, i: number) => {
             const Icon = action.icon;
@@ -1418,8 +1420,8 @@ function OwnerDashboard() {
           >
             <BarChart3 className="w-5 h-5 text-purple-500" />
             <div className="flex-1 text-left">
-              <p className="font-bold text-[15px]">Full Analytics</p>
-              <p className="text-[11px] text-muted-foreground mt-0.5">Detailed insights, menu stats, and peak hours</p>
+              <p className="font-bold text-[15px]">{t("owner.full_analytics")}</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">{t("owner.full_analytics_desc")}</p>
             </div>
             <ChevronRight className={`w-4 h-4 text-muted-foreground/40 transition-transform duration-300 ${activeSection === "analytics" ? "rotate-90" : ""}`} />
           </button>
@@ -1445,14 +1447,14 @@ function OwnerDashboard() {
                         }`}
                         data-testid={`tab-analytics-${tab}`}
                       >
-                        {tab === "overview" ? "Overview" : tab === "menu" ? "Menu Cards" : "Peak Times"}
+                        {tab === "overview" ? t("owner.tab_overview") : tab === "menu" ? t("owner.tab_menu_cards") : t("owner.tab_peak_times")}
                       </button>
                     ))}
                   </div>
 
                   {analyticsTab === "overview" && (
                     <div>
-                      <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">Weekly Performance</p>
+                      <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">{t("owner.weekly_performance")}</p>
                       <div className="space-y-2">
                         {insights.weeklyData.map((day: any) => (
                           <div key={day.day} className="flex items-center gap-3" data-testid={`weekly-${day.day.toLowerCase()}`}>
@@ -1474,7 +1476,7 @@ function OwnerDashboard() {
                       <div className="mt-4 p-3 rounded-xl bg-gray-50 dark:bg-muted">
                         <div className="flex items-center gap-2 mb-2">
                           <Zap className="w-3.5 h-3.5 text-[#FFCC02]" />
-                          <p className="text-[11px] font-bold">Best performing day</p>
+                          <p className="text-[11px] font-bold">{t("owner.best_performing_day")}</p>
                         </div>
                         <p className="text-xs text-muted-foreground">{insights.bestDay} has the highest engagement with {Math.max(...insights.weeklyData.map((d: any) => d.views))} total interactions</p>
                       </div>
@@ -1483,7 +1485,7 @@ function OwnerDashboard() {
 
                   {analyticsTab === "menu" && (
                     <div>
-                      <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">Top Menu Items by Swipe Performance</p>
+                      <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">{t("owner.top_menu_swipe")}</p>
                       <div className="space-y-2.5">
                         {insights.topMenuItems.map((item: any, i: number) => (
                           <div key={item.name} className="flex items-center gap-3" data-testid={`menu-stat-${i}`}>
@@ -1497,16 +1499,16 @@ function OwnerDashboard() {
                             <div className="flex-1 min-w-0">
                               <p className="text-[13px] font-semibold truncate">{item.name}</p>
                               <div className="flex items-center gap-2 mt-0.5">
-                                <span className="text-[10px] text-muted-foreground">{item.swipes} swipes</span>
+                                <span className="text-[10px] text-muted-foreground">{item.swipes} {t("owner.swipes")}</span>
                                 <span className="text-[10px] text-muted-foreground/40">·</span>
-                                <span className="text-[10px] text-green-500 font-medium">{item.likes} liked</span>
+                                <span className="text-[10px] text-green-500 font-medium">{item.likes} {t("owner.liked")}</span>
                               </div>
                             </div>
                             <div className="text-right flex-shrink-0">
                               <p className={`text-sm font-bold ${item.conversionRate >= 80 ? "text-green-500" : item.conversionRate >= 70 ? "text-foreground" : "text-orange-400"}`}>
                                 {item.conversionRate}%
                               </p>
-                              <p className="text-[9px] text-muted-foreground">like rate</p>
+                              <p className="text-[9px] text-muted-foreground">{t("owner.like_rate")}</p>
                             </div>
                           </div>
                         ))}
@@ -1515,7 +1517,7 @@ function OwnerDashboard() {
                       <div className="mt-4 p-3 rounded-xl bg-gray-50 dark:bg-muted">
                         <div className="flex items-center gap-2 mb-2">
                           <Utensils className="w-3.5 h-3.5 text-foreground/60" />
-                          <p className="text-[11px] font-bold">Insight</p>
+                          <p className="text-[11px] font-bold">{t("owner.menu_insight")}</p>
                         </div>
                         <p className="text-xs text-muted-foreground">Mango Sticky Rice has the highest like rate at 88.3%. Consider featuring it with Menu Spotlight to maximize orders.</p>
                       </div>
@@ -1524,7 +1526,7 @@ function OwnerDashboard() {
 
                   {analyticsTab === "timing" && (
                     <div>
-                      <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">Peak Engagement Hours</p>
+                      <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">{t("owner.peak_hours")}</p>
                       <div className="space-y-2">
                         {insights.peakHours.map((peak: any, i: number) => (
                           <div key={peak.time} className="flex items-center gap-3" data-testid={`peak-${i}`}>
@@ -1552,7 +1554,7 @@ function OwnerDashboard() {
                       </div>
 
                       <div className="mt-4">
-                        <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">Weekly Heatmap</p>
+                        <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">{t("owner.weekly_heatmap")}</p>
                         <div className="grid grid-cols-7 gap-1.5">
                           {insights.weeklyData.map((day: any) => {
                             const intensity = day.views / 140;
@@ -1572,18 +1574,18 @@ function OwnerDashboard() {
                           })}
                         </div>
                         <div className="flex items-center justify-end gap-1 mt-2">
-                          <span className="text-[8px] text-muted-foreground/40">Low</span>
+                          <span className="text-[8px] text-muted-foreground/40">{t("owner.low")}</span>
                           {[0.2, 0.4, 0.6, 0.8, 1].map(v => (
                             <div key={v} className="w-2.5 h-2.5 rounded-sm" style={{ background: `hsl(222, 47%, ${90 - v * 60}%)`, opacity: 0.4 + v * 0.6 }} />
                           ))}
-                          <span className="text-[8px] text-muted-foreground/40">High</span>
+                          <span className="text-[8px] text-muted-foreground/40">{t("owner.high")}</span>
                         </div>
                       </div>
 
                       <div className="mt-4 p-3 rounded-xl bg-gray-50 dark:bg-muted">
                         <div className="flex items-center gap-2 mb-2">
                           <Clock className="w-3.5 h-3.5 text-foreground/60" />
-                          <p className="text-[11px] font-bold">Timing Insight</p>
+                          <p className="text-[11px] font-bold">{t("owner.timing_insight")}</p>
                         </div>
                         <p className="text-xs text-muted-foreground">Your lunch peak (12-1pm) drives 95% activity. Consider running Menu Spotlight promotions during 11am to capture pre-lunch browsers.</p>
                       </div>
@@ -1597,7 +1599,7 @@ function OwnerDashboard() {
       </div>
 
       <div className="mb-4">
-        <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3 px-1">Promote Your Business</p>
+        <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3 px-1">{t("owner.promote")}</p>
         <div className="space-y-3">
           {PROMO_PACKAGES.map((pkg) => {
             const Icon = pkg.icon;
@@ -1624,7 +1626,7 @@ function OwnerDashboard() {
                     <div className="flex items-center gap-2">
                       <p className="font-bold text-[15px]">{pkg.name}</p>
                       {isActive && (
-                        <span className="px-2 py-0.5 rounded-full bg-green-50 text-green-600 text-[9px] font-bold uppercase tracking-wider">Active</span>
+                        <span className="px-2 py-0.5 rounded-full bg-green-50 text-green-600 text-[9px] font-bold uppercase tracking-wider">{t("owner.active_badge")}</span>
                       )}
                     </div>
                     <p className="text-[11px] text-muted-foreground mt-0.5 truncate">{pkg.description}</p>
@@ -1649,12 +1651,12 @@ function OwnerDashboard() {
 
                         {pkg.id === "menu_spotlight" && (
                           <div className="mb-4 p-3.5 rounded-xl bg-gray-50 dark:bg-muted">
-                            <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-2">Preview</p>
+                            <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-2">{t("owner.preview")}</p>
                             <div className="flex items-center gap-3">
                               <div className="w-14 h-14 rounded-xl bg-gray-200 dark:bg-border flex items-center justify-center text-xl">🍜</div>
                               <div className="flex-1">
-                                <p className="text-sm font-semibold">Your Featured Dish</p>
-                                <p className="text-[11px] text-muted-foreground">Appears in swipe cards with a <span className="text-[#FFCC02] font-semibold">Promoted</span> badge</p>
+                                <p className="text-sm font-semibold">{t("owner.your_featured_dish")}</p>
+                                <p className="text-[11px] text-muted-foreground">{t("owner.featured_dish_desc")}</p>
                               </div>
                             </div>
                           </div>
@@ -1662,7 +1664,7 @@ function OwnerDashboard() {
 
                         {pkg.id === "restaurant_boost" && (
                           <div className="mb-4 p-3.5 rounded-xl bg-gray-50 dark:bg-muted">
-                            <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-2">What you get</p>
+                            <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-2">{t("owner.what_you_get")}</p>
                             <div className="space-y-2">
                               {["Top position in search results", "Promoted badge on your listing", "Weekly performance analytics"].map((item, i) => (
                                 <div key={i} className="flex items-center gap-2">
@@ -1691,7 +1693,7 @@ function OwnerDashboard() {
                           style={!isActive ? { boxShadow: "0 4px 14px rgba(0,0,0,0.15)" } : {}}
                           data-testid={`button-activate-${pkg.id}`}
                         >
-                          {isActive ? "Deactivate" : "Activate Package"}
+                          {isActive ? t("owner.deactivate") : t("owner.activate_package")}
                         </button>
                       </div>
                     </motion.div>
@@ -1705,7 +1707,7 @@ function OwnerDashboard() {
 
       <div className="mb-4">
         <div className="flex items-center justify-between mb-3 px-1">
-          <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest">Campaigns</p>
+          <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest">{t("owner.campaigns")}</p>
           <button
             onClick={() => {
               const now = new Date();
@@ -1722,7 +1724,7 @@ function OwnerDashboard() {
             data-testid="button-create-campaign"
           >
             <Plus className="w-3.5 h-3.5" />
-            New Campaign
+            {t("owner.new_campaign")}
           </button>
         </div>
 
@@ -1731,8 +1733,8 @@ function OwnerDashboard() {
             <div className="w-12 h-12 rounded-2xl bg-gray-50 dark:bg-muted flex items-center justify-center mx-auto mb-3">
               <Megaphone className="w-6 h-6 text-muted-foreground/40" />
             </div>
-            <p className="text-[13px] font-semibold text-foreground/70 mb-1">No campaigns yet</p>
-            <p className="text-[11px] text-muted-foreground">Create your first campaign to attract more diners with special deals</p>
+            <p className="text-[13px] font-semibold text-foreground/70 mb-1">{t("owner.no_campaigns")}</p>
+            <p className="text-[11px] text-muted-foreground">{t("owner.no_campaigns_desc")}</p>
           </div>
         )}
 
@@ -1836,7 +1838,7 @@ function OwnerDashboard() {
                       data-testid={`button-publish-campaign-${campaign.id}`}
                     >
                       <Send className="w-3 h-3" />
-                      Publish
+                      {t("owner.publish")}
                     </button>
                   )}
                   {(isActive || isScheduled) && !isEnded && (
@@ -1910,7 +1912,7 @@ function OwnerDashboard() {
                     className="overflow-hidden"
                   >
                     <div className="px-5 pb-4 pt-1">
-                      <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-2">Diner Preview</p>
+                      <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-2">{t("owner.preview_label")}</p>
                       <div className="rounded-xl border border-dashed border-gray-200 dark:border-border p-4 bg-gray-50/50 dark:bg-muted/50">
                         <div className="flex items-start gap-3">
                           <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-green-400 to-green-500 flex items-center justify-center flex-shrink-0">
@@ -1972,7 +1974,7 @@ function OwnerDashboard() {
               >
                 <div className="flex items-center justify-between mb-5">
                   <h3 className="text-[17px] font-bold text-foreground">
-                    {editingCampaignId ? "Edit Campaign" : "Create Campaign"}
+                    {editingCampaignId ? t("owner.edit_campaign") : t("owner.create_campaign_title")}
                   </h3>
                   <button
                     onClick={() => setShowCampaignForm(false)}
@@ -1985,7 +1987,7 @@ function OwnerDashboard() {
 
                 <div className="space-y-4">
                   <div>
-                    <label className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-1.5 block">Campaign Name</label>
+                    <label className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-1.5 block">{t("owner.campaign_name")}</label>
                     <input
                       type="text"
                       value={campaignForm.title}
@@ -1997,7 +1999,7 @@ function OwnerDashboard() {
                   </div>
 
                   <div>
-                    <label className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-1.5 block">Deal Type</label>
+                    <label className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-1.5 block">{t("owner.deal_type")}</label>
                     <div className="grid grid-cols-2 gap-2">
                       {([
                         { value: "percentage", label: "% Off", icon: Percent },
@@ -2046,7 +2048,7 @@ function OwnerDashboard() {
                   </div>
 
                   <div>
-                    <label className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-1.5 block">Description</label>
+                    <label className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-1.5 block">{t("owner.description")}</label>
                     <textarea
                       value={campaignForm.description}
                       onChange={(e) => setCampaignForm(prev => ({ ...prev, description: e.target.value }))}
@@ -2058,12 +2060,12 @@ function OwnerDashboard() {
                   </div>
 
                   <div>
-                    <label className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-2.5 block">Campaign Duration</label>
+                    <label className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-2.5 block">{t("owner.campaign_duration")}</label>
                     <div className="grid grid-cols-2 gap-3">
                       <div className="bg-gray-50 dark:bg-muted rounded-2xl p-3 border border-gray-100 dark:border-border flex flex-col">
                         <div className="flex items-center gap-1.5 mb-2">
                           <Calendar className="w-3 h-3 text-green-500" />
-                          <p className="text-[10px] font-semibold text-green-600 dark:text-green-400 uppercase tracking-wider">Start Date</p>
+                          <p className="text-[10px] font-semibold text-green-600 dark:text-green-400 uppercase tracking-wider">{t("owner.start_date")}</p>
                         </div>
                         <input
                           type="date"
@@ -2077,7 +2079,7 @@ function OwnerDashboard() {
                       <div className="bg-gray-50 dark:bg-muted rounded-2xl p-3 border border-gray-100 dark:border-border flex flex-col">
                         <div className="flex items-center gap-1.5 mb-2">
                           <Calendar className="w-3 h-3 text-red-400" />
-                          <p className="text-[10px] font-semibold text-red-500 dark:text-red-400 uppercase tracking-wider">End Date</p>
+                          <p className="text-[10px] font-semibold text-red-500 dark:text-red-400 uppercase tracking-wider">{t("owner.end_date")}</p>
                         </div>
                         <input
                           type="date"
@@ -2094,14 +2096,14 @@ function OwnerDashboard() {
                       <div className="mt-2.5 px-3.5 py-2 rounded-xl bg-blue-50 dark:bg-blue-900/20 flex items-center gap-2">
                         <Clock className="w-3 h-3 text-blue-500" />
                         <p className="text-[11px] text-blue-600 dark:text-blue-400 font-medium">
-                          {Math.max(1, Math.ceil((new Date(campaignForm.endDate).getTime() - new Date(campaignForm.startDate).getTime()) / 86400000))} day campaign
+                          {t("owner.day_campaign", { count: Math.max(1, Math.ceil((new Date(campaignForm.endDate).getTime() - new Date(campaignForm.startDate).getTime()) / 86400000)) })}
                         </p>
                       </div>
                     )}
                   </div>
 
                   <div>
-                    <label className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-1.5 block">Conditions</label>
+                    <label className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-1.5 block">{t("owner.conditions")}</label>
                     <div className="flex flex-wrap gap-2 mb-2">
                       {[
                         "Dine-in only",
@@ -2138,7 +2140,7 @@ function OwnerDashboard() {
 
                   <div className="flex gap-2">
                     <div className="flex-1">
-                      <label className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-1.5 block">Min. Spend (฿)</label>
+                      <label className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-1.5 block">{t("owner.min_spend")}</label>
                       <input
                         type="text"
                         value={campaignForm.minSpend}
@@ -2149,7 +2151,7 @@ function OwnerDashboard() {
                       />
                     </div>
                     <div className="flex-1">
-                      <label className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-1.5 block">Max Redemptions</label>
+                      <label className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-1.5 block">{t("owner.max_redemptions")}</label>
                       <input
                         type="text"
                         value={campaignForm.maxRedemptions}
@@ -2162,8 +2164,8 @@ function OwnerDashboard() {
                   </div>
 
                   <div>
-                    <label className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-1.5 block">Target Audience</label>
-                    <p className="text-[11px] text-muted-foreground mb-2">Select customer segments to target with this campaign</p>
+                    <label className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-1.5 block">{t("owner.target_audience")}</label>
+                    <p className="text-[11px] text-muted-foreground mb-2">{t("owner.target_audience_desc")}</p>
                     <div className="flex flex-wrap gap-2 mb-3">
                       {segments.map((seg) => {
                         const isSelected = campaignForm.targetGroups.includes(seg.name);
@@ -2199,7 +2201,7 @@ function OwnerDashboard() {
                         type="text"
                         value={customGroupInput}
                         onChange={(e) => setCustomGroupInput(e.target.value)}
-                        placeholder="Add custom group..."
+                        placeholder={t("owner.add_custom_group")}
                         className="flex-1 px-3 py-2.5 rounded-xl bg-gray-50 dark:bg-muted text-sm outline-none placeholder:text-muted-foreground/40"
                         data-testid="input-custom-target-group"
                       />
@@ -2242,7 +2244,7 @@ function OwnerDashboard() {
                   </div>
 
                   <div>
-                    <label className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-2.5 block">Preview</label>
+                    <label className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-2.5 block">{t("owner.preview")}</label>
                     <div
                       className="rounded-2xl border border-gray-100 dark:border-border overflow-hidden"
                       style={{ boxShadow: "0 4px 20px -4px rgba(0,0,0,0.08)" }}
@@ -2281,7 +2283,7 @@ function OwnerDashboard() {
                           {campaignForm.targetGroups.length > 0 && (
                             <div className="flex items-center gap-1 flex-shrink-0">
                               <Target className="w-2.5 h-2.5 text-indigo-400" />
-                              <span className="text-[9px] text-indigo-500 font-medium">{campaignForm.targetGroups.length} segment{campaignForm.targetGroups.length > 1 ? "s" : ""}</span>
+                              <span className="text-[9px] text-indigo-500 font-medium">{campaignForm.targetGroups.length} {campaignForm.targetGroups.length > 1 ? t("owner.segments") : t("owner.segment")}</span>
                             </div>
                           )}
                         </div>
@@ -2291,13 +2293,13 @@ function OwnerDashboard() {
                               <span className="text-[9px] text-muted-foreground">Min. ฿{campaignForm.minSpend}</span>
                             )}
                             {campaignForm.maxRedemptions && (
-                              <span className="text-[9px] text-muted-foreground">{campaignForm.maxRedemptions} redemptions max</span>
+                              <span className="text-[9px] text-muted-foreground">{campaignForm.maxRedemptions} {t("owner.redemptions_max")}</span>
                             )}
                           </div>
                         )}
                       </div>
                     </div>
-                    <p className="text-[10px] text-muted-foreground/50 mt-2 text-center">This is how diners will see your campaign</p>
+                    <p className="text-[10px] text-muted-foreground/50 mt-2 text-center">{t("owner.preview_hint")}</p>
                   </div>
 
                   <button
@@ -2350,7 +2352,7 @@ function OwnerDashboard() {
                     style={{ boxShadow: "0 4px 14px rgba(0,0,0,0.15)" }}
                     data-testid="button-save-campaign"
                   >
-                    {editingCampaignId ? "Save Changes" : "Create Campaign"}
+                    {editingCampaignId ? t("owner.save_changes") : t("owner.create_campaign_title")}
                   </button>
                 </div>
               </motion.div>
@@ -2364,6 +2366,7 @@ function OwnerDashboard() {
 
 function StatsRow() {
   const { mineCount, partnerCount } = useSavedRestaurants();
+  const { t } = useLanguage();
   const [stats, setStats] = useState({ totalSwipes: 0, likes: 0 });
 
   useEffect(() => {
@@ -2387,10 +2390,10 @@ function StatsRow() {
   }, []);
 
   const items = [
-    { label: "Swipes", value: stats.totalSwipes, testId: "text-total-swipes" },
-    { label: "Liked", value: stats.likes, testId: "text-total-likes" },
-    { label: "Saved", value: mineCount, testId: "text-saved-count" },
-    { label: "Shared", value: partnerCount, testId: "text-partner-saves" },
+    { label: t("profile.stats_swipes"), value: stats.totalSwipes, testId: "text-total-swipes" },
+    { label: t("profile.stats_liked"), value: stats.likes, testId: "text-total-likes" },
+    { label: t("profile.stats_saved"), value: mineCount, testId: "text-saved-count" },
+    { label: t("profile.stats_shared"), value: partnerCount, testId: "text-partner-saves" },
   ];
 
   return (
@@ -2413,6 +2416,7 @@ function PartnerRow({ profile, onInvite, onManualAdd, onUnlink }: {
 }) {
   const [, navigate] = useLocation();
   const { partnerCount } = useSavedRestaurants();
+  const { t } = useLanguage();
 
   return (
     <div data-testid="button-partner-section">
@@ -2421,7 +2425,7 @@ function PartnerRow({ profile, onInvite, onManualAdd, onUnlink }: {
           💕
         </div>
         <div className="flex-1 min-w-0">
-          <p className="font-bold text-[15px]">Partner</p>
+          <p className="font-bold text-[15px]">{t("profile.partner")}</p>
           {profile.partnerLinked ? (
             <div className="flex items-center gap-2 mt-0.5">
               <div className="w-5 h-5 rounded-full bg-gray-200 dark:bg-muted overflow-hidden flex items-center justify-center text-[10px]">
@@ -2431,11 +2435,11 @@ function PartnerRow({ profile, onInvite, onManualAdd, onUnlink }: {
               </div>
               <p className="text-[11px] text-muted-foreground truncate" data-testid="text-partner-name">{profile.partnerName}</p>
               {partnerCount > 0 && (
-                <span className="text-[10px] text-pink-500 font-medium ml-1">{partnerCount} shared</span>
+                <span className="text-[10px] text-pink-500 font-medium ml-1">{t("profile.partner_shared", { count: partnerCount })}</span>
               )}
             </div>
           ) : (
-            <p className="text-[11px] text-muted-foreground mt-0.5">Invite or add a partner</p>
+            <p className="text-[11px] text-muted-foreground mt-0.5">{t("profile.partner_invite_hint")}</p>
           )}
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
@@ -2447,7 +2451,7 @@ function PartnerRow({ profile, onInvite, onManualAdd, onUnlink }: {
                   className="text-[11px] text-pink-500 font-semibold active:scale-95 transition-transform"
                   data-testid="button-view-partner-saves"
                 >
-                  View
+                  {t("profile.view")}
                 </button>
               )}
               <button
@@ -2466,14 +2470,14 @@ function PartnerRow({ profile, onInvite, onManualAdd, onUnlink }: {
                 data-testid="button-invite-partner-line"
               >
                 <UserPlus className="w-3 h-3" />
-                Invite
+                {t("profile.invite")}
               </button>
               <button
                 onClick={onManualAdd}
                 className="text-[11px] text-muted-foreground font-medium active:scale-95 transition-transform"
                 data-testid="button-add-partner-manual"
               >
-                Add
+                {t("profile.add")}
               </button>
               <ChevronRight className="w-4 h-4 text-muted-foreground/40" />
             </>
@@ -2487,6 +2491,7 @@ function PartnerRow({ profile, onInvite, onManualAdd, onUnlink }: {
 function SavedSection() {
   const [, navigate] = useLocation();
   const { data, isSaved, getBucket, unsave, mineCount, partnerCount } = useSavedRestaurants();
+  const { t } = useLanguage();
   const [expanded, setExpanded] = useState(false);
   const totalSaved = mineCount + partnerCount;
 
@@ -2514,9 +2519,9 @@ function SavedSection() {
           ❤️
         </div>
         <div className="flex-1 text-left">
-          <p className="font-bold text-[15px]">Saved</p>
+          <p className="font-bold text-[15px]">{t("profile.saved")}</p>
           <p className="text-[11px] text-muted-foreground mt-0.5">
-            {totalSaved === 0 ? "No saved restaurants" : `${mineCount} saved · ${partnerCount} shared`}
+            {totalSaved === 0 ? t("profile.no_saved_restaurants") : t("profile.saved_summary", { mine: mineCount, partner: partnerCount })}
           </p>
         </div>
         <ChevronRight className={`w-4 h-4 text-muted-foreground/40 transition-transform duration-300 ${expanded ? "rotate-90" : ""}`} />
@@ -2534,8 +2539,8 @@ function SavedSection() {
               {savedRestaurants.length === 0 ? (
                 <div className="text-center py-6">
                   <span className="text-3xl block mb-2">🍽️</span>
-                  <p className="text-sm text-muted-foreground">No restaurants saved yet</p>
-                  <p className="text-xs text-muted-foreground/60 mt-1">Tap the heart on any restaurant to save it</p>
+                  <p className="text-sm text-muted-foreground">{t("profile.no_saved_yet")}</p>
+                  <p className="text-xs text-muted-foreground/60 mt-1">{t("profile.save_hint")}</p>
                 </div>
               ) : (
                 <div className="space-y-2">

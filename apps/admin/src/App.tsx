@@ -13,6 +13,7 @@ import AdminLogin from "@/pages/admin/AdminLogin";
 import AdminLayout from "@/pages/admin/AdminLayout";
 import AdminDashboard from "@/pages/admin/AdminDashboard";
 import AdminUsers from "@/pages/admin/AdminUsers";
+import AdminUserDetail from "@/pages/admin/AdminUserDetail";
 import AdminRestaurants from "@/pages/admin/AdminRestaurants";
 import AdminCampaigns from "@/pages/admin/AdminCampaigns";
 import AdminBanners from "@/pages/admin/AdminBanners";
@@ -47,6 +48,7 @@ import OwnerDashboard from "@/pages/owner/OwnerDashboard";
 import OwnerMenu from "@/pages/owner/OwnerMenu";
 import OwnerReviews from "@/pages/owner/OwnerReviews";
 import OwnerPromotions from "@/pages/owner/OwnerPromotions";
+import OwnerCampaigns from "@/pages/owner/OwnerCampaigns";
 import OwnerPerformance from "@/pages/owner/OwnerPerformance";
 import OwnerNotifications from "@/pages/owner/OwnerNotifications";
 import OwnerSettings from "@/pages/owner/OwnerSettings";
@@ -116,6 +118,9 @@ function Router() {
         </Route>
         <Route path="/admin/dashboard">
           <AdminLayout><AdminDashboard /></AdminLayout>
+        </Route>
+        <Route path="/admin/users/:lineUserId">
+          <AdminLayout><AdminUserDetail /></AdminLayout>
         </Route>
         <Route path="/admin/users">
           <AdminLayout><AdminUsers /></AdminLayout>
@@ -215,6 +220,9 @@ function Router() {
         </Route>
         <Route path="/admin/owner/promotions">
           <AdminLayout><GatedRoute minTier="growth" featureName="Promotions"><OwnerPromotions /></GatedRoute></AdminLayout>
+        </Route>
+        <Route path="/admin/owner/campaigns">
+          <AdminLayout><GatedRoute minTier="growth" featureName="Campaigns"><OwnerCampaigns /></GatedRoute></AdminLayout>
         </Route>
         <Route path="/admin/owner/performance">
           <AdminLayout><GatedRoute minTier="growth" featureName="Performance"><OwnerPerformance /></GatedRoute></AdminLayout>

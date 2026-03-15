@@ -26,6 +26,7 @@ import Profile from "@/pages/Profile";
 import SavedPage from "@/pages/SavedPage";
 import ToastPicks from "@/pages/ToastPicks";
 import CampaignDetail from "@/pages/CampaignDetail";
+import TrendingFeed from "@/pages/TrendingFeed";
 
 const pageVariants = {
   initial: { opacity: 0, y: 8 },
@@ -138,6 +139,9 @@ function Router() {
           </Route>
           <Route path="/swipe">
             <AnimatedPage><SwipePage /></AnimatedPage>
+          </Route>
+          <Route path="/trending">
+            <TrendingFeed />
           </Route>
           <Route path="/saved">
             <AnimatedPage><SavedPage /></AnimatedPage>

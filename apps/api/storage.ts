@@ -71,6 +71,8 @@ import {
   supportTickets,
   type SupportTicket,
   type InsertSupportTicket,
+  userSavedPosts,
+  userLikedPosts,
 } from "@shared/schema";
 import { eq, desc, ilike, or, and, lte, gte, lt, sql, SQL } from "drizzle-orm";
 import type { NormalizedPlace } from "./services/places/types";
@@ -221,6 +223,11 @@ export interface IStorage {
   getSupportTicket(id: number, ownerId: number): Promise<SupportTicket | undefined>;
   createSupportTicket(data: InsertSupportTicket): Promise<SupportTicket>;
   updateSupportTicket(id: number, ownerId: number, updates: Partial<Pick<SupportTicket, "messages" | "status">>): Promise<SupportTicket | undefined>;
+  // User saves & likes
+  getSavedRestaurants(lineUserId: string): Promise<number[]>;
+  toggleSavedRestaurant(lineUserId: string, restaurantId: number): Promise<boolean>;
+  getLikedRestaurants(lineUserId: string): Promise<number[]>;
+  toggleLikedRestaurant(lineUserId: string, restaurantId: number): Promise<boolean>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1272,6 +1279,49 @@ export class DatabaseStorage implements IStorage {
       .where(and(eq(supportTickets.id, id), eq(supportTickets.ownerId, ownerId)))
       .returning();
     return row;
+  }
+
+  // User saves & likes
+  async getSavedRestaurants(lineUserId: string): Promise<number[]> {
+    const rows = await db.select({ restaurantId: userSavedPosts.restaurantId })
+      .from(userSavedPosts)
+      .where(eq(userSavedPosts.lineUserId, lineUserId));
+    return rows.map((r) => r.restaurantId);
+  }
+
+  async toggleSavedRestaurant(lineUserId: string, restaurantId: number): Promise<boolean> {
+    const [existing] = await db.select({ id: userSavedPosts.id })
+      .from(userSavedPosts)
+      .where(and(eq(userSavedPosts.lineUserId, lineUserId), eq(userSavedPosts.restaurantId, restaurantId)))
+      .limit(1);
+    if (existing) {
+      await db.delete(userSavedPosts).where(eq(userSavedPosts.id, existing.id));
+      return false;
+    } else {
+      await db.insert(userSavedPosts).values({ lineUserId, restaurantId });
+      return true;
+    }
+  }
+
+  async getLikedRestaurants(lineUserId: string): Promise<number[]> {
+    const rows = await db.select({ restaurantId: userLikedPosts.restaurantId })
+      .from(userLikedPosts)
+      .where(eq(userLikedPosts.lineUserId, lineUserId));
+    return rows.map((r) => r.restaurantId);
+  }
+
+  async toggleLikedRestaurant(lineUserId: string, restaurantId: number): Promise<boolean> {
+    const [existing] = await db.select({ id: userLikedPosts.id })
+      .from(userLikedPosts)
+      .where(and(eq(userLikedPosts.lineUserId, lineUserId), eq(userLikedPosts.restaurantId, restaurantId)))
+      .limit(1);
+    if (existing) {
+      await db.delete(userLikedPosts).where(eq(userLikedPosts.id, existing.id));
+      return false;
+    } else {
+      await db.insert(userLikedPosts).values({ lineUserId, restaurantId });
+      return true;
+    }
   }
 }
 

@@ -17,6 +17,10 @@ interface ReviewItem {
   author: string;
   rating: number;
   text: string;
+  originalText?: string | null;
+  translatedText?: string | null;
+  originalLanguageCode?: string | null;
+  translatedLanguageCode?: string | null;
   timeAgo: string;
   ownerReply: string | null;
   repliedAt: string | null;
@@ -36,6 +40,7 @@ export default function OwnerReviews() {
   const session = getAdminSession();
   const queryClient = useQueryClient();
   const [filter, setFilter] = useState<"all" | "replied" | "unreplied">("all");
+  const [textModeByReview, setTextModeByReview] = useState<Record<string, "default" | "original" | "translated">>({});
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [replyText, setReplyText] = useState("");
 
@@ -85,6 +90,13 @@ export default function OwnerReviews() {
     if (filter === "unreplied") return r.ownerReply === null;
     return true;
   });
+
+  const getDisplayedReviewText = (review: ReviewItem): string => {
+    const mode = textModeByReview[review.key] ?? "default";
+    if (mode === "original" && review.originalText?.trim()) return review.originalText.trim();
+    if (mode === "translated" && review.translatedText?.trim()) return review.translatedText.trim();
+    return review.text;
+  };
 
   return (
     <div className="space-y-6" data-testid="owner-reviews-page">
@@ -232,7 +244,35 @@ export default function OwnerReviews() {
                     ))}
                   </div>
 
-                  <p className="text-sm text-gray-600 mt-2 leading-relaxed">{review.text}</p>
+                  {review.originalText?.trim() && review.translatedText?.trim() && review.originalText.trim() !== review.translatedText.trim() && (
+                    <div className="mt-2 inline-flex items-center gap-1 bg-gray-50 rounded-lg p-0.5 border border-gray-100">
+                      <button
+                        type="button"
+                        onClick={() => setTextModeByReview((prev) => ({ ...prev, [review.key]: "original" }))}
+                        className={`text-[11px] px-2 py-1 rounded-md transition-all ${
+                          (textModeByReview[review.key] ?? "default") === "original"
+                            ? "bg-white text-gray-800 shadow-sm"
+                            : "text-gray-500 hover:text-gray-700"
+                        }`}
+                        data-testid={`review-original-${review.key}`}
+                      >
+                        Original {review.originalLanguageCode ? `(${review.originalLanguageCode})` : ""}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTextModeByReview((prev) => ({ ...prev, [review.key]: "translated" }))}
+                        className={`text-[11px] px-2 py-1 rounded-md transition-all ${
+                          (textModeByReview[review.key] ?? "default") === "translated"
+                            ? "bg-white text-gray-800 shadow-sm"
+                            : "text-gray-500 hover:text-gray-700"
+                        }`}
+                        data-testid={`review-translated-${review.key}`}
+                      >
+                        Translated {review.translatedLanguageCode ? `(${review.translatedLanguageCode})` : ""}
+                      </button>
+                    </div>
+                  )}
+                  <p className="text-sm text-gray-600 mt-2 leading-relaxed">{getDisplayedReviewText(review)}</p>
 
                   {/* Existing owner reply */}
                   {review.ownerReply && (

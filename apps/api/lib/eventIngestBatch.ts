@@ -25,12 +25,14 @@ export async function processEventIngestBatch(
   for (const event of events) {
     const timestampCheck = validateEventTimestamp(event.timestamp);
     if (timestampCheck !== "ok") {
+      console.log("[eventIngestBatch] skipping event type=%s ts=%s reason=%s", event.eventType, event.timestamp, timestampCheck);
       skipped += 1;
       reasonCounts[timestampCheck] = (reasonCounts[timestampCheck] ?? 0) + 1;
       continue;
     }
     validEvents.push(event);
   }
+  console.log("[eventIngestBatch] valid=%d skipped=%d", validEvents.length, skipped);
 
   if (validEvents.length > 0) {
     if (shouldUseRedisIngest()) {

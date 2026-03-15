@@ -469,7 +469,7 @@ export default function SoloResults() {
   const renderCard = (opt: MenuItem | null, side: "left" | "right") => {
     if (!opt) {
       return (
-        <div className="flex-1" key={`slot-${side}`}>
+        <div className="flex-1 min-w-0" key={`slot-${side}`}>
           <div className="bg-white rounded-2xl border border-gray-100 p-4 h-full text-xs text-muted-foreground">
             No option
           </div>
@@ -482,7 +482,7 @@ export default function SoloResults() {
     const isCurrentChoice = currentChoice?.id === opt.id;
 
     return (
-      <div className="flex-1" key={`slot-${side}`}>
+      <div className="flex-1 min-w-0" key={`slot-${side}`}>
         <AnimatePresence mode="wait">
           <motion.div
             key={opt.id}
@@ -494,7 +494,7 @@ export default function SoloResults() {
             }}
             exit={{ y: -20, opacity: 0, scale: 0.9 }}
             transition={{ type: "spring", damping: 22, stiffness: 250 }}
-            className={`bg-white rounded-2xl overflow-hidden cursor-pointer transition-shadow duration-300 relative ${
+            className={`w-full bg-white rounded-2xl overflow-hidden cursor-pointer transition-shadow duration-300 relative ${
               isSelected || isCurrentChoice ? "ring-2 ring-[#FFCC02]" : ""
             } ${isDrinksMode ? (side === "left" ? "animate-drunk-sway" : "animate-drunk-sway-alt") : ""}`}
             style={{
@@ -505,7 +505,7 @@ export default function SoloResults() {
             onClick={() => handleSelect(side)}
             data-testid={`card-option-${side === "left" ? 1 : 2}`}
           >
-            <div className="w-full aspect-[4/3] overflow-hidden relative">
+            <div className="w-full h-36 overflow-hidden relative">
               <img src={opt.imageUrl} alt={opt.name} className="w-full h-full object-cover" />
               {isSelected && (
                 <motion.div

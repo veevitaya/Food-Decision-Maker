@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
@@ -26,7 +26,23 @@ import {
   Send,
   Star,
   Clock,
+  ImagePlus,
+  Loader2,
 } from "lucide-react";
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result ?? "");
+      const base64 = result.includes(",") ? result.split(",")[1] : result;
+      if (!base64) { reject(new Error("Failed to read file")); return; }
+      resolve(base64);
+    };
+    reader.onerror = () => reject(new Error("Failed to read file"));
+    reader.readAsDataURL(file);
+  });
+}
 
 type SponsoredRequest = {
   id: number;
@@ -121,6 +137,7 @@ const emptyForm = {
   restaurantOwnerKey: "",
   dealType: "discount",
   dealValue: "",
+  imageUrl: "",
   startDate: "",
   endDate: "",
   targetGroups: [] as string[],
@@ -132,10 +149,34 @@ export default function AdminCampaigns() {
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState({ ...emptyForm });
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const [sendModal, setSendModal] = useState<{ campaign: Campaign } | null>(null);
   const [notifLineIds, setNotifLineIds] = useState("");
   const [notifMessage, setNotifMessage] = useState("");
   const { toast } = useToast();
+
+  const handleImageUpload = async (file: File) => {
+    setUploadingImage(true);
+    try {
+      const base64 = await fileToBase64(file);
+      const res = await fetch("/api/admin/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ name: file.name, type: file.type, data: base64 }),
+      });
+      if (!res.ok) throw new Error("Upload failed");
+      const { url } = await res.json();
+      setForm((p) => ({ ...p, imageUrl: url }));
+      toast({ title: "Image uploaded" });
+    } catch {
+      toast({ title: "Upload failed", variant: "destructive" });
+    } finally {
+      setUploadingImage(false);
+      if (imageInputRef.current) imageInputRef.current.value = "";
+    }
+  };
 
   const { data: campaigns = [], isLoading } = useQuery<Campaign[]>({
     queryKey: ["/api/campaigns"],
@@ -357,6 +398,27 @@ export default function AdminCampaigns() {
                 className="rounded-xl border-gray-200"
                 data-testid="input-create-deal-value"
               />
+            </div>
+            <div className="space-y-1.5 md:col-span-2">
+              <label className="text-sm font-medium text-gray-700">Campaign Image <span className="text-xs text-muted-foreground font-normal">(optional — uses restaurant photo by default)</span></label>
+              <div className="flex gap-2">
+                <Input
+                  value={form.imageUrl}
+                  onChange={(e) => setForm({ ...form, imageUrl: e.target.value })}
+                  placeholder="https://example.com/banner.jpg or upload →"
+                  className="rounded-xl border-gray-200 flex-1"
+                  data-testid="input-create-image-url"
+                />
+                <input ref={imageInputRef} type="file" accept="image/*" className="hidden"
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImageUpload(f); }} />
+                <Button type="button" variant="outline" className="rounded-xl shrink-0"
+                  onClick={() => imageInputRef.current?.click()} disabled={uploadingImage}>
+                  {uploadingImage ? <Loader2 className="w-4 h-4 animate-spin" /> : <ImagePlus className="w-4 h-4" />}
+                </Button>
+              </div>
+              {form.imageUrl && (
+                <img src={form.imageUrl} alt="preview" className="h-20 w-auto rounded-xl object-cover border border-gray-100 mt-1" />
+              )}
             </div>
             <div className="space-y-1.5">
               <label className="text-sm font-medium text-gray-700">Start Date</label>

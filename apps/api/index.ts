@@ -17,6 +17,7 @@ import { startAnalyticsQualityJob } from "./jobs/analyticsQuality";
 import { startAggregationJob } from "./jobs/aggregationJob";
 import { startFeatureUpdateJob } from "./jobs/featureUpdateJob";
 import { startQueueMonitorJob } from "./jobs/queueMonitor";
+import { startTrendingJob } from "./jobs/trendingJob";
 import type { AdminRole } from "@shared/schema";
 import { adminUsers } from "@shared/schema";
 import bcrypt from "bcryptjs";
@@ -258,8 +259,28 @@ app.use((req, res, next) => {
           Array.isArray((capturedJsonResponse as any).items)
         ) {
           logLine += ` :: response.items=${(capturedJsonResponse as any).items.length}`;
-        } else {
-          logLine += " :: response=object";
+        } else if (
+          typeof capturedJsonResponse === "object" &&
+          "posts" in capturedJsonResponse &&
+          Array.isArray((capturedJsonResponse as any).posts)
+        ) {
+          logLine += ` :: response.posts=${(capturedJsonResponse as any).posts.length}`;
+          if ((capturedJsonResponse as any).cached !== undefined) {
+            logLine += ` cached=${(capturedJsonResponse as any).cached}`;
+          }
+        } else if (typeof capturedJsonResponse === "object" && capturedJsonResponse !== null) {
+          const r = capturedJsonResponse as Record<string, unknown>;
+          // For error responses, surface the message/detail
+          if (res.statusCode >= 400 && r.message) {
+            logLine += ` :: error="${r.message}"`;
+            if (r.detail) logLine += ` detail="${String(r.detail).slice(0, 200)}"`;
+          } else {
+            // Show top-level keys and their types for debugging
+            const summary = Object.entries(r)
+              .map(([k, v]) => `${k}=${Array.isArray(v) ? `array(${(v as unknown[]).length})` : typeof v}`)
+              .join(" ");
+            logLine += ` :: {${summary}}`;
+          }
         }
       }
 
@@ -305,6 +326,7 @@ app.use((req, res, next) => {
   startAggregationJob();
   startFeatureUpdateJob();
   startQueueMonitorJob();
+  startTrendingJob();
 
   // ── Seed initial superadmin from env if none exists ────────────────────────
   try {

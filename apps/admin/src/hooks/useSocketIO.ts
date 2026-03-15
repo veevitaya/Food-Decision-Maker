@@ -15,26 +15,34 @@ interface UseSocketIOProps {
   session: { loggedIn: boolean; sessionType?: string; ownerId?: number } | null;
   onNotification: (notification: NotificationEvent) => void;
   onUnreadCount: (count: number) => void;
+  onDataChanged?: (queryKeys: string[]) => void;
 }
 
-export function useSocketIO({ session, onNotification, onUnreadCount }: UseSocketIOProps) {
+export function useSocketIO({ session, onNotification, onUnreadCount, onDataChanged }: UseSocketIOProps) {
   const socketRef = useRef<Socket | null>(null);
   const [connected, setConnected] = useState(false);
+  const onNotificationRef = useRef(onNotification);
+  const onUnreadCountRef = useRef(onUnreadCount);
+  const onDataChangedRef = useRef(onDataChanged);
+  onNotificationRef.current = onNotification;
+  onUnreadCountRef.current = onUnreadCount;
+  onDataChangedRef.current = onDataChanged;
 
   // Initialize Socket.IO connection
   useEffect(() => {
-    if (!session?.loggedIn || session?.sessionType !== "owner") {
+    if (!session?.loggedIn) {
       return;
     }
 
-    const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3002";
+    const API_URL = import.meta.env.VITE_API_URL || "https://api-toast.fastforwardssl.com";
     
     const socket = io(API_URL, {
       path: "/socket.io",
       auth: {
         session: JSON.stringify(session),
       },
-      transports: ["websocket", "polling"],
+      transports: ["polling"],
+      upgrade: false,
       reconnection: true,
       reconnectionAttempts: 5,
       reconnectionDelay: 1000,
@@ -60,14 +68,17 @@ export function useSocketIO({ session, onNotification, onUnreadCount }: UseSocke
 
     // Listen for new notifications
     socket.on("notification:new", (notification: NotificationEvent) => {
-      console.log("[Socket.IO] New notification:", notification);
-      onNotification(notification);
+      onNotificationRef.current(notification);
     });
 
     // Listen for unread count updates
     socket.on("notification:unread-count", (count: number) => {
-      console.log("[Socket.IO] Unread count:", count);
-      onUnreadCount(count);
+      onUnreadCountRef.current(count);
+    });
+
+    // Listen for data change broadcasts — invalidate relevant queries
+    socket.on("data:changed", (queryKeys: string[]) => {
+      onDataChangedRef.current?.(queryKeys);
     });
 
     // Cleanup on unmount

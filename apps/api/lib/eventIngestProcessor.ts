@@ -21,6 +21,7 @@ export async function persistAcceptedEvents(events: IngestEvent[]): Promise<Inge
   const reasonCounts: Record<string, number> = {};
   const qualityCounts: Record<string, number> = {};
   const rows: InsertEventLog[] = [];
+  console.log("[persistAcceptedEvents] processing %d events", events.length);
 
   for (const event of events) {
     if (!event.userId) incCounter(qualityCounts, "missing_user");
@@ -31,7 +32,16 @@ export async function persistAcceptedEvents(events: IngestEvent[]): Promise<Inge
 
     if (event.userId) {
       const latestConsent = await storage.getLatestConsent(event.userId, "behavior_tracking");
-      if (!latestConsent?.granted) {
+      if (!latestConsent) {
+        // First-time user — auto-grant implicit consent so their activity is tracked
+        await storage.createConsentLog({
+          userId: event.userId,
+          granted: true,
+          consentType: "behavior_tracking",
+          version: "v1_implicit",
+        });
+      } else if (!latestConsent.granted) {
+        // User explicitly revoked consent — respect it
         skipped += 1;
         incCounter(reasonCounts, "no_consent");
         continue;
@@ -68,9 +78,12 @@ export async function persistAcceptedEvents(events: IngestEvent[]): Promise<Inge
     });
   }
 
+  console.log("[persistAcceptedEvents] rows to insert: %d, skipped so far: %d, reasonCounts: %s",
+    rows.length, skipped, JSON.stringify(reasonCounts));
   const inserted = await storage.createEventLogsBulk(rows);
   const accepted = inserted.length;
   const duplicateCount = rows.length - inserted.length;
+  console.log("[persistAcceptedEvents] inserted: %d, duplicates: %d", inserted.length, duplicateCount);
   if (duplicateCount > 0) {
     skipped += duplicateCount;
     incCounter(reasonCounts, "duplicate_or_idempotent");

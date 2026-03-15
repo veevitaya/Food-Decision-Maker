@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 import { useLocation } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { Heart, MapPin } from "lucide-react";
@@ -18,8 +18,10 @@ type RestaurantCard = {
 
 export default function SavedPage() {
   const [, navigate] = useLocation();
-  const { data } = useSavedRestaurants();
+  const { data, unsave } = useSavedRestaurants();
   const { t } = useLanguage();
+  const unsaveRef = useRef(unsave);
+  unsaveRef.current = unsave;
 
   const savedIds = useMemo(() => [...new Set([...data.mine, ...data.partner])], [data.mine, data.partner]);
 
@@ -27,14 +29,17 @@ export default function SavedPage() {
     queryKey: ["/api/saved/restaurants", savedIds],
     enabled: savedIds.length > 0,
     queryFn: async () => {
-      const items = await Promise.all(
+      const results = await Promise.all(
         savedIds.map(async (id) => {
           const res = await fetch(`/api/restaurants/${id}`, { credentials: "include" });
-          if (!res.ok) return null;
+          if (!res.ok) {
+            unsaveRef.current(id); // prune stale IDs that no longer exist
+            return null;
+          }
           return (await res.json()) as RestaurantCard;
         }),
       );
-      return items.filter(Boolean) as RestaurantCard[];
+      return results.filter(Boolean) as RestaurantCard[];
     },
   });
 

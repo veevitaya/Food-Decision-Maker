@@ -10,7 +10,13 @@ const ownerSockets = new Map<number, string>(); // ownerId -> socketId
 export function initSocketIO(server: HttpServer): SocketServer {
   io = new SocketServer(server, {
     cors: {
-      origin: ["http://localhost:5001", "http://localhost:3000"],
+      origin: [
+        "http://localhost:5001",
+        "http://localhost:3000",
+        "https://toast.fastforwardssl.com",
+        "https://admin-toast.fastforwardssl.com",
+        ...(process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(",").map((s) => s.trim()) : []),
+      ],
       credentials: true,
     },
     path: "/socket.io",
@@ -133,4 +139,10 @@ export function emitUnreadCountToOwner(ownerId: number): void {
 export function broadcastToAll(event: string, data: any): void {
   if (!io) return;
   io.emit(event, data);
+}
+
+// Broadcast data invalidation — tells all connected clients to refetch these query keys
+export function broadcastDataChange(queryKeys: string[]): void {
+  if (!io) return;
+  io.emit("data:changed", queryKeys);
 }

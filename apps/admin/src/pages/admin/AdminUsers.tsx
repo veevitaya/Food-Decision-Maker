@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import {
   Users,
   Plus,
@@ -14,6 +15,8 @@ import {
   Store,
   Clock,
   Loader2,
+  ChevronRight,
+  UserCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -101,9 +104,23 @@ type ClaimEntry = {
   restaurantImageUrl: string;
 };
 
+interface AppUser {
+  id: number;
+  lineUserId: string;
+  displayName: string;
+  pictureUrl?: string;
+  dietaryRestrictions: string[];
+  cuisinePreferences: string[];
+  defaultBudget: number;
+  gender?: string;
+  ageGroup?: string;
+  partnerLineUserId?: string;
+}
+
 export default function AdminUsers() {
   const { toast } = useToast();
-  const [activeTab, setActiveTab] = useState<"admins" | "owners">("admins");
+  const [, navigate] = useLocation();
+  const [activeTab, setActiveTab] = useState<"admins" | "owners" | "app_users">("admins");
   const [searchQuery, setSearchQuery] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<AdminUserSafe | null>(null);
@@ -112,10 +129,16 @@ export default function AdminUsers() {
   const [ownerStatusFilter, setOwnerStatusFilter] = useState("all");
   const [reviewClaim, setReviewClaim] = useState<ClaimEntry | null>(null);
   const [ownerProcessing, setOwnerProcessing] = useState(false);
+  const [appUserSearch, setAppUserSearch] = useState("");
 
   const { data: claims = [], isLoading: claimsLoading } = useQuery<ClaimEntry[]>({
     queryKey: ["/api/admin/claims"],
     enabled: activeTab === "owners",
+  });
+
+  const { data: appUsers = [], isLoading: appUsersLoading } = useQuery<AppUser[]>({
+    queryKey: ["/api/admin/users"],
+    enabled: activeTab === "app_users",
   });
 
   const { data: adminUsers = [], isLoading } = useQuery<AdminUserSafe[]>({
@@ -265,6 +288,14 @@ export default function AdminUsers() {
             >
               <Store className="w-3.5 h-3.5" />
               Restaurant Owners
+            </button>
+            <button
+              onClick={() => setActiveTab("app_users")}
+              className={`px-4 py-1.5 text-sm rounded-lg font-medium transition-all flex items-center gap-1.5 ${activeTab === "app_users" ? "bg-white text-gray-800 shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+              data-testid="tab-app-users"
+            >
+              <UserCircle className="w-3.5 h-3.5" />
+              App Users
             </button>
           </div>
         </div>
@@ -701,6 +732,125 @@ export default function AdminUsers() {
               </div>
             </div>
           )}
+        </>
+      )}
+
+      {activeTab === "app_users" && (
+        <>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3" data-testid="section-app-user-kpis">
+            {[
+              { label: "Total Users", value: appUsers.length },
+              { label: "With Preferences", value: appUsers.filter(u => u.cuisinePreferences?.length > 0).length },
+              { label: "With Partner", value: appUsers.filter(u => !!u.partnerLineUserId).length },
+              { label: "Dietary Restrictions", value: appUsers.filter(u => u.dietaryRestrictions?.length > 0).length },
+            ].map(kpi => (
+              <Card key={kpi.label} className="p-4" data-testid={`card-app-user-kpi-${kpi.label.toLowerCase().replace(/\s+/g, "-")}`}>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1">{kpi.label}</p>
+                <p className="text-2xl font-bold tracking-tight text-gray-800">{appUsersLoading ? "…" : kpi.value}</p>
+              </Card>
+            ))}
+          </div>
+
+          <Card className="p-0 overflow-hidden" data-testid="section-app-users-table">
+            <div className="flex items-center gap-3 p-4 border-b border-gray-100 flex-wrap">
+              <div className="relative flex-1 min-w-[200px]">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search by name or LINE ID..."
+                  value={appUserSearch}
+                  onChange={(e) => setAppUserSearch(e.target.value)}
+                  className="pl-9"
+                  data-testid="input-search-app-users"
+                />
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              {appUsersLoading ? (
+                <div className="space-y-2 p-4">{[1,2,3].map(i => <div key={i} className="h-10 bg-gray-100 rounded animate-pulse" />)}</div>
+              ) : appUsers.filter(u =>
+                  !appUserSearch ||
+                  u.displayName.toLowerCase().includes(appUserSearch.toLowerCase()) ||
+                  u.lineUserId.toLowerCase().includes(appUserSearch.toLowerCase())
+                ).length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 text-center text-muted-foreground gap-2">
+                  <UserCircle className="w-6 h-6 opacity-30" />
+                  <span className="text-sm">No app users found</span>
+                </div>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-100 bg-gray-50">
+                      <th className="text-left py-3 px-4 text-xs uppercase tracking-wider text-muted-foreground font-medium">User</th>
+                      <th className="text-left py-3 px-4 text-xs uppercase tracking-wider text-muted-foreground font-medium">Preferences</th>
+                      <th className="text-left py-3 px-4 text-xs uppercase tracking-wider text-muted-foreground font-medium">Budget</th>
+                      <th className="text-center py-3 px-4 text-xs uppercase tracking-wider text-muted-foreground font-medium">Partner</th>
+                      <th className="text-center py-3 px-4 text-xs uppercase tracking-wider text-muted-foreground font-medium">Analytics</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {appUsers
+                      .filter(u =>
+                        !appUserSearch ||
+                        u.displayName.toLowerCase().includes(appUserSearch.toLowerCase()) ||
+                        u.lineUserId.toLowerCase().includes(appUserSearch.toLowerCase())
+                      )
+                      .map(user => (
+                        <tr key={user.lineUserId} className="border-b border-gray-100 hover:bg-gray-50 transition-colors" data-testid={`row-app-user-${user.lineUserId}`}>
+                          <td className="py-3 px-4">
+                            <div className="flex items-center gap-3">
+                              {user.pictureUrl ? (
+                                <img src={user.pictureUrl} alt="" className="w-8 h-8 rounded-full object-cover flex-shrink-0" />
+                              ) : (
+                                <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center flex-shrink-0">
+                                  <UserCircle className="w-5 h-5 text-gray-400" />
+                                </div>
+                              )}
+                              <div>
+                                <p className="font-medium text-gray-800 text-sm">{user.displayName}</p>
+                                <p className="text-[10px] text-gray-400 font-mono">{user.lineUserId.slice(0, 16)}…</p>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="py-3 px-4">
+                            <div className="flex flex-wrap gap-1">
+                              {(user.cuisinePreferences || []).slice(0, 3).map(p => (
+                                <Badge key={p} variant="outline" className="text-[10px]">{p}</Badge>
+                              ))}
+                              {(user.cuisinePreferences || []).length > 3 && (
+                                <Badge variant="outline" className="text-[10px]">+{(user.cuisinePreferences || []).length - 3}</Badge>
+                              )}
+                              {(user.cuisinePreferences || []).length === 0 && (
+                                <span className="text-[11px] text-gray-300">—</span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="py-3 px-4 text-sm text-gray-700">
+                            {user.defaultBudget ? `฿${user.defaultBudget.toLocaleString()}` : "—"}
+                          </td>
+                          <td className="py-3 px-4 text-center">
+                            {user.partnerLineUserId ? (
+                              <Badge variant="secondary" className="bg-purple-50 text-purple-700 text-[10px]">Paired</Badge>
+                            ) : (
+                              <span className="text-[11px] text-gray-300">—</span>
+                            )}
+                          </td>
+                          <td className="py-3 px-4 text-center">
+                            <button
+                              onClick={() => navigate(`/admin/users/${user.lineUserId}`)}
+                              className="flex items-center gap-1 text-xs font-medium px-3 py-1.5 rounded-lg bg-[var(--admin-blue-10)] text-[var(--admin-blue)] hover:bg-blue-100 transition-colors mx-auto"
+                              data-testid={`btn-view-analytics-${user.lineUserId}`}
+                            >
+                              View Analytics <ChevronRight className="w-3 h-3" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </Card>
         </>
       )}
     </div>

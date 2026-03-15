@@ -20,6 +20,7 @@ const JOB_LOCK_IDS: Record<string, number> = {
   "analytics-quality-job": 1004,
   "event-ingest-worker": 1005,
   "queue-monitor-job": 1006,
+  "trending-feed-job": 1007,
 };
 
 /**

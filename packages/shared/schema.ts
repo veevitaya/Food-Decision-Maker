@@ -1,4 +1,4 @@
-import { pgTable, text, serial, integer, boolean, jsonb, timestamp, index } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, boolean, jsonb, timestamp, index, unique } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -13,6 +13,10 @@ export type RestaurantReview = {
   rating: number;
   text: string;
   timeAgo?: string;
+  originalText?: string;
+  translatedText?: string;
+  originalLanguageCode?: string;
+  translatedLanguageCode?: string;
 };
 
 export type ServiceOptions = {
@@ -299,6 +303,7 @@ export const campaigns = pgTable("campaigns", {
   status: text("status").notNull().default("draft"),
   dealType: text("deal_type"),
   dealValue: text("deal_value"),
+  imageUrl: text("image_url"),
   restaurantOwnerKey: text("restaurant_owner_key").notNull(),
   startDate: text("start_date"),
   endDate: text("end_date"),
@@ -618,3 +623,32 @@ export const supportTickets = pgTable("support_tickets", {
 export const insertSupportTicketSchema = createInsertSchema(supportTickets).omit({ id: true, createdAt: true, updatedAt: true });
 export type SupportTicket = typeof supportTickets.$inferSelect;
 export type InsertSupportTicket = z.infer<typeof insertSupportTicketSchema>;
+
+export const trendingFeedCache = pgTable("trending_feed_cache", {
+  id: serial("id").primaryKey(),
+  posts: jsonb("posts").notNull().default([]),
+  builtAt: timestamp("built_at").defaultNow().notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+});
+
+export const userSavedPosts = pgTable(
+  "user_saved_posts",
+  {
+    id: serial("id").primaryKey(),
+    lineUserId: text("line_user_id").notNull(),
+    restaurantId: integer("restaurant_id").notNull(),
+    savedAt: timestamp("saved_at").defaultNow().notNull(),
+  },
+  (t) => ({ uniq: unique().on(t.lineUserId, t.restaurantId) })
+);
+
+export const userLikedPosts = pgTable(
+  "user_liked_posts",
+  {
+    id: serial("id").primaryKey(),
+    lineUserId: text("line_user_id").notNull(),
+    restaurantId: integer("restaurant_id").notNull(),
+    likedAt: timestamp("liked_at").defaultNow().notNull(),
+  },
+  (t) => ({ uniq: unique().on(t.lineUserId, t.restaurantId) })
+);

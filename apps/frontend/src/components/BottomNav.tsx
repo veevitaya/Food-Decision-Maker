@@ -1,6 +1,6 @@
 import { motion } from "framer-motion";
 import { useLocation } from "wouter";
-import { Search, Flame, User, ArrowLeft, Heart } from "lucide-react";
+import { Search, Flame, User, ArrowLeft, Heart, TrendingUp } from "lucide-react";
 import { useFeatureFlags } from "@/hooks/use-feature-flags";
 import { useBranding } from "@/hooks/use-branding";
 import { useLanguage } from "@/i18n/LanguageProvider";
@@ -13,11 +13,12 @@ interface BottomNavProps {
   hidden?: boolean;
 }
 
-type TabKey = "explore" | "swipe" | "saved" | "profile";
+type TabKey = "explore" | "swipe" | "trending" | "saved" | "profile";
 
 const tabs: { key: TabKey; icon: typeof Search; path: string }[] = [
   { key: "explore", icon: Search, path: "/" },
   { key: "swipe", icon: Flame, path: "/swipe" },
+  { key: "trending", icon: TrendingUp, path: "/trending" },
   { key: "saved", icon: Heart, path: "/saved" },
   { key: "profile", icon: User, path: "/profile" },
 ];
@@ -26,6 +27,7 @@ function getActiveTab(location: string): TabKey {
   if (location === "/") return "explore";
   if (location === "/restaurants" || location.startsWith("/restaurant/")) return "explore";
   if (location === "/swipe" || location.startsWith("/solo") || location.startsWith("/group")) return "swipe";
+  if (location === "/trending") return "trending";
   if (location === "/saved") return "saved";
   if (location === "/profile" || location.startsWith("/toast-picks")) return "profile";
   return "explore";
@@ -54,6 +56,7 @@ export function BottomNav({ showBack = true, onBack, hidden = false }: BottomNav
   const labelFor = (key: TabKey) => {
     if (key === "explore") return t("nav.explore");
     if (key === "swipe") return t("nav.swipe");
+    if (key === "trending") return t("nav.trending");
     if (key === "saved") return t("nav.saved");
     return t("nav.profile");
   };

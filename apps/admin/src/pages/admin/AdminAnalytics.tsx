@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import React, { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { AnalyticsEvent } from "@shared/schema";
@@ -1166,9 +1166,8 @@ export default function AdminAnalytics() {
                 <span className="font-bold text-muted-foreground/60 uppercase tracking-widest text-[10px] pb-2">Restaurant</span>
                 <span className="font-bold text-muted-foreground/60 uppercase tracking-widest text-[10px] pb-2">Time</span>
                 {events.slice(0, 50).map((event) => (
-                  <>
+                  <React.Fragment key={event.id}>
                     <span
-                      key={`type-${event.id}`}
                       className="flex items-center gap-1.5 py-2 border-b border-gray-100 text-foreground"
                       data-testid={`event-type-${event.id}`}
                     >
@@ -1176,27 +1175,24 @@ export default function AdminAnalytics() {
                       {event.eventType}
                     </span>
                     <span
-                      key={`user-${event.id}`}
                       className="truncate text-muted-foreground py-2 border-b border-gray-100"
                       data-testid={`event-user-${event.id}`}
                     >
                       {event.userId || "-"}
                     </span>
                     <span
-                      key={`rest-${event.id}`}
                       className="text-muted-foreground py-2 border-b border-gray-100"
                       data-testid={`event-restaurant-${event.id}`}
                     >
                       {event.restaurantId ?? "-"}
                     </span>
                     <span
-                      key={`time-${event.id}`}
                       className="text-muted-foreground whitespace-nowrap py-2 border-b border-gray-100"
                       data-testid={`event-time-${event.id}`}
                     >
                       {relativeTime(event.timestamp)}
                     </span>
-                  </>
+                  </React.Fragment>
                 ))}
               </div>
             </div>

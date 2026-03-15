@@ -32,6 +32,13 @@ export const ingestEventSchema = z.object({
 
 export const ingestBatchSchema = z.object({
   events: z.array(ingestEventSchema).min(1).max(200),
+  // Optional profile hint so the backend can upsert a stub user_profiles row
+  // without requiring a full LINE ID token verification on every batch.
+  actorProfile: z.object({
+    userId: z.string().min(1),
+    displayName: z.string().min(1),
+    pictureUrl: z.string().optional(),
+  }).optional(),
 });
 
 export type IngestEvent = z.infer<typeof ingestEventSchema>;

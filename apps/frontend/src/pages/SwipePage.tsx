@@ -107,7 +107,7 @@ function makeDealTag(dealType: string, dealValue: string): string {
   return `💰 ฿${dealValue} off`;
 }
 
-const RESTAURANT_MODES = new Set(["saved", "partner", "fancy", "spicy", "healthy", "campaigns", "restaurants"]);
+const RESTAURANT_MODES = new Set(["all", "saved", "partner", "fancy", "spicy", "healthy", "campaigns", "restaurants"]);
 
 function ConfettiExplosion() {
   const colors = ["#FF385C", "#FFD700", "#00A699", "#FC642D", "#7B61FF", "#00D1C1", "#FF6B6B", "#4ECDC4", "#FFE66D", "#A855F7"];
@@ -544,13 +544,16 @@ export default function SwipePage() {
     queryKey: ["personalized-swipe", userId, hour, day],
     queryFn: async () => {
       const { lat, lng } = await getCoords();
-      const res = await fetch(
-        `/api/recommendations/personalized?userId=${userId}&lat=${lat}&lng=${lng}&hour=${hour}&day=${day}&limit=20`,
-      );
+      const params = new URLSearchParams({
+        lat: String(lat), lng: String(lng),
+        hour: String(hour), day: String(day), limit: "20",
+      });
+      if (userId) params.set("userId", userId);
+      const res = await fetch(`/api/recommendations/personalized?${params}`);
       if (!res.ok) throw new Error("personalized fetch failed");
       return res.json();
     },
-    enabled: userId !== null && isRestaurantMode && !isCampaignMode,
+    enabled: isRestaurantMode && !isCampaignMode,
     staleTime: 5 * 60 * 1000,
     retry: false,
   });

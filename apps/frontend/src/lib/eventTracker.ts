@@ -70,11 +70,21 @@ function flushNow() {
   const payload = queue.slice(0, 100);
   queue = queue.slice(100);
 
+  const storedProfile = getStoredProfile();
+  const body: Record<string, unknown> = { events: payload };
+  if (storedProfile?.userId && storedProfile?.displayName) {
+    body.actorProfile = {
+      userId: storedProfile.userId,
+      displayName: storedProfile.displayName,
+      pictureUrl: storedProfile.pictureUrl,
+    };
+  }
+
   fetch("/api/events/batch", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
-    body: JSON.stringify({ events: payload }),
+    body: JSON.stringify(body),
   }).catch(() => {
     queue = [...payload, ...queue];
   });

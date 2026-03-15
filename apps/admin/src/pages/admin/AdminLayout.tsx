@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { tierAtLeast, type OwnerTier } from "@/components/TierGate";
 import { useSocketIO } from "@/hooks/useSocketIO";
+import { queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useLanguage } from "@/i18n/LanguageProvider";
 
@@ -116,6 +117,7 @@ const ownerNavGroups: NavGroup[] = [
       { label: "Menu & Hours", icon: UtensilsCrossed, href: "/admin/owner/menu" },
       { label: "Reviews", icon: MessageSquare, href: "/admin/owner/reviews", minTier: "growth" },
       { label: "Promotions", icon: Megaphone, href: "/admin/owner/promotions", minTier: "growth" },
+      { label: "Campaigns", icon: BarChart3, href: "/admin/owner/campaigns", minTier: "growth" },
     ],
   },
   {
@@ -217,6 +219,11 @@ export default function AdminLayout({ children, title }: { children: React.React
     },
     onUnreadCount: (count) => {
       setUnreadCount(count);
+    },
+    onDataChanged: (queryKeys) => {
+      queryKeys.forEach((key) => {
+        queryClient.invalidateQueries({ queryKey: [key] });
+      });
     },
   });
 
