@@ -85,6 +85,12 @@ function makeRestaurant(overrides: Partial<Restaurant> = {}): Restaurant {
     osmId: null,
     reviewCount: 0,
     reviewReplies: null,
+    website: null,
+    plusCode: null,
+    editorialSummary: null,
+    serviceOptions: null,
+    amenities: null,
+    paymentOptions: null,
     ...overrides,
   };
 }

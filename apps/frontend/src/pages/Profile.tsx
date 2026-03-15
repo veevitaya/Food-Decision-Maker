@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useLocation } from "wouter";
 import { useLineProfile } from "@/hooks/use-line-profile";
+import { useLanguage } from "@/i18n/LanguageProvider";
 import { sendPartnerInvite, getAccessToken } from "@/lib/liff";
 import { BottomNav } from "@/components/BottomNav";
 import { useSavedRestaurants } from "@/hooks/use-saved-restaurants";
@@ -238,6 +239,7 @@ const springConfig = { type: "spring" as const, damping: 26, stiffness: 260, mas
 export default function Profile() {
   const [, navigate] = useLocation();
   const { profile: lineProfile, liffAvailable, login: lineLogin, logout: lineLogout } = useLineProfile();
+  const { t, language, setLanguage } = useLanguage();
   const [localProfile, setLocalProfile] = useState<LocalProfile>(getStoredProfile);
   const [showPartnerModal, setShowPartnerModal] = useState(false);
   const [partnerInput, setPartnerInput] = useState("");
@@ -325,6 +327,13 @@ export default function Profile() {
             {isOwnerMode ? "Business" : "Profile"}
           </p>
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setLanguage(language === "en" ? "th" : "en")}
+              className="px-2.5 py-1.5 rounded-xl border border-gray-200 dark:border-border text-[11px] font-bold text-muted-foreground active:scale-95 transition-transform"
+              data-testid="button-lang-toggle"
+            >
+              {t("lang.toggle")}
+            </button>
             {!isOwnerMode && !lineProfile && liffAvailable && (
               <button
                 onClick={lineLogin}

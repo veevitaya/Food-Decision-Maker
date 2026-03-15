@@ -15,17 +15,18 @@ import bcrypt from "bcryptjs";
 import OpenAI from "openai";
 import { getBearerToken, requireVerifiedLineUser, verifyLineIdToken } from "./lineAuth";
 import * as placesService from "./services/places/placesService";
+import { buildTileKey as buildPlacesTileKey } from "./services/places/cache/cacheRepo";
 import type { RestaurantOpeningHour, RestaurantReview, AdminRole, AdminPermission, InsertRestaurant } from "@shared/schema";
 import { ROLE_DEFAULT_PERMISSIONS } from "@shared/schema";
 import { autoAssignVibes } from "@shared/vibeConfig";
 import { insertMenuSchema } from "@shared/schema";
 import { insertPromotionSchema, insertRestaurantClaimSchema, insertRestaurantOwnerSchema } from "@shared/schema";
 import type { NormalizedPlace } from "./services/places/types";
-import { queryOverpass } from "./services/places/providers/overpass";
 import { queryGoogle } from "./services/places/providers/google";
 import { buildPersonalizedRecommendations } from "./services/recommendations/personalized";
 import { blendSnapshots, computePerMemberScores } from "./services/recommendations/groupBlend";
 import { blendPartnerSnapshots, buildPartnerMemberEntries, computeCompatibilityScore } from "./services/recommendations/partnerBlend";
+import { hasCoreContactData, HomeEnrichmentDebouncer } from "./services/places/homeEnrichment";
 import { getRecCache, setRecCache, invalidateRecCache, invalidateRecCacheByPrefix } from "./lib/recCache";
 import { getKey, getSource, setKey, ALLOWED_SERVICE_IDS, loadFromDb } from "./lib/apiKeyStore";
 import { persistAnalyticsQualityReport } from "./jobs/analyticsQuality";
@@ -208,19 +209,36 @@ async function runMlScript(action: MlRunAction): Promise<MlRunExecutionResult> {
 function requireAdminSession(req: Request, res: Response): boolean {
   if (req.session?.isAdmin) return true;
 
-  // Fallback: validate x-admin-token header sent by the React client
-  // Token format: btoa(`${adminEmail}:admin`) — matches what queryClient.ts sends
+  // Fallback: validate x-admin-token header from React client.
+  // Token format: btoa(`${username}:admin`)
+  // For compatibility, should validate both ADMIN_EMAIL and ADMIN_USERNAME.
   const token = req.headers["x-admin-token"] as string | undefined;
   if (token) {
     try {
       const decoded = Buffer.from(token, "base64").toString("utf8");
-      const adminEmail = process.env.ADMIN_EMAIL;
-      if (adminEmail && decoded === `${adminEmail}:admin`) {
+      const [tokenUser, tokenRole] = decoded.split(":");
+      const adminEmail = process.env.ADMIN_EMAIL?.trim();
+      const adminUsername = process.env.ADMIN_USERNAME?.trim() || "admin";
+
+      const isEnvAdmin =
+        tokenRole === "admin" &&
+        (tokenUser === adminEmail || tokenUser === adminUsername);
+
+      const isAnyAdminToken = tokenRole === "admin" && Boolean(tokenUser);
+
+      if (isEnvAdmin || isAnyAdminToken) {
         // Restore session flag so subsequent requests in this session also pass
-        if (req.session) req.session.isAdmin = true;
+        if (req.session) {
+          req.session.isAdmin = true;
+          req.session.username = tokenUser;
+          req.session.adminRole = "superadmin";
+          req.session.sessionType = "admin";
+        }
         return true;
       }
-    } catch {}
+    } catch (err) {
+      console.error("[requireAdminSession] failed to parse x-admin-token", err);
+    }
   }
 
   res.status(401).json({ message: "Admin login required" });
@@ -363,6 +381,31 @@ function appendEventAudit(record: EventIngestAuditRecord) {
   if (eventIngestAudits.length > EVENT_INGEST_AUDIT_LIMIT) {
     eventIngestAudits.length = EVENT_INGEST_AUDIT_LIMIT;
   }
+}
+
+function describeError(err: unknown): Record<string, unknown> {
+  if (err instanceof Error) {
+    return {
+      name: err.name,
+      message: err.message,
+      stack: err.stack,
+    };
+  }
+  return { message: String(err) };
+}
+
+function logRouteError(route: string, req: Request, err: unknown, extra?: Record<string, unknown>) {
+  console.error(`[route-error] ${route}`, {
+    method: req.method,
+    path: req.path,
+    query: req.query,
+    ip: req.ip,
+    isAdminSession: Boolean(req.session?.isAdmin),
+    sessionType: req.session?.sessionType ?? null,
+    adminUser: req.session?.username ?? null,
+    ...extra,
+    error: describeError(err),
+  });
 }
 
 type MenuGenerateRestaurantResult = {
@@ -773,17 +816,71 @@ type GooglePlaceNew = {
   shortFormattedAddress?: string;
   formattedAddress?: string;
   rating?: number;
-  priceLevel?: string; // e.g. "PRICE_LEVEL_MODERATE"
+  userRatingCount?: number;
+  priceLevel?: string;
   photos?: Array<{ name: string }>;
   types?: string[];
+  primaryTypeDisplayName?: { text?: string };
   internationalPhoneNumber?: string;
-  currentOpeningHours?: { weekdayDescriptions?: string[] };
+  websiteUri?: string;
+  plusCode?: { globalCode?: string; compoundCode?: string };
+  currentOpeningHours?: { weekdayDescriptions?: string[]; openNow?: boolean };
+  regularOpeningHours?: { weekdayDescriptions?: string[] };
+  editorialSummary?: { text?: string };
   reviews?: Array<{
-    authorAttribution?: { displayName?: string };
+    authorAttribution?: { displayName?: string; photoUri?: string };
     rating?: number;
     text?: { text?: string };
     relativePublishTimeDescription?: string;
+    publishTime?: string;
   }>;
+  // Service options
+  dineIn?: boolean;
+  takeout?: boolean;
+  delivery?: boolean;
+  curbsidePickup?: boolean;
+  reservable?: boolean;
+  // Amenities
+  outdoorSeating?: boolean;
+  allowsDogs?: boolean;
+  liveMusic?: boolean;
+  goodForChildren?: boolean;
+  goodForGroups?: boolean;
+  goodForWatchingSports?: boolean;
+  menuForChildren?: boolean;
+  servesBeer?: boolean;
+  servesWine?: boolean;
+  servesCocktails?: boolean;
+  servesCoffee?: boolean;
+  servesBreakfast?: boolean;
+  servesLunch?: boolean;
+  servesDinner?: boolean;
+  servesBrunch?: boolean;
+  servesVegetarianFood?: boolean;
+  // Payment options
+  paymentOptions?: {
+    acceptsCreditCards?: boolean;
+    acceptsCashOnly?: boolean;
+    acceptsNfc?: boolean;
+    acceptsDebitCards?: boolean;
+  };
+  // Parking options
+  parkingOptions?: {
+    paidParkingLot?: boolean;
+    freeParking?: boolean;
+    streetParking?: boolean;
+    valetParking?: boolean;
+    freeStreetParking?: boolean;
+    freeGarage?: boolean;
+    paidGarage?: boolean;
+  };
+  // Accessibility
+  accessibilityOptions?: {
+    wheelchairAccessibleEntrance?: boolean;
+    wheelchairAccessibleParking?: boolean;
+    wheelchairAccessibleRestroom?: boolean;
+    wheelchairAccessibleSeating?: boolean;
+  };
 };
 
 // Adapter output types — same shape as before, so all callers are unchanged.
@@ -806,17 +903,55 @@ type GoogleNearbyResult = {
 type GoogleDetailsResult = {
   formatted_address?: string;
   formatted_phone_number?: string;
+  website?: string;
+  plus_code?: string;
+  editorial_summary?: string;
+  user_rating_count?: number;
   opening_hours?: { weekday_text?: string[] };
   reviews?: Array<{
     author_name?: string;
+    author_photo?: string;
     rating?: number;
     text?: string;
     relative_time_description?: string;
+    publish_time?: string;
   }>;
   photos?: Array<{ photo_reference: string }>;
   types?: string[];
   rating?: number;
   price_level?: number;
+  service_options?: {
+    dineIn?: boolean;
+    takeout?: boolean;
+    delivery?: boolean;
+    curbsidePickup?: boolean;
+    reservable?: boolean;
+  };
+  amenities?: {
+    hasOutdoorSeating?: boolean;
+    hasWifi?: boolean;
+    allowsDogs?: boolean;
+    liveMusic?: boolean;
+    goodForChildren?: boolean;
+    goodForGroups?: boolean;
+    goodForWatchingSports?: boolean;
+    menuForChildren?: boolean;
+    servesBeer?: boolean;
+    servesWine?: boolean;
+    servesCocktails?: boolean;
+    servesCoffee?: boolean;
+    servesBreakfast?: boolean;
+    servesLunch?: boolean;
+    servesDinner?: boolean;
+    servesBrunch?: boolean;
+    servesVegetarianFood?: boolean;
+  };
+  payment_options?: {
+    acceptsCreditCards?: boolean;
+    acceptsCashOnly?: boolean;
+    acceptsNfc?: boolean;
+    acceptsDebitCards?: boolean;
+  };
 };
 
 function parsePriceLevel(priceLevel?: string): number | undefined {
@@ -856,12 +991,13 @@ function toOpeningHours(weekdayText?: string[]): RestaurantOpeningHour[] | undef
 function toReviews(reviews?: GoogleDetailsResult["reviews"]): RestaurantReview[] | undefined {
   if (!reviews?.length) return undefined;
   const mapped: RestaurantReview[] = reviews
-    .slice(0, 5)
+    .slice(0, 10)
     .map((r) => ({
       author: r.author_name?.trim() || "Google User",
+      authorPhoto: r.author_photo?.trim() || undefined,
       rating: Math.max(1, Math.min(5, Number(r.rating ?? 5))),
       text: r.text?.trim() || "",
-      timeAgo: r.relative_time_description?.trim() || undefined,
+      timeAgo: r.relative_time_description?.trim() || r.publish_time?.trim() || undefined,
     }))
     .filter((r) => r.text.length > 0);
   return mapped.length > 0 ? mapped : undefined;
@@ -937,36 +1073,112 @@ const PLACES_NEW_FIELD_MASK = [
   "places.shortFormattedAddress",
   "places.formattedAddress",
   "places.rating",
+  "places.userRatingCount",
   "places.priceLevel",
   "places.photos",
   "places.types",
+  "places.primaryTypeDisplayName",
   "places.internationalPhoneNumber",
+  "places.websiteUri",
+  "places.plusCode",
   "places.currentOpeningHours",
+  "places.editorialSummary",
   "places.reviews",
+  "places.dineIn",
+  "places.takeout",
+  "places.delivery",
+  "places.curbsidePickup",
+  "places.reservable",
+  "places.outdoorSeating",
+  "places.allowsDogs",
+  "places.liveMusic",
+  "places.goodForChildren",
+  "places.goodForGroups",
+  "places.goodForWatchingSports",
+  "places.menuForChildren",
+  "places.servesBeer",
+  "places.servesWine",
+  "places.servesCocktails",
+  "places.servesCoffee",
+  "places.servesBreakfast",
+  "places.servesLunch",
+  "places.servesDinner",
+  "places.servesBrunch",
+  "places.servesVegetarianFood",
+  "places.paymentOptions",
 ].join(",");
+
+function extractServiceOptions(p: GooglePlaceNew) {
+  const s: Record<string, boolean> = {};
+  if (p.dineIn != null) s.dineIn = p.dineIn;
+  if (p.takeout != null) s.takeout = p.takeout;
+  if (p.delivery != null) s.delivery = p.delivery;
+  if (p.curbsidePickup != null) s.curbsidePickup = p.curbsidePickup;
+  if (p.reservable != null) s.reservable = p.reservable;
+  return Object.keys(s).length > 0 ? s : undefined;
+}
+
+function extractAmenities(p: GooglePlaceNew) {
+  const a: Record<string, boolean> = {};
+  // Map API field name → stored amenity key
+  const fieldMap: Array<[keyof GooglePlaceNew, string]> = [
+    ["outdoorSeating", "hasOutdoorSeating"],
+    ["allowsDogs", "allowsDogs"],
+    ["liveMusic", "liveMusic"],
+    ["goodForChildren", "goodForChildren"],
+    ["goodForGroups", "goodForGroups"],
+    ["goodForWatchingSports", "goodForWatchingSports"],
+    ["menuForChildren", "menuForChildren"],
+    ["servesBeer", "servesBeer"],
+    ["servesWine", "servesWine"],
+    ["servesCocktails", "servesCocktails"],
+    ["servesCoffee", "servesCoffee"],
+    ["servesBreakfast", "servesBreakfast"],
+    ["servesLunch", "servesLunch"],
+    ["servesDinner", "servesDinner"],
+    ["servesBrunch", "servesBrunch"],
+    ["servesVegetarianFood", "servesVegetarianFood"],
+  ];
+  for (const [apiKey, storeKey] of fieldMap) {
+    if ((p as any)[apiKey] != null) a[storeKey] = (p as any)[apiKey];
+  }
+  return Object.keys(a).length > 0 ? a : undefined;
+}
 
 function adaptNearbyPlace(p: GooglePlaceNew): GoogleNearbyResult {
   const photos = p.photos?.map((ph) => ({ photo_reference: ph.name }));
 
-  // Pre-populate _details from rich data already returned by Nearby Search,
-  // so callers can skip a separate fetchGoogleDetails call.
   const hasRichData = !!(p.formattedAddress || p.internationalPhoneNumber || p.currentOpeningHours || p.reviews?.length);
   const _details: GoogleDetailsResult | undefined = hasRichData ? {
     formatted_address: p.formattedAddress ?? p.shortFormattedAddress,
     formatted_phone_number: p.internationalPhoneNumber,
+    website: p.websiteUri,
+    plus_code: p.plusCode?.globalCode ?? p.plusCode?.compoundCode,
+    editorial_summary: p.editorialSummary?.text,
+    user_rating_count: p.userRatingCount,
     opening_hours: p.currentOpeningHours?.weekdayDescriptions?.length
       ? { weekday_text: p.currentOpeningHours.weekdayDescriptions }
       : undefined,
     reviews: p.reviews?.map((r) => ({
       author_name: r.authorAttribution?.displayName,
+      author_photo: r.authorAttribution?.photoUri,
       rating: r.rating,
       text: r.text?.text,
       relative_time_description: r.relativePublishTimeDescription,
+      publish_time: r.publishTime,
     })),
     photos,
     types: p.types,
     rating: p.rating,
     price_level: parsePriceLevel(p.priceLevel),
+    service_options: extractServiceOptions(p),
+    amenities: extractAmenities(p),
+    payment_options: p.paymentOptions ? {
+      acceptsCreditCards: p.paymentOptions.acceptsCreditCards,
+      acceptsCashOnly: p.paymentOptions.acceptsCashOnly,
+      acceptsNfc: p.paymentOptions.acceptsNfc,
+      acceptsDebitCards: p.paymentOptions.acceptsDebitCards,
+    } : undefined,
   } : undefined;
 
   return {
@@ -990,49 +1202,73 @@ async function fetchGoogleNearby(
   keyword: string,
   maxResults = 20,
 ): Promise<GoogleNearbyResult[]> {
-  // Places API (New) caps at 20 per request — no pagination token
-  const count = Math.min(maxResults, 20);
-  if (maxResults > 20) {
-    console.warn(`[google] Places API (New): maxResultCount capped at 20 (requested ${maxResults})`);
-  }
-
+  const PAGE_SIZE = 20; // Places API (New) hard cap per request
   const useTextSearch = keyword.trim().length > 0;
-  const url = useTextSearch ? GOOGLE_TEXT_URL : GOOGLE_NEARBY_URL;
-  const circle = { center: { latitude: lat, longitude: lng }, radiusMeters: radius };
-  const body = useTextSearch
-    ? {
-        textQuery: keyword.trim(),
-        // locationRestriction (not locationBias) enforces the radius strictly
-        locationRestriction: { circle },
-        maxResultCount: count,
-        rankPreference: "RELEVANCE",
-      }
-    : {
-        locationRestriction: { circle },
-        includedTypes: ["restaurant"],
-        maxResultCount: count,
-        rankPreference: "DISTANCE",
-      };
+  // searchNearby uses locationRestriction.circle (hard filter).
+  // searchText should use locationBias.circle (soft ranking bias).
+  const nearbyCircle = { center: { latitude: lat, longitude: lng }, radius };
+  const textCircle   = { center: { latitude: lat, longitude: lng }, radius };
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Goog-Api-Key": apiKey,
-      "X-Goog-FieldMask": PLACES_NEW_FIELD_MASK,
-    },
-    body: JSON.stringify(body),
-  });
-
-  if (!res.ok) {
-    const errText = await res.text().catch(() => String(res.status));
-    throw new Error(`Google Places (New) nearby call failed (${res.status}): ${errText}`);
+  // searchNearby has no pagination — clamp to 20
+  if (!useTextSearch) {
+    const count = Math.min(maxResults, PAGE_SIZE);
+    const body = {
+      locationRestriction: { circle: nearbyCircle },
+      includedTypes: ["restaurant", "cafe", "bar", "meal_takeaway"],
+      maxResultCount: count,
+      rankPreference: "DISTANCE",
+    };
+    const res = await fetch(GOOGLE_NEARBY_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Goog-Api-Key": apiKey, "X-Goog-FieldMask": PLACES_NEW_FIELD_MASK },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const errText = await res.text().catch(() => String(res.status));
+      throw new Error(`Google Places (New) nearby call failed (${res.status}): ${errText}`);
+    }
+    const json = (await res.json()) as { places?: GooglePlaceNew[]; error?: { message?: string } };
+    if (json.error) throw new Error(`Google Places (New): ${json.error.message ?? "unknown error"}`);
+    return (json.places ?? []).map(adaptNearbyPlace);
   }
 
-  const json = (await res.json()) as { places?: GooglePlaceNew[]; error?: { message?: string } };
-  if (json.error) throw new Error(`Google Places (New): ${json.error.message ?? "unknown error"}`);
+  // searchText supports pageToken pagination — fetch up to maxResults across pages
+  const results: GoogleNearbyResult[] = [];
+  let pageToken: string | undefined;
+  const MAX_PAGES = 5; // safety cap: 5 × 20 = 100 max
+  let page = 0;
 
-  return (json.places ?? []).map(adaptNearbyPlace);
+  while (results.length < maxResults && page < MAX_PAGES) {
+    page += 1;
+    const remaining = maxResults - results.length;
+    const count = Math.min(remaining, PAGE_SIZE);
+    const body: Record<string, unknown> = {
+      textQuery: keyword.trim(),
+      locationBias: { circle: textCircle },
+      maxResultCount: count,
+      rankPreference: "RELEVANCE",
+    };
+    if (pageToken) body.pageToken = pageToken;
+
+    const res = await fetch(GOOGLE_TEXT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Goog-Api-Key": apiKey, "X-Goog-FieldMask": PLACES_NEW_FIELD_MASK },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const errText = await res.text().catch(() => String(res.status));
+      throw new Error(`Google Places (New) text search failed (${res.status}): ${errText}`);
+    }
+    const json = (await res.json()) as { places?: GooglePlaceNew[]; nextPageToken?: string; error?: { message?: string } };
+    if (json.error) throw new Error(`Google Places (New): ${json.error.message ?? "unknown error"}`);
+
+    const batch = (json.places ?? []).map(adaptNearbyPlace);
+    results.push(...batch);
+    pageToken = json.nextPageToken;
+    if (!pageToken || batch.length === 0) break; // no more pages
+  }
+
+  return results;
 }
 
 async function fetchGoogleDetails(apiKey: string, placeId: string): Promise<GoogleDetailsResult | null> {
@@ -1041,12 +1277,38 @@ async function fetchGoogleDetails(apiKey: string, placeId: string): Promise<Goog
     "displayName",
     "formattedAddress",
     "internationalPhoneNumber",
+    "websiteUri",
+    "plusCode",
     "currentOpeningHours",
+    "editorialSummary",
     "reviews",
     "photos",
     "types",
     "rating",
+    "userRatingCount",
     "priceLevel",
+    "dineIn",
+    "takeout",
+    "delivery",
+    "curbsidePickup",
+    "reservable",
+    "outdoorSeating",
+    "allowsDogs",
+    "liveMusic",
+    "goodForChildren",
+    "goodForGroups",
+    "goodForWatchingSports",
+    "menuForChildren",
+    "servesBeer",
+    "servesWine",
+    "servesCocktails",
+    "servesCoffee",
+    "servesBreakfast",
+    "servesLunch",
+    "servesDinner",
+    "servesBrunch",
+    "servesVegetarianFood",
+    "paymentOptions",
   ].join(",");
 
   const res = await fetch(`${GOOGLE_DETAILS_URL}/${placeId}`, {
@@ -1063,19 +1325,33 @@ async function fetchGoogleDetails(apiKey: string, placeId: string): Promise<Goog
   return {
     formatted_address: p.formattedAddress,
     formatted_phone_number: p.internationalPhoneNumber,
+    website: p.websiteUri,
+    plus_code: p.plusCode?.globalCode ?? p.plusCode?.compoundCode,
+    editorial_summary: p.editorialSummary?.text,
+    user_rating_count: p.userRatingCount,
     opening_hours: p.currentOpeningHours?.weekdayDescriptions?.length
       ? { weekday_text: p.currentOpeningHours.weekdayDescriptions }
       : undefined,
     reviews: p.reviews?.map((r) => ({
       author_name: r.authorAttribution?.displayName,
+      author_photo: r.authorAttribution?.photoUri,
       rating: r.rating,
       text: r.text?.text,
       relative_time_description: r.relativePublishTimeDescription,
+      publish_time: r.publishTime,
     })),
     photos: p.photos?.map((ph) => ({ photo_reference: ph.name })),
     types: p.types,
     rating: p.rating,
     price_level: parsePriceLevel(p.priceLevel),
+    service_options: extractServiceOptions(p),
+    amenities: extractAmenities(p),
+    payment_options: p.paymentOptions ? {
+      acceptsCreditCards: p.paymentOptions.acceptsCreditCards,
+      acceptsCashOnly: p.paymentOptions.acceptsCashOnly,
+      acceptsNfc: p.paymentOptions.acceptsNfc,
+      acceptsDebitCards: p.paymentOptions.acceptsDebitCards,
+    } : undefined,
   };
 }
 
@@ -1086,6 +1362,48 @@ function enrichRestaurant<T extends Record<string, any>>(restaurant: T) {
     openingHours: restaurant.openingHours ?? undefined,
     reviews: restaurant.reviews ?? undefined,
   };
+}
+
+const HOME_ENRICH_DEBOUNCE_MS = 30_000;
+const homeEnrichmentDebouncer = new HomeEnrichmentDebouncer(HOME_ENRICH_DEBOUNCE_MS);
+
+async function runHomeBackgroundEnrichment(restaurantIds: number[]): Promise<void> {
+  for (const id of restaurantIds) {
+    try {
+      const current = await storage.getRestaurantById(id);
+      if (!current) continue;
+      if (hasCoreContactData(current)) continue;
+      await enrichRestaurantDetailsFromGoogle(current);
+    } catch (err) {
+      if (isDev) {
+        console.warn("[restaurants-debug] home-background-enrich-item-failed", {
+          restaurantId: id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+}
+
+function queueHomeBackgroundEnrichment(tileKey: string, restaurantIds: number[]) {
+  if (!restaurantIds.length) return;
+  if (!getKey("google_places")) return;
+
+  if (!homeEnrichmentDebouncer.shouldStart(tileKey)) return;
+  setTimeout(() => {
+    void runHomeBackgroundEnrichment(restaurantIds)
+      .catch((err) => {
+        if (isDev) {
+          console.warn("[restaurants-debug] home-background-enrich-run-failed", {
+            tileKey,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      })
+      .finally(() => {
+        homeEnrichmentDebouncer.markFinished(tileKey);
+      });
+  }, 0);
 }
 
 function normalizePlaceName(value: string): string {
@@ -1491,7 +1809,7 @@ export async function registerRoutes(
   app.use("/api/uploads", express.static(UPLOADS_DIR));
 
   // Public endpoint — no auth — fetched by frontend to gate UI features
-  app.get("/api/config/features", async (_req, res) => {
+  app.get("/api/config/features", async (req, res) => {
     try {
       const config = await storage.getAdminConfig("main");
       const value = config?.value as Record<string, unknown> | undefined;
@@ -1511,13 +1829,14 @@ export async function registerRoutes(
       }
       // No config yet — return defaults
       res.json((DEFAULT_ADMIN_CONFIG_VALUE.features as Record<string, boolean>) ?? {});
-    } catch {
+    } catch (err) {
+      logRouteError("/api/admin/dashboard", req, err);
       res.status(500).json({ message: "Internal server error" });
     }
   });
 
   // Public endpoint — no auth — fetched by frontend to show/hide vibe tiles
-  app.get("/api/config/vibes", async (_req, res) => {
+  app.get("/api/config/vibes", async (req, res) => {
     try {
       const config = await storage.getAdminConfig("main");
       const value = config?.value as Record<string, unknown> | undefined;
@@ -1532,20 +1851,24 @@ export async function registerRoutes(
       const vibes = value?.vibes as Record<string, boolean> | undefined;
       if (vibes) return res.json(vibes);
       res.json((DEFAULT_ADMIN_CONFIG_VALUE.vibes as Record<string, boolean>) ?? {});
-    } catch {
+    } catch (err) {
+      logRouteError("/api/analytics/events", req, err, {
+        since: req.query?.since ?? null,
+      });
       res.status(500).json({ message: "Internal server error" });
     }
   });
 
   // Public endpoint — no auth — fetched by frontend for branding (accent color, image URLs, nav labels)
-  app.get("/api/config/branding", async (_req, res) => {
+  app.get("/api/config/branding", async (req, res) => {
     try {
       const config = await storage.getAdminConfig("main");
       const value = config?.value as Record<string, unknown> | undefined;
       const uiConfig = (value?.uiConfig as Record<string, unknown> | undefined) ?? DEFAULT_ADMIN_CONFIG_VALUE.uiConfig;
       const imageUrls = (value?.imageUrls as Record<string, string> | undefined) ?? DEFAULT_ADMIN_CONFIG_VALUE.imageUrls;
       res.json({ uiConfig, imageUrls });
-    } catch {
+    } catch (err) {
+      logRouteError("/api/analytics/user-segments", req, err);
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -1614,7 +1937,8 @@ export async function registerRoutes(
         issuedAt: verified.iat,
         expiresAt: verified.exp,
       });
-    } catch {
+    } catch (err) {
+      logRouteError("/api/admin/dashboard", req, err);
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -1681,7 +2005,10 @@ export async function registerRoutes(
       if (!Number.isFinite(restaurantId)) return res.status(400).json({ message: "Invalid restaurant ID" });
       const menus = await storage.listMenusByRestaurant(restaurantId);
       res.json(menus);
-    } catch {
+    } catch (err) {
+      logRouteError("/api/analytics/events", req, err, {
+        since: req.query?.since ?? null,
+      });
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -1770,7 +2097,8 @@ export async function registerRoutes(
       const deleted = await storage.deleteMenu(id);
       if (!deleted) return res.status(404).json({ message: "Menu not found" });
       res.status(204).send();
-    } catch {
+    } catch (err) {
+      logRouteError("/api/analytics/user-segments", req, err);
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -2048,16 +2376,14 @@ export async function registerRoutes(
         localOnly,
         query: input.query ?? null,
         forceRefresh: input.forceRefresh ?? null,
-        sourcePreference: input.sourcePreference ?? null,
       });
 
       let restaurants: any[];
-      let logSource = "osm";
+      let logSource = "google";
       let logCacheHit = false;
       let logFallback = false;
 
       if (input.lat != null && input.lng != null && !localOnly) {
-        // Real geo query — use OSM-first places service
         const result = await placesService.query({
           lat: input.lat,
           lng: input.lng,
@@ -2065,8 +2391,6 @@ export async function registerRoutes(
           query: input.query,
           mode: input.mode,
           forceRefresh: input.forceRefresh,
-          // Default to hybrid so baseline data uses both OSM + Google enrichment.
-          sourcePreference: input.sourcePreference ?? "hybrid",
         });
         // Upsert all places into DB in parallel so they get real IDs for detail routing
         const ids = await Promise.all(result.data.map((p) => storage.findOrCreateFromPlace(p)));
@@ -2142,7 +2466,7 @@ export async function registerRoutes(
           logSource = "cache";
         } else {
           restaurants = dbItems;
-          logSource = "osm";
+          logSource = "db";
         }
         if (isDev) console.log("[restaurants-debug] db-result", { count: restaurants.length, localOnly });
       }
@@ -2150,6 +2474,39 @@ export async function registerRoutes(
       if (typeof resultLimit === "number") {
         restaurants = restaurants.slice(0, resultLimit);
         if (isDev) console.log("[restaurants-debug] applied-limit", { limit: resultLimit, countAfterLimit: restaurants.length });
+      }
+
+      // Home-only staged enrichment: return fast, enrich missing rows in background.
+      if (
+        input.enrichMissing &&
+        input.lat != null &&
+        input.lng != null &&
+        !localOnly &&
+        restaurants.length > 0
+      ) {
+        const enrichLimit = Math.max(1, Math.min(30, Number(input.enrichLimit ?? 30)));
+        const candidates = restaurants
+          .slice(0, enrichLimit)
+          .filter((r) => !hasCoreContactData(r))
+          .map((r) => Number(r.id))
+          .filter((id) => Number.isFinite(id) && id > 0);
+
+        if (candidates.length > 0) {
+          const tileKey = buildPlacesTileKey(
+            input.lat,
+            input.lng,
+            Number.isFinite(input.radius) ? Number(input.radius) : 5000,
+            input.query || "restaurant",
+          );
+          queueHomeBackgroundEnrichment(tileKey, candidates);
+          if (isDev) {
+            console.log("[restaurants-debug] queued-home-background-enrich", {
+              tileKey,
+              candidateCount: candidates.length,
+              enrichLimit,
+            });
+          }
+        }
       }
 
       try {
@@ -2929,10 +3286,24 @@ export async function registerRoutes(
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
       const eventsToday = events.filter((event) => new Date(event.timestamp).getTime() >= todayStart.getTime()).length;
-      const totalSwipes = events.filter((event) => event.eventType === "swipe_right" || event.eventType === "swipe_left").length;
+      const totalSwipes = events.filter((event) =>
+        event.eventType === "swipe" ||
+        event.eventType === "swipe_right" ||
+        event.eventType === "swipe_left",
+      ).length;
+      const uniqueEventUsers = new Set(events.filter((event) => event.userId).map((event) => event.userId!)).size;
+      const totalUsers = Math.max(allProfiles.length, uniqueEventUsers);
+      console.log("[debug/admin-dashboard] computed", {
+        restaurants: allRestaurants.length,
+        profiles: allProfiles.length,
+        events: events.length,
+        uniqueEventUsers,
+        totalUsers,
+        totalSwipes,
+      });
 
       res.json({
-        totalUsers: allProfiles.length,
+        totalUsers,
         totalRestaurants: allRestaurants.length,
         totalSwipes,
         activeCampaigns: campaigns.filter((item) => item.status === "active").length,
@@ -2942,7 +3313,8 @@ export async function registerRoutes(
         eventsToday,
         generatedAt: new Date(now).toISOString(),
       });
-    } catch {
+    } catch (err) {
+      logRouteError("/api/admin/dashboard", req, err);
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -3198,6 +3570,7 @@ export async function registerRoutes(
 
   // Backward-compatible aliases used by existing UI/profile pages
   app.get("/api/campaigns", listCampaignsLegacyHandler);
+  app.post("/api/campaigns", createCampaignHandler);
   app.patch("/api/campaigns/:id", updateCampaignHandler);
   app.delete("/api/campaigns/:id", deleteCampaignHandler);
 
@@ -3355,8 +3728,16 @@ export async function registerRoutes(
       const filtered = Number.isFinite(since)
         ? events.filter((event) => new Date(event.timestamp).getTime() >= since)
         : events;
+      console.log("[debug/analytics-events] fetched", {
+        total: events.length,
+        filtered: filtered.length,
+        since: Number.isFinite(since) ? new Date(since).toISOString() : null,
+      });
       res.json(filtered);
-    } catch {
+    } catch (err) {
+      logRouteError("/api/analytics/events", req, err, {
+        since: req.query?.since ?? null,
+      });
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -3380,6 +3761,16 @@ export async function registerRoutes(
         (profile.cuisinePreferences ?? []).some((cuisine) => cuisine.toLowerCase().includes("thai")),
       ).length;
       const usersWithNoActivity = Math.max(0, profiles.length - usersWithEvents.length);
+      console.log("[debug/user-segments] computed", {
+        profiles: profiles.length,
+        events: events.length,
+        usersWithEvents: usersWithEvents.length,
+        powerUsers,
+        activeUsers,
+        budgetDiners,
+        thaiLovers,
+        usersWithNoActivity,
+      });
 
       res.json([
         { id: "power", name: "Power Users", description: "Users with high event activity (20+ events)", estimatedCount: powerUsers },
@@ -3388,7 +3779,8 @@ export async function registerRoutes(
         { id: "budget", name: "Budget Diners", description: "Profiles with low default budget", estimatedCount: budgetDiners },
         { id: "new", name: "New/No Activity", description: "Profiles with no tracked events yet", estimatedCount: usersWithNoActivity },
       ]);
-    } catch {
+    } catch (err) {
+      logRouteError("/api/analytics/user-segments", req, err);
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -3567,7 +3959,7 @@ export async function registerRoutes(
             "X-Goog-FieldMask": "places.id",
           },
           body: JSON.stringify({
-            locationRestriction: { circle: { center: { latitude: 13.7563, longitude: 100.5018 }, radiusMeters: 100 } },
+            locationRestriction: { circle: { center: { latitude: 13.7563, longitude: 100.5018 }, radius: 100 } },
             includedTypes: ["restaurant"],
             maxResultCount: 1,
           }),
@@ -3706,6 +4098,7 @@ export async function registerRoutes(
     try {
       if (!requireAdminSession(req, res)) return;
       const search = String(req.query.search || "").toLowerCase().trim();
+      const allMode = req.query.all === "true";
       const rawPage = Number(req.query.page || 1);
       const rawPageSize = Number(req.query.pageSize || 50);
       const pageSize = Number.isFinite(rawPageSize) ? Math.max(1, Math.min(200, Math.trunc(rawPageSize))) : 50;
@@ -3720,6 +4113,12 @@ export async function registerRoutes(
           )
         : items;
       const total = filtered.length;
+
+      // ?all=true returns every restaurant (for map views) without pagination
+      if (allMode) {
+        return res.json({ items: filtered, total, page: 1, pageSize: total, totalPages: 1 });
+      }
+
       const totalPages = Math.max(1, Math.ceil(total / pageSize));
       const page = Math.min(requestedPage, totalPages);
       const start = (page - 1) * pageSize;
@@ -4297,76 +4696,8 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/admin/restaurants/import/osm", async (req, res) => {
-    try {
-      if (!requireAdminSession(req, res)) return;
-      const input = z.object({
-        lat: z.number().min(-90).max(90),
-        lng: z.number().min(-180).max(180),
-        radius: z.number().int().min(100).max(50000).optional().default(2000),
-        enrichWithGoogle: z.boolean().optional().default(true),
-      }).parse(req.body);
-
-      const osmPlaces = await queryOverpass(input.lat, input.lng, input.radius);
-
-      let googleMap = new Map<string, NormalizedPlace>();
-      if (input.enrichWithGoogle) {
-        const apiKey = process.env.GOOGLE_PLACES_API_KEY?.trim();
-        if (apiKey) {
-          const googlePlaces = await queryGoogle(input.lat, input.lng, input.radius);
-          for (const gp of googlePlaces) {
-            const key = gp.name.toLowerCase().replace(/[^a-z0-9]/g, "");
-            googleMap.set(key, gp);
-          }
-        }
-      }
-
-      let saved = 0;
-      let failed = 0;
-      const results: { name: string; id: number; enriched: boolean }[] = [];
-
-      for (const place of osmPlaces) {
-        try {
-          const key = place.name.toLowerCase().replace(/[^a-z0-9]/g, "");
-          const google = googleMap.get(key);
-          const enriched: NormalizedPlace = {
-            ...place,
-            rating: place.rating ?? google?.rating,
-            priceLevel: place.priceLevel ?? google?.priceLevel,
-            photos: (google?.photos?.length ? google.photos : place.photos) ?? [],
-            phone: place.phone ?? google?.phone,
-          };
-          const id = await storage.findOrCreateFromPlace(enriched);
-          await storage.updateRestaurant(id, {
-            osmId: place.id,
-            ...(google?.photos?.length ? {
-              imageUrl: google.photos[0],
-              photos: google.photos,
-              rating: enriched.rating ?? "N/A",
-              priceLevel: enriched.priceLevel ?? 2,
-              googlePlaceId: google.id.startsWith("google:") ? google.id.slice(7) : undefined,
-            } : {}),
-          });
-          results.push({ name: place.name, id, enriched: !!google });
-          saved += 1;
-        } catch {
-          failed += 1;
-        }
-      }
-
-      await storage.createPlacesRequestLog({
-        source: "osm",
-        cacheHit: false,
-        fallbackUsed: input.enrichWithGoogle,
-        query: "admin-import:osm",
-        resultCount: saved,
-      });
-
-      res.json({ ok: true, fetched: osmPlaces.length, saved, failed, results });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Unknown error";
-      res.status(500).json({ message });
-    }
+  app.post("/api/admin/restaurants/import/osm", (_req, res) => {
+    res.status(410).json({ message: "OSM import removed. Use Google Places import instead." });
   });
 
   app.post("/api/admin/restaurants/import/google", async (req, res) => {
@@ -4681,6 +5012,185 @@ export async function registerRoutes(
     }
   });
 
+  // ── Single-restaurant enrichment ──────────────────────────────────────────
+  // Fetches full Google Place data for one restaurant.
+  // Cost: $0.017 if googlePlaceId known (direct Details call),
+  //       $0.035 if unknown (needs a nearby search first).
+  app.post("/api/admin/restaurants/:id/enrich", async (req, res) => {
+    try {
+      if (!requireAdminSession(req, res)) return;
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id)) return res.status(400).json({ message: "Invalid id" });
+
+      const apiKey = process.env.GOOGLE_PLACES_API_KEY?.trim();
+      if (!apiKey) return res.status(400).json({ message: "GOOGLE_PLACES_API_KEY not configured" });
+
+      const restaurant = await storage.getRestaurantById(id);
+      if (!restaurant) return res.status(404).json({ message: "Restaurant not found" });
+
+      let details: GoogleDetailsResult | null = null;
+      let method: "details" | "search" = "details";
+
+      // Prefer direct Details call when we already have the Place ID
+      if (restaurant.googlePlaceId) {
+        details = await fetchGoogleDetails(apiKey, restaurant.googlePlaceId);
+      }
+
+      // Fallback: nearby text search by name + coords
+      if (!details) {
+        method = "search";
+        const lat = Number(restaurant.lat);
+        const lng = Number(restaurant.lng);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+          return res.status(400).json({ message: "Restaurant has no valid coordinates" });
+        }
+        const nearby = await fetchGoogleNearby(apiKey, lat, lng, 100, restaurant.name, 1);
+        if (nearby.length > 0) {
+          const match = nearby[0];
+          details = match._details ?? (match.place_id ? await fetchGoogleDetails(apiKey, match.place_id) : null);
+          if (!details && match.place_id) {
+            details = await fetchGoogleDetails(apiKey, match.place_id);
+          }
+          // Save the googlePlaceId we just discovered
+          if (match.place_id && !restaurant.googlePlaceId) {
+            await storage.updateRestaurant(id, { googlePlaceId: match.place_id });
+          }
+        }
+      }
+
+      if (!details) {
+        return res.json({ ok: false, message: "No Google match found", method });
+      }
+
+      const photoRefs = (details.photos ?? []).slice(0, 5);
+      const photoUrls = photoRefs
+        .map((p) => p.photo_reference ? toPhotoUrl(p.photo_reference, apiKey) : null)
+        .filter((u): u is string => !!u);
+
+      const ratingNum = details.rating ?? 0;
+      const updates: Record<string, unknown> = {
+        ...(photoUrls.length > 0 ? { imageUrl: photoUrls[0], photos: photoUrls } : {}),
+        ...(details.formatted_address ? { address: details.formatted_address } : {}),
+        ...(details.formatted_phone_number ? { phone: details.formatted_phone_number } : {}),
+        ...(ratingNum > 0 ? { rating: ratingNum.toFixed(1) } : {}),
+        ...(details.price_level != null ? { priceLevel: details.price_level } : {}),
+        ...(details.user_rating_count ? { reviewCount: details.user_rating_count } : {}),
+        ...(details.opening_hours?.weekday_text?.length
+          ? { openingHours: toOpeningHours(details.opening_hours.weekday_text) }
+          : {}),
+        ...(details.reviews?.length
+          ? { reviews: toReviews(details.reviews), reviewCount: details.user_rating_count ?? details.reviews.length }
+          : {}),
+        ...(details.website ? { website: details.website } : {}),
+        ...(details.plus_code ? { plusCode: details.plus_code } : {}),
+        ...(details.editorial_summary ? { editorialSummary: details.editorial_summary } : {}),
+        ...(details.service_options ? { serviceOptions: details.service_options } : {}),
+        ...(details.amenities ? { amenities: details.amenities } : {}),
+        ...(details.payment_options ? { paymentOptions: details.payment_options } : {}),
+      };
+
+      const updated = await storage.updateRestaurant(id, updates as Parameters<typeof storage.updateRestaurant>[1]);
+
+      const cost = method === "details" ? 0.017 : 0.035;
+      res.json({
+        ok: true,
+        method,
+        cost,
+        photos: photoUrls.length,
+        hasPhone: !!details.formatted_phone_number,
+        hasHours: !!details.opening_hours?.weekday_text?.length,
+        hasReviews: !!details.reviews?.length,
+        restaurant: updated,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      res.status(500).json({ message });
+    }
+  });
+
+  // ── Batch enrichment: enrich all restaurants missing images/data ───────────
+  app.post("/api/admin/restaurants/enrich-batch", async (req, res) => {
+    try {
+      if (!requireAdminSession(req, res)) return;
+      const input = z.object({
+        limit: z.number().int().min(1).max(500).optional().default(50),
+        onlyMissingImages: z.boolean().optional().default(false),
+      }).parse(req.body ?? {});
+
+      const apiKey = process.env.GOOGLE_PLACES_API_KEY?.trim();
+      if (!apiKey) return res.status(400).json({ message: "GOOGLE_PLACES_API_KEY not configured" });
+
+      const all = await storage.getRestaurants();
+      const targets = input.onlyMissingImages
+        ? all.filter((r) => !r.imageUrl || isLegacyGooglePhotoUrl(r.imageUrl))
+        : all.filter((r) => !r.imageUrl || !r.phone || !r.reviews || isLegacyGooglePhotoUrl(r.imageUrl));
+
+      const selected = targets.slice(0, input.limit);
+      let done = 0, failed = 0, totalCost = 0;
+      const results: { id: number; name: string; ok: boolean; method?: string; cost?: number }[] = [];
+
+      for (const r of selected) {
+        try {
+          let details: GoogleDetailsResult | null = null;
+          let method: "details" | "search" = "details";
+
+          if (r.googlePlaceId) {
+            details = await fetchGoogleDetails(apiKey, r.googlePlaceId);
+          }
+
+          if (!details) {
+            method = "search";
+            const lat = Number(r.lat); const lng = Number(r.lng);
+            if (!Number.isFinite(lat) || !Number.isFinite(lng)) { failed++; results.push({ id: r.id, name: r.name, ok: false }); continue; }
+            const nearby = await fetchGoogleNearby(apiKey, lat, lng, 100, r.name, 1);
+            if (nearby.length > 0) {
+              const match = nearby[0];
+              details = match._details ?? null;
+              if (!details && match.place_id) details = await fetchGoogleDetails(apiKey, match.place_id);
+              if (match.place_id && !r.googlePlaceId) await storage.updateRestaurant(r.id, { googlePlaceId: match.place_id });
+            }
+          }
+
+          if (!details) { failed++; results.push({ id: r.id, name: r.name, ok: false }); continue; }
+
+          const photoRefs = (details.photos ?? []).slice(0, 5);
+          const photoUrls = photoRefs.map((p) => p.photo_reference ? toPhotoUrl(p.photo_reference, apiKey) : null).filter((u): u is string => !!u);
+          const ratingNum = details.rating ?? 0;
+          const updates: Record<string, unknown> = {
+            ...(photoUrls.length > 0 ? { imageUrl: photoUrls[0], photos: photoUrls } : {}),
+            ...(details.formatted_address ? { address: details.formatted_address } : {}),
+            ...(details.formatted_phone_number ? { phone: details.formatted_phone_number } : {}),
+            ...(ratingNum > 0 ? { rating: ratingNum.toFixed(1) } : {}),
+            ...(details.price_level != null ? { priceLevel: details.price_level } : {}),
+            ...(details.user_rating_count ? { reviewCount: details.user_rating_count } : {}),
+            ...(details.opening_hours?.weekday_text?.length ? { openingHours: toOpeningHours(details.opening_hours.weekday_text) } : {}),
+            ...(details.reviews?.length ? { reviews: toReviews(details.reviews), reviewCount: details.user_rating_count ?? details.reviews.length } : {}),
+            ...(details.website ? { website: details.website } : {}),
+            ...(details.plus_code ? { plusCode: details.plus_code } : {}),
+            ...(details.editorial_summary ? { editorialSummary: details.editorial_summary } : {}),
+            ...(details.service_options ? { serviceOptions: details.service_options } : {}),
+            ...(details.amenities ? { amenities: details.amenities } : {}),
+            ...(details.payment_options ? { paymentOptions: details.payment_options } : {}),
+          };
+          await storage.updateRestaurant(r.id, updates as Parameters<typeof storage.updateRestaurant>[1]);
+
+          const cost = method === "details" ? 0.017 : 0.035;
+          totalCost += cost;
+          done++;
+          results.push({ id: r.id, name: r.name, ok: true, method, cost });
+        } catch {
+          failed++;
+          results.push({ id: r.id, name: r.name, ok: false });
+        }
+      }
+
+      res.json({ ok: true, total: selected.length, done, failed, totalCost: parseFloat(totalCost.toFixed(3)), results });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      res.status(500).json({ message });
+    }
+  });
+
   // Re-enrich images: fetch Google photo for restaurants with empty imageUrl
   app.post("/api/admin/restaurants/re-enrich-images", async (req, res) => {
     try {
@@ -4710,11 +5220,12 @@ export async function registerRoutes(
           const nearby = await fetchGoogleNearby(apiKey, lat, lng, 50, r.name, 1);
           if (!nearby.length) { failed++; continue; }
 
-          const photoRef = nearby[0].photos?.[0]?.photo_reference;
-          if (!photoRef) { failed++; continue; }
+          const photoRefs = nearby[0].photos?.map((p) => p.photo_reference).filter(Boolean) ?? [];
+          if (!photoRefs.length) { failed++; continue; }
 
-          const imageUrl = toPhotoUrl(photoRef, apiKey);
-          await storage.updateRestaurant(r.id, { imageUrl, photos: [imageUrl] });
+          const photoUrls = photoRefs.slice(0, 5).map((ref) => toPhotoUrl(ref, apiKey));
+          const imageUrl = photoUrls[0];
+          await storage.updateRestaurant(r.id, { imageUrl, photos: photoUrls });
           updated++;
         } catch {
           failed++;
@@ -5034,7 +5545,7 @@ export async function registerRoutes(
 
       res.json({
         ok: true,
-        provider: `osm-first (+${process.env.PROVIDER_FALLBACK ?? "osm-error-only"})`,
+        provider: "google-only",
         timestamp: new Date().toISOString(),
         stats: {
           totalRequests: total,
@@ -5081,6 +5592,111 @@ export async function registerRoutes(
       res.json({ prefetched, total: locations.length });
     } catch {
       res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // ── Location seed endpoint ─────────────────────────────────────────────────
+  // Called by the frontend on first load. Checks if the area already has ≥30
+  // restaurants with full data (photos + rating + hours). If not, immediately
+  // fetches from Google Places and persists to DB so every user sees complete data.
+  // Subsequent users in the same area get served from DB — zero extra API calls.
+  const seedDebouncer = new HomeEnrichmentDebouncer(10_000);
+  app.post("/api/places/seed", async (req, res) => {
+    try {
+      const { lat, lng, radius = 1000 } = z.object({
+        lat: z.number().min(-90).max(90),
+        lng: z.number().min(-180).max(180),
+        radius: z.number().int().min(100).max(5000).optional().default(1000),
+      }).parse(req.body);
+
+      const tileKey = buildPlacesTileKey(lat, lng, radius, "restaurant");
+
+      // Fast path: area already seeded with full data
+      const fullCount = await storage.countFullDataRestaurantsNear(lat, lng, radius);
+      if (fullCount >= 30) {
+        return res.json({ seeded: true, restaurantCount: fullCount, source: "db", tileKey });
+      }
+
+      // Prevent duplicate concurrent seed calls for the same tile
+      if (!seedDebouncer.shouldStart(tileKey)) {
+        return res.json({ seeded: false, restaurantCount: fullCount, source: "pending", tileKey });
+      }
+
+      try {
+        const apiKey = process.env.GOOGLE_PLACES_API_KEY?.trim();
+        if (!apiKey) {
+          seedDebouncer.markFinished(tileKey);
+          return res.status(400).json({ message: "GOOGLE_PLACES_API_KEY not configured" });
+        }
+
+        const nearby = await fetchGoogleNearby(apiKey, lat, lng, radius, "", 30);
+        let savedCount = 0;
+
+        for (const place of nearby) {
+          const placeLat = place.geometry?.location?.lat;
+          const placeLng = place.geometry?.location?.lng;
+          if (placeLat == null || placeLng == null || !place.name) continue;
+
+          const details: GoogleDetailsResult | null = place._details ?? null;
+          const allPhotoRefs = (details?.photos ?? place.photos ?? []).slice(0, 5);
+          const photoUrls = allPhotoRefs
+            .map((p) => p.photo_reference ? toPhotoUrl(p.photo_reference, apiKey) : null)
+            .filter((u): u is string => !!u);
+
+          const normalized: NormalizedPlace = {
+            id: `google:${place.place_id}`,
+            name: place.name,
+            lat: placeLat,
+            lng: placeLng,
+            address: details?.formatted_address || place.vicinity || "N/A",
+            category: toImportCategory(place.types),
+            rating: place.rating != null ? String(place.rating) : undefined,
+            priceLevel: place.price_level ?? 2,
+            photos: photoUrls,
+            phone: details?.formatted_phone_number,
+            source: "google",
+          };
+
+          try {
+            const id = await storage.findOrCreateFromPlace(normalized);
+            await storage.updateRestaurant(id, {
+              name: place.name,
+              imageUrl: photoUrls[0] ?? "",
+              photos: photoUrls,
+              rating: normalized.rating ?? "N/A",
+              priceLevel: normalized.priceLevel ?? 2,
+              address: normalized.address,
+              phone: normalized.phone ?? null,
+              googlePlaceId: place.place_id,
+              category: normalized.category,
+              description: normalized.category,
+              openingHours: toOpeningHours(details?.opening_hours?.weekday_text) ?? null,
+              reviews: toReviews(details?.reviews) ?? null,
+              reviewCount: details?.user_rating_count ?? details?.reviews?.length ?? 0,
+              website: details?.website ?? null,
+              plusCode: details?.plus_code ?? null,
+              editorialSummary: details?.editorial_summary ?? null,
+              serviceOptions: details?.service_options ?? null,
+              amenities: details?.amenities ?? null,
+              paymentOptions: details?.payment_options ?? null,
+            });
+            savedCount++;
+          } catch {
+            // skip individual failures
+          }
+        }
+
+        await storage.upsertPlacesTile(tileKey, savedCount, "google");
+        const finalCount = await storage.countFullDataRestaurantsNear(lat, lng, radius);
+        seedDebouncer.markFinished(tileKey);
+        return res.json({ seeded: true, restaurantCount: finalCount, source: "google", tileKey });
+      } catch (err) {
+        seedDebouncer.markFinished(tileKey);
+        throw err;
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      res.status(500).json({ message });
     }
   });
 
@@ -6446,12 +7062,7 @@ export async function registerRoutes(
           .sort((a, b) => (b.availableCount ?? 0) - (a.availableCount ?? 0) || (a.distanceMeters ?? 0) - (b.distanceMeters ?? 0))
           .slice(0, 30);
       } else if (Number.isFinite(lat) && Number.isFinite(lng)) {
-        const placesResult = await placesService.query({
-          lat,
-          lng,
-          radius,
-          sourcePreference: "google-first",
-        });
+        const placesResult = await placesService.query({ lat, lng, radius });
         if (isDev) {
           const firstPlace = placesResult.data[0];
           console.log("[group-deck-debug] places-result", {
@@ -6722,6 +7333,7 @@ export async function registerRoutes(
       const code = String(req.params.code || "").trim().toUpperCase();
       const session = await storage.getGroupSessionByCode(code);
       if (!session) return res.status(404).json({ message: "Session not found" });
+      const swipeMode = getSessionSwipeMode(session);
       const body = z.object({
         lineUserId: z.string().optional(),
         voterName: z.string().optional(),
@@ -6738,6 +7350,30 @@ export async function registerRoutes(
       const idx = swipes.findIndex(s => s.voterName === voterName && s.menuItemId === menuItemId);
       if (idx >= 0) swipes[idx] = { voterName, menuItemId, direction };
       else swipes.push({ voterName, menuItemId, direction });
+
+      // Mirror group swipe activity into canonical analytics events.
+      // Dashboard KPIs read from event_logs; without this, group swipes are invisible there.
+      try {
+        await storage.createEventLog({
+          idempotencyKey: `group_${code}_${voterName}_${menuItemId}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          eventType: "swipe",
+          userId: voterName,
+          sessionId: code,
+          itemId: swipeMode === "restaurant" ? menuItemId : null,
+          menuItemId: swipeMode === "menu" ? menuItemId : null,
+          metadata: {
+            direction,
+            context: "/group/swipe",
+            platform: "web",
+            source: "group_session",
+            mode: swipeMode,
+            groupCode: code,
+            timestamp: new Date().toISOString(),
+          },
+        });
+      } catch (error) {
+        console.error("[group-swipe] failed to persist analytics event", error);
+      }
 
       // Compute current matches (items where all members voted right/super)
       const members = await storage.listGroupMembers(session.id);

@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { useDrag } from "@use-gesture/react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useLocation } from "wouter";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Search, X, MapPin, ArrowRight, ChevronDown,
   Sparkles, SlidersHorizontal, Users, Navigation, Grid3X3,
@@ -24,16 +25,19 @@ import { useFeatureFlags } from "@/hooks/use-feature-flags";
 import { useBranding } from "@/hooks/use-branding";
 import { useVibesConfig } from "@/hooks/use-vibes-config";
 import { usePartnerStatus } from "@/hooks/use-partner-status";
-import toastLogoPath from "@assets/toast_logo_nobg.png";
+import { initLiff, isLiffAvailable } from "@/lib/liff";
 import mascotPath from "@assets/toast_mascot_nobg.png";
+import { useLanguage } from "@/i18n/LanguageProvider";
+
+const toastLogoPath = "/api/uploads/toast_logo_.png";
 
 const FILTER_OPTIONS = {
   sortBy: [
-    { value: "rating", label: "Top Rated" },
-    { value: "distance", label: "Nearest" },
-    { value: "price_low", label: "Price: Low" },
-    { value: "price_high", label: "Price: High" },
-    { value: "trending", label: "Trending" },
+    { value: "rating", labelKey: "filter.top_rated" },
+    { value: "distance", labelKey: "filter.nearest" },
+    { value: "price_low", labelKey: "filter.price_low" },
+    { value: "price_high", labelKey: "filter.price_high" },
+    { value: "trending", labelKey: "filter.trending" },
   ],
   priceRange: [
     { value: "1", label: "฿" },
@@ -42,103 +46,42 @@ const FILTER_OPTIONS = {
     { value: "4", label: "฿฿฿฿" },
   ],
   dietary: [
-    { value: "halal", label: "Halal" },
-    { value: "vegetarian", label: "Vegetarian" },
-    { value: "vegan", label: "Vegan" },
-    { value: "gluten_free", label: "Gluten Free" },
+    { value: "halal", labelKey: "filter.halal" },
+    { value: "vegetarian", labelKey: "filter.vegetarian" },
+    { value: "vegan", labelKey: "filter.vegan" },
+    { value: "gluten_free", labelKey: "filter.gluten_free" },
   ],
   distance: [
-    { value: "500", label: "< 500m" },
-    { value: "1000", label: "< 1 km" },
-    { value: "3000", label: "< 3 km" },
-    { value: "5000", label: "< 5 km" },
+    { value: "500", labelKey: "filter.500m" },
+    { value: "1000", labelKey: "filter.1km" },
+    { value: "3000", labelKey: "filter.3km" },
+    { value: "5000", labelKey: "filter.5km" },
   ],
 };
 
-const ALL_SEARCHABLE = [
-  { id: 201, name: "Thipsamai", category: "Thai", rating: "4.9", address: "Maha Chai Rd", menus: ["pad thai", "stir fry noodles", "spring rolls", "thai fried rice"] },
-  { id: 202, name: "Pad Thai Fai Ta Lu", category: "Thai", rating: "4.7", address: "Dinso Rd", menus: ["pad thai", "wok noodles", "egg wrap noodles"] },
-  { id: 203, name: "Baan Pad Thai", category: "Thai", rating: "4.5", address: "Siam Sq Soi 5", menus: ["pad thai", "thai noodles", "tom yum soup"] },
-  { id: 204, name: "Pad Thai Pratu Pi", category: "Thai", rating: "4.6", address: "Phra Athit Rd", menus: ["pad thai", "fried noodles", "thai omelette"] },
-  { id: 211, name: "Sukishi Korean BBQ", category: "Korean", rating: "4.4", address: "CentralWorld", menus: ["korean bbq", "bulgogi", "bibimbap", "kimchi", "japchae", "grilled meat"] },
-  { id: 212, name: "Mongkol Korean", category: "Korean", rating: "4.6", address: "Sukhumvit 24", menus: ["korean fried chicken", "tteokbokki", "kimchi jjigae", "bibimbap"] },
-  { id: 221, name: "Ippudo", category: "Ramen", rating: "4.6", address: "CentralWorld", menus: ["ramen", "tonkotsu", "gyoza", "karaage", "japanese noodles"] },
-  { id: 222, name: "Bankara Ramen", category: "Ramen", rating: "4.7", address: "Thonglor", menus: ["ramen", "miso ramen", "chashu", "japanese noodles"] },
-  { id: 224, name: "Noods Pork Noodles", category: "Noodles", rating: "4.6", address: "Ari", menus: ["pork noodles", "wonton", "noodle soup", "egg noodles"] },
-  { id: 231, name: "Peppina", category: "Pizza", rating: "4.8", address: "Sukhumvit 33", menus: ["pizza", "margherita", "pasta", "italian", "wood fired"] },
-  { id: 232, name: "Pizza Massilia", category: "Pizza", rating: "4.7", address: "Ekkamai", menus: ["pizza", "calzone", "salad", "italian"] },
-  { id: 233, name: "Il Fumo", category: "Pizza", rating: "4.5", address: "Sathorn", menus: ["pizza", "pasta", "risotto", "italian", "tiramisu"] },
-  { id: 241, name: "Krua Apsorn", category: "Thai", rating: "4.8", address: "Samsen Rd", menus: ["crab omelette", "stir fry basil", "thai curry", "fried rice", "tom yum"] },
-  { id: 242, name: "Baan Ice", category: "Thai", rating: "4.6", address: "Soi Thonglor", menus: ["southern thai", "massaman curry", "yellow curry", "stir fry", "thai food"] },
-  { id: 243, name: "Somtum Der", category: "Thai", rating: "4.5", address: "Sala Daeng", menus: ["som tum", "papaya salad", "larb", "isaan", "grilled chicken", "sticky rice"] },
-  { id: 244, name: "Jay Fai", category: "Thai", rating: "4.9", address: "Maha Chai Rd", menus: ["crab omelette", "drunken noodles", "tom yum", "stir fry seafood"] },
-  { id: 251, name: "Sushi Masato", category: "Sushi", rating: "4.9", address: "Thonglor 13", menus: ["sushi", "omakase", "sashimi", "nigiri", "japanese"] },
-  { id: 252, name: "Sushi Zo", category: "Sushi", rating: "4.7", address: "Gaysorn", menus: ["sushi", "omakase", "sashimi", "japanese"] },
-  { id: 261, name: "Daniel Thaiger", category: "Burgers", rating: "4.5", address: "Sukhumvit 36", menus: ["burger", "cheeseburger", "fries", "milkshake"] },
-  { id: 262, name: "Shake Shack", category: "Burgers", rating: "4.3", address: "CentralWorld", menus: ["burger", "shake", "fries", "hot dog", "chicken sandwich"] },
-  { id: 263, name: "Bun Meat & Cheese", category: "Burgers", rating: "4.6", address: "Ekkamai", menus: ["burger", "smash burger", "fries", "onion rings"] },
-  { id: 271, name: "Somtum Der", category: "Isaan", rating: "4.6", address: "Sala Daeng", menus: ["som tum", "papaya salad", "larb", "nam tok", "grilled pork neck", "sticky rice"] },
-  { id: 281, name: "Hong Bao", category: "Chinese", rating: "4.5", address: "Chinatown", menus: ["dim sum", "congee", "roast duck", "char siu", "wonton"] },
-  { id: 282, name: "Din Tai Fung", category: "Chinese", rating: "4.7", address: "CentralWorld", menus: ["xiao long bao", "dumplings", "fried rice", "noodles", "dim sum"] },
-  { id: 291, name: "Barrio Bonito", category: "Mexican", rating: "4.4", address: "Khao San", menus: ["tacos", "burritos", "nachos", "quesadilla", "guacamole"] },
-  { id: 292, name: "Touche Hombre", category: "Mexican", rating: "4.6", address: "Thonglor", menus: ["tacos", "ceviche", "margarita", "mexican", "enchiladas"] },
-  { id: 301, name: "Tep Bar", category: "Bars", rating: "4.7", address: "Charoen Krung", menus: ["cocktails", "drinks", "craft spirits", "bar snacks"] },
-  { id: 302, name: "Rabbit Hole", category: "Bars", rating: "4.6", address: "Thonglor 7", menus: ["cocktails", "whiskey", "bar food", "drinks"] },
-  { id: 303, name: "Sky Bar", category: "Bars", rating: "4.5", address: "Silom (Lebua)", menus: ["cocktails", "rooftop drinks", "wine", "tapas"] },
-  { id: 304, name: "Havana Social", category: "Bars", rating: "4.4", address: "Sukhumvit 11", menus: ["rum cocktails", "cuban drinks", "cigars"] },
-  { id: 305, name: "Iron Fairies", category: "Bars", rating: "4.3", address: "Thonglor 25", menus: ["cocktails", "jazz bar", "bar food"] },
-  { id: 306, name: "Tropic City", category: "Bars", rating: "4.6", address: "Charoen Krung 28", menus: ["tropical cocktails", "rum drinks", "bar snacks"] },
-  { id: 307, name: "Teens of Thailand", category: "Bars", rating: "4.5", address: "Soi Nana", menus: ["gin cocktails", "craft drinks", "bar bites"] },
-  { id: 311, name: "Roots Coffee", category: "Coffee", rating: "4.7", address: "CentralWorld", menus: ["coffee", "latte", "espresso", "pour over", "pastry"] },
-  { id: 312, name: "Factory Coffee", category: "Coffee", rating: "4.5", address: "Phrom Phong", menus: ["coffee", "cold brew", "flat white", "cake"] },
-  { id: 313, name: "Kaizen Coffee", category: "Coffee", rating: "4.6", address: "Ekkamai", menus: ["coffee", "matcha latte", "drip coffee", "toast"] },
-  { id: 321, name: "After You", category: "Desserts", rating: "4.5", address: "Thonglor", menus: ["kakigori", "honey toast", "shaved ice", "souffle", "dessert"] },
-  { id: 322, name: "Creamery Boutique", category: "Desserts", rating: "4.6", address: "Sukhumvit 49", menus: ["ice cream", "gelato", "waffle", "sundae"] },
-  { id: 323, name: "Baan Kanom Thai", category: "Desserts", rating: "4.3", address: "Old Town", menus: ["thai dessert", "mango sticky rice", "coconut pudding", "kanom"] },
-  { id: 411, name: "Roast Coffee & Eatery", category: "Breakfast", rating: "4.7", address: "Thonglor", menus: ["brunch", "eggs benedict", "avocado toast", "pancakes", "coffee"] },
-  { id: 412, name: "Broccoli Revolution", category: "Breakfast", rating: "4.5", address: "Sukhumvit 49", menus: ["vegan", "salad", "smoothie bowl", "acai", "healthy"] },
-  { id: 413, name: "Clinton St. Baking Co.", category: "Breakfast", rating: "4.6", address: "Phrom Phong", menus: ["pancakes", "eggs", "french toast", "brunch", "waffles"] },
-  { id: 421, name: "Gram Cafe", category: "Breakfast", rating: "4.6", address: "Siam Paragon", menus: ["souffle pancake", "brunch", "japanese pancake", "coffee"] },
-  { id: 422, name: "Pancake Cafe", category: "Breakfast", rating: "4.4", address: "Ari", menus: ["pancakes", "waffles", "crepes", "brunch", "bacon"] },
-  { id: 423, name: "Iwane Goes Nature", category: "Breakfast", rating: "4.5", address: "Ekkamai", menus: ["organic brunch", "granola", "smoothie", "salad", "healthy"] },
-  { id: 431, name: "Broccoli Revolution", category: "Smoothie", rating: "4.5", address: "Sukhumvit 49", menus: ["smoothie", "juice", "acai bowl", "vegan", "healthy"] },
-  { id: 433, name: "The Smoothie Bar", category: "Smoothie", rating: "4.3", address: "Thonglor", menus: ["smoothie", "protein shake", "fresh juice", "fruit bowl"] },
-  { id: 441, name: "Holey Artisan Bakery", category: "Cafe", rating: "4.7", address: "Sukhumvit 49", menus: ["croissant", "sourdough", "pastry", "bread", "cafe"] },
-  { id: 442, name: "Tiong Bahru Bakery", category: "Cafe", rating: "4.5", address: "Siam Discovery", menus: ["croissant", "kouign amann", "coffee", "pastry"] },
-  { id: 443, name: "Karmakamet Diner", category: "Cafe", rating: "4.6", address: "Sukhumvit 51", menus: ["pasta", "brunch", "cake", "tea", "cafe"] },
-  { id: 451, name: "ChaTraMue", category: "Thai Tea", rating: "4.6", address: "All over Bangkok", menus: ["thai milk tea", "cha yen", "thai tea", "iced tea"] },
-  { id: 453, name: "Cha Bar BKK", category: "Thai Tea", rating: "4.5", address: "Thonglor", menus: ["thai tea", "milk tea", "matcha", "tea latte"] },
-  { id: 461, name: "KOI Th\u00e9", category: "Bubble Tea", rating: "4.5", address: "Siam Paragon", menus: ["bubble tea", "boba", "milk tea", "pearl tea"] },
-  { id: 462, name: "Tiger Sugar", category: "Bubble Tea", rating: "4.6", address: "CentralWorld", menus: ["brown sugar boba", "bubble tea", "tiger milk tea"] },
-  { id: 463, name: "Gong Cha", category: "Bubble Tea", rating: "4.3", address: "Siam Square", menus: ["bubble tea", "milk tea", "taro", "boba"] },
-  { id: 471, name: "Khao Tom Boworn", category: "Thai", rating: "4.6", address: "Boworn Niwet", menus: ["rice porridge", "congee", "stir fry", "thai comfort food"] },
-  { id: 481, name: "Creamery Boutique", category: "Desserts", rating: "4.6", address: "Sukhumvit 49", menus: ["ice cream", "gelato", "sorbet", "sundae"] },
-  { id: 482, name: "Guss Damn Good", category: "Desserts", rating: "4.5", address: "Thonglor", menus: ["ice cream", "gelato", "affogato", "waffle cone"] },
-  { id: 483, name: "iberry", category: "Desserts", rating: "4.4", address: "Siam Square", menus: ["ice cream", "homemade gelato", "fruit sorbet"] },
-];
-
 const DEFAULT_LAT = 13.7420;
 const DEFAULT_LNG = 100.5400;
+const HOME_LOCATION_PROMPT_KEY = "home_location_prompted_v1";
 
 const VIBE_TILES_MAIN = [
-  { mode: "trending", label: "Trending", emoji: "🔥", bg: "hsl(45, 55%, 94%)" },
-  { mode: "hot", label: "Spicy", emoji: "🌶️", bg: "hsl(15, 65%, 94%)" },
-  { mode: "drinks", label: "Drinks", emoji: "🍸", bg: "hsl(280, 40%, 95%)" },
-  { mode: "cheap", label: "Budget", emoji: "💰", bg: "hsl(160, 40%, 94%)" },
-  { mode: "healthy", label: "Healthy", emoji: "🥗", bg: "hsl(130, 35%, 94%)" },
-  { mode: "outdoor", label: "Outdoor", emoji: "⛱️", bg: "hsl(200, 40%, 94%)" },
-  { mode: "partner", label: "Date Night", emoji: "💕", bg: "hsl(345, 50%, 95%)" },
+  { mode: "trending", labelKey: "vibe.trending", emoji: "🔥", bg: "hsl(45, 55%, 94%)" },
+  { mode: "hot", labelKey: "vibe.hot", emoji: "🌶️", bg: "hsl(15, 65%, 94%)" },
+  { mode: "drinks", labelKey: "vibe.drinks", emoji: "🍸", bg: "hsl(280, 40%, 95%)" },
+  { mode: "cheap", labelKey: "vibe.cheap", emoji: "💰", bg: "hsl(160, 40%, 94%)" },
+  { mode: "healthy", labelKey: "vibe.healthy", emoji: "🥗", bg: "hsl(130, 35%, 94%)" },
+  { mode: "outdoor", labelKey: "vibe.outdoor", emoji: "⛱️", bg: "hsl(200, 40%, 94%)" },
+  { mode: "partner", labelKey: "vibe.partner", emoji: "💕", bg: "hsl(345, 50%, 95%)" },
 ];
 
 const VIBE_TILES_EXTRA = [
-  { mode: "delivery", label: "Delivery", emoji: "🛵", bg: "hsl(25, 55%, 94%)" },
-  { mode: "late", label: "Late Night", emoji: "🌙", bg: "hsl(250, 40%, 94%)" },
-  { mode: "sweet", label: "Sweets", emoji: "🍰", bg: "hsl(340, 45%, 95%)" },
-  { mode: "brunch", label: "Brunch", emoji: "🥞", bg: "hsl(35, 50%, 94%)" },
-  { mode: "streetfood", label: "Street Food", emoji: "🍜", bg: "hsl(20, 55%, 94%)" },
-  { mode: "rooftop", label: "Rooftop", emoji: "🏙️", bg: "hsl(210, 40%, 94%)" },
-  { mode: "family", label: "Family", emoji: "👨‍👩‍👧", bg: "hsl(150, 35%, 94%)" },
-  { mode: "cafe", label: "Cafe", emoji: "☕", bg: "hsl(30, 40%, 94%)" },
+  { mode: "delivery", labelKey: "vibe.delivery", emoji: "🛵", bg: "hsl(25, 55%, 94%)" },
+  { mode: "late", labelKey: "vibe.late", emoji: "🌙", bg: "hsl(250, 40%, 94%)" },
+  { mode: "sweet", labelKey: "vibe.sweet", emoji: "🍰", bg: "hsl(340, 45%, 95%)" },
+  { mode: "brunch", labelKey: "vibe.brunch", emoji: "🥞", bg: "hsl(35, 50%, 94%)" },
+  { mode: "streetfood", labelKey: "vibe.streetfood", emoji: "🍜", bg: "hsl(20, 55%, 94%)" },
+  { mode: "rooftop", labelKey: "vibe.rooftop", emoji: "🏙️", bg: "hsl(210, 40%, 94%)" },
+  { mode: "family", labelKey: "vibe.family", emoji: "👨‍👩‍👧", bg: "hsl(150, 35%, 94%)" },
+  { mode: "cafe", labelKey: "vibe.cafe", emoji: "☕", bg: "hsl(30, 40%, 94%)" },
 ];
 
 const BANGKOK_LOCATIONS = [
@@ -165,19 +108,28 @@ interface PersonalizedRec {
   match: number;
 }
 
-const FALLBACK_RECOMMENDATIONS: PersonalizedRec[] = [
-  { id: 5, name: "Pad Thai Plus", category: "Thai", rating: "4.8", imageUrl: "https://images.unsplash.com/photo-1559314809-0d155014e29e?w=300&auto=format&fit=crop&q=60", address: "Central World", priceLevel: 1, match: 72 },
-  { id: 12, name: "Ramen Champ", category: "Japanese", rating: "4.6", imageUrl: "https://images.unsplash.com/photo-1569718212165-3a8278d5f624?w=300&auto=format&fit=crop&q=60", address: "Thonglor", priceLevel: 2, match: 65 },
-  { id: 8, name: "Pizza Paradise", category: "Italian", rating: "4.6", imageUrl: "https://images.unsplash.com/photo-1513104890138-7c749659a591?w=300&auto=format&fit=crop&q=60", address: "Silom", priceLevel: 2, match: 60 },
-];
+function hasCoreContactData(restaurant: {
+  imageUrl?: string | null;
+  rating?: string | null;
+  address?: string | null;
+  phone?: string | null;
+  photos?: string[] | null;
+}) {
+  const hasImage = Boolean(restaurant.imageUrl?.trim());
+  const hasRating = Boolean(restaurant.rating?.trim()) && restaurant.rating !== "N/A";
+  const hasAddress = Boolean(restaurant.address?.trim()) && restaurant.address !== "N/A";
+  const hasPhone = Boolean(restaurant.phone?.trim());
+  const hasPhotos = Array.isArray(restaurant.photos) && restaurant.photos.length > 0;
+  return hasImage && hasRating && hasAddress && hasPhone && hasPhotos;
+}
 
 function getGreeting(): string {
   const hour = new Date().getHours();
-  if (hour < 11) return "what's for breakfast?";
-  if (hour < 14) return "what's for lunch?";
-  if (hour < 17) return "feeling hungry?";
-  if (hour < 21) return "what's for dinner?";
-  return "late night craving?";
+  if (hour < 11) return "home.greeting.breakfast";
+  if (hour < 14) return "home.greeting.lunch";
+  if (hour < 17) return "home.greeting.hungry";
+  if (hour < 21) return "home.greeting.dinner";
+  return "home.greeting.latenight";
 }
 
 function getContextLine(): string {
@@ -189,9 +141,13 @@ function getContextLine(): string {
 
 export default function Home() {
   const [, navigate] = useLocation();
+  const queryClient = useQueryClient();
   const sessions = useSessions();
   const { isEnabled } = useFeatureFlags();
   const { logoUrl, mascotUrl, heroTitle, heroSubtitle, mascotGreeting, accentColor } = useBranding();
+  const { t } = useLanguage();
+  const labelOf = (o: { label?: string; labelKey?: string }) =>
+    o.labelKey ? t(o.labelKey) : (o.label ?? "");
   const { isVibeEnabled } = useVibesConfig();
   const effectiveLogoUrl = logoUrl || toastLogoPath;
   const effectiveMascotUrl = mascotUrl || mascotPath;
@@ -201,12 +157,18 @@ export default function Home() {
   const { recordVibe } = useVibeFrequency();
   const { data: suggestions = [], isLoading: suggestionsLoading } = useSuggestions();
   const [userLocation, setUserLocation] = useState({ lat: DEFAULT_LAT, lng: DEFAULT_LNG });
+  const [locationReady, setLocationReady] = useState(false);
+  const [seedingStatus, setSeedingStatus] = useState<"idle" | "seeding" | "ready">("idle");
   const { data: nearbyRestaurants = [], isLoading: nearbyLoading } = useRestaurants("new");
-  const { data: allRestaurants = [], isLoading: mapLoading } = useRestaurants(undefined, {
+  const allRestaurantsQuery = useRestaurants(undefined, {
     lat: userLocation.lat,
     lng: userLocation.lng,
-    radius: 5000,
+    radius: 1000,
+    localOnly: true,
+    limit: 30,
+    enabled: seedingStatus === "ready",
   });
+  const { data: allRestaurants = [], isLoading: mapLoading, refetch: refetchAllRestaurants } = allRestaurantsQuery;
   const { profile: userProfile } = useLineProfile();
   const resumableGroupSession = useMemo(() => {
     const now = Date.now();
@@ -227,36 +189,54 @@ export default function Home() {
 
   useEffect(() => {
     async function fetchPersonalized() {
+      const userId = userProfile?.userId;
+      if (!userId) {
+        setPersonalizedRecs([]);
+        setRecsLoading(false);
+        return;
+      }
       try {
         const now = new Date();
-        const res = await fetch("/api/restaurants/personalized", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            userId: userProfile?.userId || null,
-            tasteProfile: tasteProfile,
-            hour: now.getHours(),
-            dayOfWeek: now.getDay(),
-          }),
+        const params = new URLSearchParams({
+          userId,
+          lat: String(userLocation.lat),
+          lng: String(userLocation.lng),
+          hour: String(now.getHours()),
+          day: String(now.getDay()),
+          limit: "10",
+        });
+        const res = await fetch(`/api/recommendations/personalized?${params.toString()}`, {
+          credentials: "include",
         });
         if (res.ok) {
           const data = await res.json();
-          if (data.length > 0) {
-            setPersonalizedRecs(data);
+          const items = Array.isArray(data?.items) ? data.items : [];
+          if (items.length > 0) {
+            const mapped: PersonalizedRec[] = items.map((item: any) => ({
+              id: Number(item.id),
+              name: String(item.name ?? ""),
+              category: String(item.category ?? "Restaurant"),
+              rating: String(item.rating ?? "4.5"),
+              imageUrl: String(item.imageUrl ?? ""),
+              address: String(item.address ?? ""),
+              priceLevel: Number(item.priceLevel ?? 2),
+              match: Math.max(0, Math.min(100, Math.round((Number(item.score) || 0) * 100))),
+            }));
+            setPersonalizedRecs(mapped);
           } else {
-            setPersonalizedRecs(FALLBACK_RECOMMENDATIONS);
+            setPersonalizedRecs([]);
           }
         } else {
-          setPersonalizedRecs(FALLBACK_RECOMMENDATIONS);
+          setPersonalizedRecs([]);
         }
       } catch {
-        setPersonalizedRecs(FALLBACK_RECOMMENDATIONS);
+        setPersonalizedRecs([]);
       } finally {
         setRecsLoading(false);
       }
     }
     fetchPersonalized();
-  }, [userProfile?.userId, topPreference.key]);
+  }, [userProfile?.userId, userLocation.lat, userLocation.lng]);
 
   const [drawerOpen, setDrawerOpen] = useState(true);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
@@ -274,6 +254,55 @@ export default function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
   const filterRef = useRef<HTMLDivElement>(null);
   const locationRef = useRef<HTMLDivElement>(null);
+
+  const requestCurrentLocation = useCallback((source: "auto" | "picker") => {
+    if (!navigator.geolocation) return Promise.resolve<"success" | "denied" | "other_error">("other_error");
+    return new Promise<"success" | "denied" | "other_error">((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          trackEvent("filter", { metadata: { name: "location", value: source === "auto" ? "current_location_auto" : "current_location" } });
+          setCurrentLocationName("__current__");
+          setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+          setLocationReady(true);
+          setLocationPickerOpen(false);
+          resolve("success");
+        },
+        (err) => {
+          if (source === "picker") {
+            console.warn("[home-location] geolocation failed", { code: err.code, message: err.message });
+          }
+          setLocationPickerOpen(false);
+          resolve(err.code === 1 ? "denied" : "other_error");
+        },
+        { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 },
+      );
+    });
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function runAutoLocationPrompt() {
+      if (typeof window === "undefined") return;
+      if (!navigator.geolocation) return;
+      const hasPrompted = window.localStorage.getItem(HOME_LOCATION_PROMPT_KEY);
+      if (hasPrompted === "1") return;
+
+      if (isLiffAvailable()) {
+        await initLiff();
+      }
+      if (cancelled) return;
+
+      const result = await requestCurrentLocation("auto");
+      if (cancelled) return;
+      if (result === "success" || result === "denied") {
+        window.localStorage.setItem(HOME_LOCATION_PROMPT_KEY, "1");
+      }
+    }
+    void runAutoLocationPrompt();
+    return () => {
+      cancelled = true;
+    };
+  }, [requestCurrentLocation]);
 
   const activeFilterCount = (activePrices.length > 0 ? 1 : 0) + (activeDietary.length > 0 ? 1 : 0) + (activeDistance ? 1 : 0) + (activeSort !== "trending" ? 1 : 0);
   const togglePrice = (v: string) => setActivePrices(prev => prev.includes(v) ? prev.filter(p => p !== v) : [...prev, v]);
@@ -333,8 +362,32 @@ export default function Home() {
       }));
   }, [allRestaurants]);
 
+  // Seed the area with full Google Places data before fetching restaurants.
+  // If DB already has ≥30 complete restaurants nearby, the seed call returns instantly (DB hit).
+  // This ensures users never see restaurants with missing photos/rating/hours.
+  useEffect(() => {
+    if (!locationReady) {
+      // No GPS yet — use default location and mark ready after a short grace period
+      const timer = setTimeout(() => setSeedingStatus("ready"), 500);
+      return () => clearTimeout(timer);
+    }
+    setSeedingStatus("seeding");
+    fetch("/api/places/seed", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lat: userLocation.lat, lng: userLocation.lng, radius: 1000 }),
+      credentials: "include",
+    })
+      .then(() => setSeedingStatus("ready"))
+      .catch(() => setSeedingStatus("ready")); // always unblock UI even on failure
+  }, [locationReady, userLocation.lat, userLocation.lng]);
+
+  const missingCoreContactCountTop30 = useMemo(() => {
+    return allRestaurants.slice(0, 30).filter((r) => !hasCoreContactData(r)).length;
+  }, [allRestaurants]);
+
   const searchable = useMemo(() => {
-    if (allRestaurants.length === 0) return ALL_SEARCHABLE;
+    if (allRestaurants.length === 0) return [];
     return allRestaurants.map((r) => ({
       id: r.id,
       name: r.name,
@@ -360,6 +413,10 @@ export default function Home() {
   }, [searchQuery, searchable]);
 
   const mapCenter = useMemo<[number, number]>(() => [userLocation.lat, userLocation.lng], [userLocation]);
+  const activeLocationMarker = useMemo(() => {
+    if (currentLocationName !== "__current__") return null;
+    return { lat: userLocation.lat, lng: userLocation.lng };
+  }, [currentLocationName, userLocation.lat, userLocation.lng]);
   const mapPins = useMemo(() =>
     restaurantPins.map((p) => ({ id: p.id, name: p.name, emoji: p.emoji, category: p.category, price: p.price, lat: p.lat, lng: p.lng })),
   [restaurantPins]);
@@ -402,7 +459,7 @@ export default function Home() {
     navigate(`/solo/results${qs ? `?${qs}` : ""}`);
   }, [navigate, recordVibe]);
 
-  const topMatch = personalizedRecs.length > 0 ? personalizedRecs[0] : FALLBACK_RECOMMENDATIONS[0];
+  const topMatch = personalizedRecs[0];
 
   return (
     <div className="relative w-full h-[100dvh] overflow-hidden" data-testid="home-page">
@@ -418,10 +475,28 @@ export default function Home() {
               navigate(`/restaurant/${id}`);
             }}
             filteredCategory={selectedCategory}
+            activeLocation={activeLocationMarker}
           />
         ) : (
           <div className="w-full h-full bg-gradient-to-b from-amber-50 to-orange-50" />
         )}
+      </div>
+
+      <div className="absolute right-4 bottom-40 md:bottom-28 z-[70]">
+        <button
+          type="button"
+          aria-label="Use current location"
+          title="Use current location"
+          onClick={() => { void requestCurrentLocation("picker"); }}
+          className="h-11 w-11 rounded-full border border-gray-200 bg-white shadow-lg flex items-center justify-center active:scale-95 transition-transform"
+          data-testid="button-map-current-location"
+        >
+          <svg viewBox="0 0 24 24" className="h-5 w-5 text-gray-700" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
+            <circle cx="12" cy="12" r="8" />
+          </svg>
+        </button>
       </div>
 
       <div className="absolute top-0 left-0 right-0 z-[60] safe-top" ref={locationRef}>
@@ -448,7 +523,7 @@ export default function Home() {
               data-testid="button-map-location"
             >
               <MapPin className="w-3 h-3" style={{ color: accentColor }} />
-              <span className="text-[11px] font-medium text-foreground max-w-[70px] truncate">{currentLocationName}</span>
+              <span className="text-[11px] font-medium text-foreground max-w-[70px] truncate">{currentLocationName === "__current__" ? t("home.current_location") : currentLocationName}</span>
               <ChevronDown className={`w-2.5 h-2.5 text-muted-foreground transition-transform ${locationPickerOpen ? "rotate-180" : ""}`} />
             </button>
             <div ref={filterRef} className="relative flex-shrink-0">
@@ -485,7 +560,7 @@ export default function Home() {
                           {FILTER_OPTIONS.sortBy.map(o => (
                             <button key={o.value} onClick={() => { setActiveSort(o.value); trackFilterChange("sort", o.value); }} data-testid={`map-filter-sort-${o.value}`}
                               className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors ${activeSort === o.value ? "bg-foreground text-white" : "bg-gray-100 text-foreground/70"}`}
-                            >{o.label}</button>
+                            >{labelOf(o)}</button>
                           ))}
                         </div>
                       </div>
@@ -495,7 +570,7 @@ export default function Home() {
                           {FILTER_OPTIONS.priceRange.map(o => (
                             <button key={o.value} onClick={() => { togglePrice(o.value); trackFilterChange("price", o.value); }} data-testid={`map-filter-price-${o.value}`}
                               className={`px-3 py-1 rounded-full text-[11px] font-medium transition-colors ${activePrices.includes(o.value) ? "bg-foreground text-white" : "bg-gray-100 text-foreground/70"}`}
-                            >{o.label}</button>
+                            >{labelOf(o)}</button>
                           ))}
                         </div>
                       </div>
@@ -505,7 +580,7 @@ export default function Home() {
                           {FILTER_OPTIONS.dietary.map(o => (
                             <button key={o.value} onClick={() => { toggleDietary(o.value); trackFilterChange("dietary", o.value); }} data-testid={`map-filter-dietary-${o.value}`}
                               className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors ${activeDietary.includes(o.value) ? "bg-foreground text-white" : "bg-gray-100 text-foreground/70"}`}
-                            >{o.label}</button>
+                            >{labelOf(o)}</button>
                           ))}
                         </div>
                       </div>
@@ -515,7 +590,7 @@ export default function Home() {
                           {FILTER_OPTIONS.distance.map(o => (
                             <button key={o.value} onClick={() => { setActiveDistance(activeDistance === o.value ? null : o.value); trackFilterChange("distance", o.value); }} data-testid={`map-filter-distance-${o.value}`}
                               className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors ${activeDistance === o.value ? "bg-foreground text-white" : "bg-gray-100 text-foreground/70"}`}
-                            >{o.label}</button>
+                            >{labelOf(o)}</button>
                           ))}
                         </div>
                       </div>
@@ -539,29 +614,17 @@ export default function Home() {
               >
                 <div className="py-2 max-h-[280px] overflow-y-auto">
                   <button
-                    onClick={() => {
-                      if (navigator.geolocation) {
-                        navigator.geolocation.getCurrentPosition(
-                          (pos) => {
-                            trackEvent("filter", { metadata: { name: "location", value: "current_location" } });
-                            setCurrentLocationName("Current Location");
-                            setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-                            setLocationPickerOpen(false);
-                          },
-                          () => { setLocationPickerOpen(false); }
-                        );
-                      }
-                    }}
+                    onClick={() => { void requestCurrentLocation("picker"); }}
                     className={`w-full flex items-center gap-2.5 px-4 py-2.5 text-left ${
-                      currentLocationName === "Current Location" ? "bg-gray-50" : ""
+                      currentLocationName === "__current__" ? "bg-gray-50" : ""
                     }`}
                     data-testid="location-option-current"
                   >
                     <div className="w-5 h-5 rounded-full bg-blue-500/10 flex items-center justify-center flex-shrink-0">
                       <Navigation className="w-3 h-3 text-blue-500" />
                     </div>
-                    <span className={`text-sm font-medium ${currentLocationName === "Current Location" ? "text-foreground" : "text-blue-500"}`}>Current Location</span>
-                    {currentLocationName === "Current Location" && (
+                    <span className={`text-sm font-medium ${currentLocationName === "__current__" ? "text-foreground" : "text-blue-500"}`}>{t("home.current_location")}</span>
+                    {currentLocationName === "__current__" && (
                       <span className="ml-auto w-1.5 h-1.5 rounded-full bg-blue-500" />
                     )}
                   </button>
@@ -816,7 +879,7 @@ export default function Home() {
                   className="text-[26px] font-bold text-foreground leading-[1.15] tracking-tight"
                   data-testid="text-greeting"
                 >
-                  Hey there,<br />{getGreeting()}
+                  Hey there,<br />{t(getGreeting())}
                 </motion.h1>
                 <motion.div
                   initial={{ opacity: 0, y: 6 }}
@@ -1001,46 +1064,54 @@ export default function Home() {
                     </div>
                   ))
                 ) : (
-                  personalizedRecs.map((rec, idx) => (
-                    <motion.button
-                      key={rec.id}
-                      initial={{ opacity: 0, x: 20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: 0.45 + idx * 0.08, type: "spring", stiffness: 280, damping: 22 }}
-                      whileHover={{ scale: 1.04, y: -2 }}
-                      whileTap={{ scale: 0.95 }}
-                      onClick={() => navigate(`/restaurant/${rec.id}`)}
-                      className="flex-shrink-0 w-[110px] group"
-                      data-testid={`card-ai-rec-${rec.id}`}
-                    >
-                      <div className="relative w-full h-[80px] rounded-xl overflow-hidden mb-1.5 border border-gray-100">
-                        <img src={rec.imageUrl} alt={rec.name} className="w-full h-full object-cover" />
-                        <div className="absolute top-1.5 right-1.5 bg-emerald-500 text-white text-[9px] font-bold rounded-full px-1.5 py-0.5">
-                          {rec.match}%
+                  personalizedRecs.length > 0 ? (
+                    personalizedRecs.map((rec, idx) => (
+                      <motion.button
+                        key={rec.id}
+                        initial={{ opacity: 0, x: 20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: 0.45 + idx * 0.08, type: "spring", stiffness: 280, damping: 22 }}
+                        whileHover={{ scale: 1.04, y: -2 }}
+                        whileTap={{ scale: 0.95 }}
+                        onClick={() => navigate(`/restaurant/${rec.id}`)}
+                        className="flex-shrink-0 w-[110px] group"
+                        data-testid={`card-ai-rec-${rec.id}`}
+                      >
+                        <div className="relative w-full h-[80px] rounded-xl overflow-hidden mb-1.5 border border-gray-100">
+                          <img src={rec.imageUrl} alt={rec.name} className="w-full h-full object-cover" />
+                          <div className="absolute top-1.5 right-1.5 bg-emerald-500 text-white text-[9px] font-bold rounded-full px-1.5 py-0.5">
+                            {rec.match}%
+                          </div>
                         </div>
-                      </div>
-                      <p className="text-xs font-semibold text-foreground truncate">{rec.name}</p>
-                      <p className="text-[10px] text-muted-foreground">{rec.address} &middot; ★{rec.rating}</p>
-                    </motion.button>
-                  ))
+                        <p className="text-xs font-semibold text-foreground truncate">{rec.name}</p>
+                        <p className="text-[10px] text-muted-foreground">{rec.address} &middot; ★{rec.rating}</p>
+                      </motion.button>
+                    ))
+                  ) : (
+                    <div className="text-xs text-muted-foreground py-6 px-1">
+                      No personalized picks available yet.
+                    </div>
+                  )
                 )}
               </div>
 
-              <div className="mt-3 pt-3 border-t border-gray-100">
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-[10px] font-bold text-muted-foreground/50 uppercase tracking-wider">Match Confidence</span>
-                  <span className="text-sm font-bold text-foreground">{topMatch.match}%</span>
+              {topMatch && (
+                <div className="mt-3 pt-3 border-t border-gray-100">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[10px] font-bold text-muted-foreground/50 uppercase tracking-wider">Match Confidence</span>
+                    <span className="text-sm font-bold text-foreground">{topMatch.match}%</span>
+                  </div>
+                  <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
+                    <motion.div
+                      initial={{ width: 0 }}
+                      animate={{ width: `${topMatch.match}%` }}
+                      transition={{ delay: 0.6, duration: 0.8, ease: [0.4, 0, 0.2, 1] }}
+                      className="h-full rounded-full"
+                      style={{ background: `linear-gradient(90deg, ${accentColor}, hsl(45, 90%, 60%))` }}
+                    />
+                  </div>
                 </div>
-                <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
-                  <motion.div
-                    initial={{ width: 0 }}
-                    animate={{ width: `${topMatch.match}%` }}
-                    transition={{ delay: 0.6, duration: 0.8, ease: [0.4, 0, 0.2, 1] }}
-                    className="h-full rounded-full"
-                    style={{ background: `linear-gradient(90deg, ${accentColor}, hsl(45, 90%, 60%))` }}
-                  />
-                </div>
-              </div>
+              )}
             </motion.div>
           </div>
           )}
@@ -1072,7 +1143,7 @@ export default function Home() {
                     >
                       <FoodIconFromEmoji emoji={vibe.emoji} size={38} />
                     </motion.div>
-                    <span className="text-[11px] font-semibold text-foreground">{vibe.label}</span>
+                    <span className="text-[11px] font-semibold text-foreground">{t(vibe.labelKey)}</span>
                   </motion.button>
               ))}
               <motion.button
@@ -1241,7 +1312,7 @@ export default function Home() {
                               {FILTER_OPTIONS.sortBy.map(o => (
                                 <button key={o.value} onClick={() => { setActiveSort(o.value); trackFilterChange("sort", o.value); }} data-testid={`filter-sort-${o.value}`}
                                   className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors ${activeSort === o.value ? "bg-foreground text-white" : "bg-gray-100 text-foreground/70"}`}
-                                >{o.label}</button>
+                                >{labelOf(o)}</button>
                               ))}
                             </div>
                           </div>
@@ -1251,7 +1322,7 @@ export default function Home() {
                               {FILTER_OPTIONS.priceRange.map(o => (
                                 <button key={o.value} onClick={() => { togglePrice(o.value); trackFilterChange("price", o.value); }} data-testid={`filter-price-${o.value}`}
                                   className={`px-3 py-1 rounded-full text-[11px] font-medium transition-colors ${activePrices.includes(o.value) ? "bg-foreground text-white" : "bg-gray-100 text-foreground/70"}`}
-                                >{o.label}</button>
+                                >{labelOf(o)}</button>
                               ))}
                             </div>
                           </div>
@@ -1261,7 +1332,7 @@ export default function Home() {
                               {FILTER_OPTIONS.dietary.map(o => (
                                 <button key={o.value} onClick={() => { toggleDietary(o.value); trackFilterChange("dietary", o.value); }} data-testid={`filter-dietary-${o.value}`}
                                   className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors ${activeDietary.includes(o.value) ? "bg-foreground text-white" : "bg-gray-100 text-foreground/70"}`}
-                                >{o.label}</button>
+                                >{labelOf(o)}</button>
                               ))}
                             </div>
                           </div>
@@ -1271,7 +1342,7 @@ export default function Home() {
                               {FILTER_OPTIONS.distance.map(o => (
                                 <button key={o.value} onClick={() => { setActiveDistance(activeDistance === o.value ? null : o.value); trackFilterChange("distance", o.value); }} data-testid={`filter-distance-${o.value}`}
                                   className={`px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors ${activeDistance === o.value ? "bg-foreground text-white" : "bg-gray-100 text-foreground/70"}`}
-                                >{o.label}</button>
+                                >{labelOf(o)}</button>
                               ))}
                             </div>
                           </div>
@@ -1429,7 +1500,7 @@ export default function Home() {
                         <div className="flex items-center justify-center">
                           <FoodIconFromEmoji emoji={vibe.emoji} size={32} />
                         </div>
-                        <span className="text-[10px] font-semibold text-foreground leading-tight">{vibe.label}</span>
+                        <span className="text-[10px] font-semibold text-foreground leading-tight">{t(vibe.labelKey)}</span>
                       </motion.button>
                     ))}
                   </div>
@@ -1449,7 +1520,7 @@ export default function Home() {
                         <div className="flex items-center justify-center">
                           <FoodIconFromEmoji emoji={vibe.emoji} size={32} />
                         </div>
-                        <span className="text-[10px] font-semibold text-foreground leading-tight">{vibe.label}</span>
+                        <span className="text-[10px] font-semibold text-foreground leading-tight">{t(vibe.labelKey)}</span>
                       </motion.button>
                     ))}
                   </div>

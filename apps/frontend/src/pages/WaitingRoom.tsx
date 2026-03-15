@@ -5,6 +5,7 @@ import { BottomNav } from "@/components/BottomNav";
 import mascotImg from "@assets/toast_mascot_nobg.png";
 import { sendGroupInvite, liffUrl } from "@/lib/liff";
 import { useLineProfile } from "@/lib/useLineProfile";
+import { useLanguage } from "@/i18n/LanguageProvider";
 
 interface SessionMember {
   id: number;
@@ -19,6 +20,7 @@ interface SessionMember {
 export default function WaitingRoom() {
   const [, navigate] = useLocation();
   const { profile, loading: profileLoading } = useLineProfile();
+  const { t } = useLanguage();
   const [members, setMembers] = useState<SessionMember[]>([]);
   const [nudgedMembers, setNudgedMembers] = useState<Set<number>>(new Set());
   const [sessionCreated, setSessionCreated] = useState(false);
@@ -137,13 +139,13 @@ export default function WaitingRoom() {
   if (!sessionId) {
     return (
       <div className="w-full h-[100dvh] bg-white flex flex-col items-center justify-center px-6">
-        <p className="text-muted-foreground text-center mb-4">No session ID found. Start a new group from the home page.</p>
+        <p className="text-muted-foreground text-center mb-4">{t("waiting.no_session")}</p>
         <button
           onClick={() => navigate("/group")}
           className="px-6 py-3 rounded-full bg-foreground text-white font-bold text-sm"
           data-testid="button-new-group"
         >
-          Start New Group
+          {t("waiting.start_new_group")}
         </button>
         <BottomNav />
       </div>
@@ -177,7 +179,7 @@ export default function WaitingRoom() {
         transition={{ delay: 0.15, duration: 0.35, ease: [0.4, 0, 0.2, 1] }}
         className="text-[26px] font-semibold mb-2 text-center"
       >
-        {memberCount < 2 ? "Waiting for friends..." : "Ready to go!"}
+        {memberCount < 2 ? t("waiting.waiting") : t("waiting.ready")}
       </motion.h1>
       <motion.div
         initial={{ y: 16, opacity: 0 }}
@@ -196,7 +198,7 @@ export default function WaitingRoom() {
             <div className="w-2 h-2 rounded-full bg-gray-200" />
           )}
         </div>
-        <span className="text-muted-foreground text-sm font-medium">{memberCount} joined</span>
+        <span className="text-muted-foreground text-sm font-medium">{t("waiting.joined", { count: memberCount })}</span>
       </motion.div>
 
       <div className="flex flex-wrap justify-center gap-6 mb-8 max-w-sm">
@@ -233,11 +235,11 @@ export default function WaitingRoom() {
                 <span className="text-white text-[10px] font-bold">{m.joined ? "V" : "!"}</span>
               </motion.div>
             </div>
-            <span className="text-sm font-bold">{m.lineUserId === profile?.userId ? "You" : m.name}</span>
+            <span className="text-sm font-bold">{m.lineUserId === profile?.userId ? t("waiting.you") : m.name}</span>
             {m.joined ? (
-              <span className="text-[11px] font-semibold text-[hsl(160,60%,45%)]">Ready</span>
+              <span className="text-[11px] font-semibold text-[hsl(160,60%,45%)]">{t("waiting.member_ready")}</span>
             ) : (
-              <span className="text-[11px] font-semibold text-amber-500">Not joined yet</span>
+              <span className="text-[11px] font-semibold text-amber-500">{t("waiting.member_not_joined")}</span>
             )}
             {!m.joined && m.lineUserId !== profile?.userId && (
               <button
@@ -250,7 +252,7 @@ export default function WaitingRoom() {
                 disabled={nudgedMembers.has(m.id)}
                 data-testid={`button-nudge-${m.id}`}
               >
-                {nudgedMembers.has(m.id) ? "Nudged" : "Nudge"}
+                {nudgedMembers.has(m.id) ? t("waiting.nudged") : t("waiting.nudge")}
               </button>
             )}
           </motion.div>
@@ -272,8 +274,8 @@ export default function WaitingRoom() {
               <line x1="5" y1="12" x2="19" y2="12" />
             </svg>
           </button>
-          <span className="text-sm font-bold text-muted-foreground">Invite</span>
-          <span className="text-[11px] font-semibold text-muted-foreground">via LINE</span>
+          <span className="text-sm font-bold text-muted-foreground">{t("waiting.invite")}</span>
+          <span className="text-[11px] font-semibold text-muted-foreground">{t("waiting.via_line")}</span>
         </motion.div>
       </div>
 
@@ -296,7 +298,7 @@ export default function WaitingRoom() {
           style={canStart ? { boxShadow: "var(--shadow-glow-primary)" } : {}}
           disabled={!canStart}
         >
-          {canStart ? "Start Swiping!" : "Waiting for more friends..."}
+          {canStart ? t("waiting.start") : t("waiting.waiting_more")}
         </motion.button>
 
         <motion.p
@@ -305,7 +307,7 @@ export default function WaitingRoom() {
           transition={{ delay: 0.6 }}
           className="text-[11px] text-muted-foreground text-center"
         >
-          Session code: <span className="font-mono font-bold">{sessionId}</span>
+          {t("waiting.session_code")} <span className="font-mono font-bold">{sessionId}</span>
         </motion.p>
       </div>
 

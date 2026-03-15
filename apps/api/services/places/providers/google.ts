@@ -84,11 +84,11 @@ export async function queryGoogle(
       headers: {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": apiKey,
-        "X-Goog-FieldMask": "places.id,places.displayName,places.location,places.shortFormattedAddress,places.rating,places.priceLevel,places.photos,places.types",
+        "X-Goog-FieldMask": "places.id,places.displayName,places.location,places.shortFormattedAddress,places.formattedAddress,places.rating,places.priceLevel,places.photos,places.types,places.internationalPhoneNumber,places.currentOpeningHours,places.reviews",
       },
       body: JSON.stringify({
-        locationRestriction: { circle: { center: { latitude: lat, longitude: lng }, radiusMeters: radius } },
-        includedTypes: ["restaurant"],
+        locationRestriction: { circle: { center: { latitude: lat, longitude: lng }, radius } },
+        includedTypes: ["restaurant", "cafe", "bar", "meal_takeaway"],
         maxResultCount: 20,
         rankPreference: "DISTANCE",
       }),
@@ -143,8 +143,12 @@ export function _getDailySpend(): number {
 
 function enrichPhotos(place: GooglePlace, apiKey: string): string[] {
   if (!place.photos?.length || photoLimitReached()) return [];
-  const photoName = place.photos[0].name; // e.g. "places/ChIJ.../photos/AUc7tXx"
-  dailyPhotoCount += 1;
-  dailySpend += COST_PHOTO;
-  return [`${PHOTO_BASE_URL}/${photoName}/media?maxWidthPx=400&key=${encodeURIComponent(apiKey)}`];
+  const urls: string[] = [];
+  for (const photo of place.photos.slice(0, 5)) {
+    if (photoLimitReached()) break;
+    urls.push(`${PHOTO_BASE_URL}/${photo.name}/media?maxWidthPx=800&key=${apiKey}`);
+    dailyPhotoCount += 1;
+    dailySpend += COST_PHOTO;
+  }
+  return urls;
 }

@@ -1,6 +1,17 @@
-import { db } from "../server/db";
-import { restaurants, type InsertRestaurant } from "../shared/schema";
+import { drizzle } from "drizzle-orm/node-postgres";
+import pg from "pg";
+import * as schema from "../packages/shared/schema";
+import { restaurants, type InsertRestaurant } from "../packages/shared/schema";
 import { sql } from "drizzle-orm";
+
+const { Pool } = pg;
+
+if (!process.env.DATABASE_URL) {
+  throw new Error("DATABASE_URL must be set");
+}
+
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const db = drizzle(pool, { schema });
 
 const SEED_RESTAURANTS: InsertRestaurant[] = [
   {
@@ -160,4 +171,6 @@ async function main() {
 main().catch((err) => {
   console.error(err);
   process.exit(1);
+}).finally(async () => {
+  await pool.end();
 });

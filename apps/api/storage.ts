@@ -82,6 +82,24 @@ type GroupSessionSettings = {
   diet?: string[];
 };
 
+let userProfileColumnsEnsured = false;
+let ensuringUserProfileColumns: Promise<void> | null = null;
+
+async function ensureUserProfileColumns(): Promise<void> {
+  if (userProfileColumnsEnsured) return;
+  if (ensuringUserProfileColumns) return ensuringUserProfileColumns;
+
+  ensuringUserProfileColumns = (async () => {
+    await db.execute(sql`ALTER TABLE "user_profiles" ADD COLUMN IF NOT EXISTS "gender" text`);
+    await db.execute(sql`ALTER TABLE "user_profiles" ADD COLUMN IF NOT EXISTS "age_group" text`);
+    userProfileColumnsEnsured = true;
+  })().finally(() => {
+    ensuringUserProfileColumns = null;
+  });
+
+  return ensuringUserProfileColumns;
+}
+
 export interface IStorage {
   getRestaurants(
     mode?: string,
@@ -90,7 +108,6 @@ export interface IStorage {
     query?: string,
     radius?: number,
     forceRefresh?: boolean,
-    sourcePreference?: "osm-first" | "google-first" | "hybrid"
   ): Promise<Restaurant[]>;
   getRestaurantById(id: number): Promise<Restaurant | undefined>;
   createRestaurant(data: InsertRestaurant): Promise<Restaurant>;
@@ -140,6 +157,7 @@ export interface IStorage {
   getPlacesTile(tileKey: string): Promise<PlacesTile | undefined>;
   upsertPlacesTile(tileKey: string, resultCount: number, source: string): Promise<void>;
   findRestaurantsNear(lat: number, lng: number, radiusMeters: number): Promise<Restaurant[]>;
+  countFullDataRestaurantsNear(lat: number, lng: number, radiusMeters: number): Promise<number>;
   listGroupSessions(limit?: number): Promise<GroupSession[]>;
   deleteGroupSession(id: number): Promise<boolean>;
   listCampaigns(): Promise<Campaign[]>;
@@ -213,7 +231,6 @@ export class DatabaseStorage implements IStorage {
     query?: string,
     radius?: number,
     forceRefresh?: boolean,
-    sourcePreference?: "osm-first" | "google-first" | "hybrid"
   ): Promise<Restaurant[]> {
     const conditions: SQL[] = [];
 
@@ -433,15 +450,18 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getProfile(lineUserId: string): Promise<UserProfile | undefined> {
+    await ensureUserProfileColumns();
     const [profile] = await db.select().from(userProfiles).where(eq(userProfiles.lineUserId, lineUserId)).limit(1);
     return profile;
   }
 
   async listProfiles(limit = 50): Promise<UserProfile[]> {
+    await ensureUserProfileColumns();
     return db.select().from(userProfiles).limit(limit);
   }
 
   async upsertProfile(profile: InsertUserProfile): Promise<UserProfile> {
+    await ensureUserProfileColumns();
     const existing = await this.getProfile(profile.lineUserId);
     if (existing) {
       const [updated] = await db.update(userProfiles)
@@ -455,6 +475,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateProfile(lineUserId: string, updates: Partial<InsertUserProfile>): Promise<UserProfile | undefined> {
+    await ensureUserProfileColumns();
     const [updated] = await db.update(userProfiles)
       .set(updates)
       .where(eq(userProfiles.lineUserId, lineUserId))
@@ -578,8 +599,59 @@ export class DatabaseStorage implements IStorage {
       .limit(200);
   }
 
+  async countFullDataRestaurantsNear(lat: number, lng: number, radiusMeters: number): Promise<number> {
+    const delta = radiusMeters / 111_320;
+    const result = await db
+      .select({ count: sql<string>`COUNT(*)` })
+      .from(restaurants)
+      .where(
+        and(
+          sql`CAST(${restaurants.lat} AS numeric) BETWEEN ${lat - delta} AND ${lat + delta}`,
+          sql`CAST(${restaurants.lng} AS numeric) BETWEEN ${lng - delta} AND ${lng + delta}`,
+          sql`${restaurants.imageUrl} IS NOT NULL AND ${restaurants.imageUrl} != ''`,
+          sql`${restaurants.rating} IS NOT NULL AND ${restaurants.rating} != '' AND ${restaurants.rating} != 'N/A'`,
+          sql`array_length(${restaurants.photos}, 1) > 0`,
+          sql`${restaurants.openingHours} IS NOT NULL AND jsonb_array_length(${restaurants.openingHours}::jsonb) > 0`,
+        ),
+      );
+    return Number(result[0]?.count ?? 0);
+  }
+
   async findOrCreateFromPlace(place: NormalizedPlace): Promise<number> {
-    // Try to find by name (case-insensitive) first, then check proximity in JS
+    // ── 1. Exact match by googlePlaceId (cross-source dedup: OSM+Google vs Google-only) ──
+    if (place.id.startsWith("google:")) {
+      const placeId = place.id.replace("google:", "");
+      const [existing] = await db
+        .select({ id: restaurants.id })
+        .from(restaurants)
+        .where(eq(restaurants.googlePlaceId, placeId))
+        .limit(1);
+      if (existing) return existing.id;
+    }
+
+    // ── 2. Proximity-only match (~50m) — same physical location regardless of name or source ──
+    // Catches cases like OSM "Starbucks" vs Google "Starbucks Chiang Mai" at the same spot.
+    const delta = 0.0005; // ~55m in degrees
+    const nearbyRaw = await db
+      .select({ id: restaurants.id, lat: restaurants.lat, lng: restaurants.lng })
+      .from(restaurants)
+      .where(
+        and(
+          sql`CAST(${restaurants.lat} AS FLOAT) BETWEEN ${place.lat - delta} AND ${place.lat + delta}`,
+          sql`CAST(${restaurants.lng} AS FLOAT) BETWEEN ${place.lng - delta} AND ${place.lng + delta}`,
+        ),
+      )
+      .limit(10);
+
+    for (const c of nearbyRaw) {
+      const dLat = Number(c.lat) - place.lat;
+      const dLng = Number(c.lng) - place.lng;
+      if (Math.sqrt(dLat * dLat + dLng * dLng) < 0.0005) {
+        return c.id; // already exists at this location — skip insert
+      }
+    }
+
+    // ── 3. Name + proximity match (original logic, ~100m) ──
     const candidates = await db
       .select({
         id: restaurants.id,
@@ -596,7 +668,6 @@ export class DatabaseStorage implements IStorage {
       .where(ilike(restaurants.name, place.name))
       .limit(10);
 
-    // Check if any candidate is within ~100m
     for (const c of candidates) {
       const dLat = Number(c.lat) - place.lat;
       const dLng = Number(c.lng) - place.lng;

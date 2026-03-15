@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { BottomNav } from "@/components/BottomNav";
 import { shareWithLiffOrClipboard } from "@/lib/share";
+import { useLanguage } from "@/i18n/LanguageProvider";
 
 type ResultItem = {
   menuItemId: number;
@@ -31,6 +32,7 @@ type GroupResultResponse = {
 export default function GroupResult() {
   const [shareState, setShareState] = useState<string>("");
   const [, navigate] = useLocation();
+  const { t } = useLanguage();
   const sessionCode = useMemo(
     () => (new URLSearchParams(window.location.search).get("session") || "").toUpperCase(),
     [],
@@ -69,8 +71,8 @@ export default function GroupResult() {
 
   return (
     <div className="w-full min-h-[100dvh] bg-[hsl(30,20%,97%)] pb-24 px-6 pt-12" data-testid="group-result-page">
-      <h1 className="text-[26px] font-bold tracking-tight">Group Top 3</h1>
-      <p className="text-sm text-muted-foreground mt-1">Session {sessionCode}</p>
+      <h1 className="text-[26px] font-bold tracking-tight">{t("group_result.title")}</h1>
+      <p className="text-sm text-muted-foreground mt-1">{t("group_result.session", { code: sessionCode })}</p>
 
       <div className="mt-5 space-y-3">
         {top3.map((entry, idx) => (
@@ -80,7 +82,7 @@ export default function GroupResult() {
               <p className="text-xs text-muted-foreground">#{idx + 1}</p>
               <p className="font-semibold truncate">{entry.item?.name ?? "Unknown"}</p>
               <p className="text-xs text-muted-foreground truncate">{entry.item?.address ?? ""}</p>
-              <p className="text-xs mt-1 font-medium">{entry.agreeCount}/{data?.memberCount ?? 0} agree</p>
+              <p className="text-xs mt-1 font-medium">{entry.agreeCount}/{data?.memberCount ?? 0} {t("group_result.agree")}</p>
             </div>
           </div>
         ))}
@@ -94,7 +96,7 @@ export default function GroupResult() {
               className="w-full py-3.5 rounded-2xl bg-[#FFCC02] text-[#2d2000] font-bold"
               data-testid="button-open-winner-menu"
             >
-              View Restaurants for This Dish
+              {t("group_result.open_restaurants")}
             </button>
           ) : (
             <button
@@ -102,7 +104,7 @@ export default function GroupResult() {
               className="w-full py-3.5 rounded-2xl bg-[#FFCC02] text-[#2d2000] font-bold"
               data-testid="button-open-winner"
             >
-              Open Winner
+              {t("group_result.open_winner")}
             </button>
           )}
           <button
@@ -110,7 +112,7 @@ export default function GroupResult() {
             className="w-full py-3.5 rounded-2xl bg-white border border-gray-200 font-semibold"
             data-testid="button-share-group-result"
           >
-            Share to LINE
+            {t("group_result.share")}
           </button>
           {shareState ? <p className="text-xs text-muted-foreground text-center">{shareState}</p> : null}
         </div>
@@ -120,7 +122,7 @@ export default function GroupResult() {
           className="mt-6 w-full py-3.5 rounded-2xl bg-foreground text-white font-bold"
           data-testid="button-go-final-vote"
         >
-          Final Vote
+          {t("group_result.final_vote")}
         </button>
       )}
 

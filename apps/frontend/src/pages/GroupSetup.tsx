@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { sendGroupInvite } from "@/lib/liff";
 import { useLineProfile } from "@/lib/useLineProfile";
+import { useLanguage } from "@/i18n/LanguageProvider";
 
 const LOCATIONS = [
   { id: "bts", icon: "🚇", label: "Near BTS", sub: "Easy access" },
@@ -86,6 +87,7 @@ function isSameDay(a: Date | null, b: Date) {
 export default function GroupSetup() {
   const [, navigate] = useLocation();
   const { profile } = useLineProfile();
+  const { t } = useLanguage();
   const [selectedLocations, setSelectedLocations] = useState<string[]>([]);
   const [selectedBudget, setSelectedBudget] = useState<string>("");
   const [selectedGroupType, setSelectedGroupType] = useState<string>("");
@@ -194,8 +196,8 @@ export default function GroupSetup() {
             <ArrowLeft className="w-4.5 h-4.5 text-foreground" />
           </button>
           <div className="flex-1">
-            <h1 className="text-[17px] font-bold text-foreground" data-testid="text-page-title">Set up your session</h1>
-            <p className="text-[11px] text-muted-foreground">Customize before you start swiping</p>
+            <h1 className="text-[17px] font-bold text-foreground" data-testid="text-page-title">{t("group.setup_title")}</h1>
+            <p className="text-[11px] text-muted-foreground">{t("group.setup_subtitle")}</p>
           </div>
           <div className="flex items-center gap-1.5">
             {[0, 1, 2, 3].map((i) => (
@@ -226,18 +228,18 @@ export default function GroupSetup() {
           >
             <div className="flex items-center gap-2 mb-3 px-5">
               <CalendarIcon className="w-4 h-4 text-[#FFCC02]" />
-              <h2 className="text-[12px] font-bold uppercase tracking-[0.1em] text-foreground">When?</h2>
+              <h2 className="text-[12px] font-bold uppercase tracking-[0.1em] text-foreground">{t("group.when")}</h2>
               {selectedDate && (
                 <button
-                  onClick={() => { setSelectedDate(null); const t = roundToNearest15(new Date()); setSelectedHour(t.hour); setSelectedMinute(t.minute); }}
+                  onClick={() => { setSelectedDate(null); const defaultT = roundToNearest15(new Date()); setSelectedHour(defaultT.hour); setSelectedMinute(defaultT.minute); }}
                   className="text-[10px] text-muted-foreground font-semibold ml-auto hover:text-foreground transition-colors"
                   data-testid="button-clear-datetime"
                 >
-                  Clear
+                  {t("group.clear")}
                 </button>
               )}
               {!selectedDate && (
-                <span className="text-[10px] text-muted-foreground ml-auto">Optional</span>
+                <span className="text-[10px] text-muted-foreground ml-auto">{t("group.optional")}</span>
               )}
             </div>
 
@@ -268,7 +270,7 @@ export default function GroupSetup() {
                     <span className={`text-[9px] font-semibold uppercase tracking-wider ${
                       isSelected ? "text-white/60" : "text-muted-foreground"
                     }`}>
-                      {isToday ? "Today" : DAY_NAMES_SHORT[day.getDay()]}
+                      {isToday ? t("group.today") : DAY_NAMES_SHORT[day.getDay()]}
                     </span>
                     <span className={`text-[18px] font-bold leading-tight mt-0.5 ${
                       isSelected ? "text-white" : "text-foreground"
@@ -288,7 +290,7 @@ export default function GroupSetup() {
             <div className="mt-3 px-5">
               <div className="flex items-center gap-1.5 mb-2.5">
                 <Clock className="w-3 h-3 text-muted-foreground/40" />
-                <span className="text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-wider">Time</span>
+                <span className="text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-wider">{t("group.time")}</span>
               </div>
               <div className="flex items-center gap-2">
                 <div ref={hourPickerRef} className="relative flex-1">
@@ -392,7 +394,7 @@ export default function GroupSetup() {
           >
             <div className="flex items-center gap-2 mb-3">
               <Utensils className="w-4 h-4 text-[#FFCC02]" />
-              <h2 className="text-[12px] font-bold uppercase tracking-[0.1em] text-foreground">Swipe mode</h2>
+              <h2 className="text-[12px] font-bold uppercase tracking-[0.1em] text-foreground">{t("group.mode")}</h2>
             </div>
             <div className="grid grid-cols-2 gap-2">
               {SWIPE_MODES.map((mode) => {
@@ -429,7 +431,7 @@ export default function GroupSetup() {
           >
             <div className="flex items-center gap-2 mb-3">
               <MapPin className="w-4 h-4 text-[#E11D48]" />
-              <h2 className="text-[12px] font-bold uppercase tracking-[0.1em] text-foreground">Where?</h2>
+              <h2 className="text-[12px] font-bold uppercase tracking-[0.1em] text-foreground">{t("group.where")}</h2>
             </div>
             <div className="grid grid-cols-3 gap-2">
               {LOCATIONS.map((l) => {
@@ -471,7 +473,7 @@ export default function GroupSetup() {
           >
             <div className="flex items-center gap-2 mb-3">
               <Sparkles className="w-4 h-4 text-[#FFCC02]" />
-              <h2 className="text-[12px] font-bold uppercase tracking-[0.1em] text-foreground">Budget</h2>
+              <h2 className="text-[12px] font-bold uppercase tracking-[0.1em] text-foreground">{t("group.budget")}</h2>
             </div>
             <div className="grid grid-cols-4 gap-2">
               {BUDGETS.map((b) => {
@@ -515,8 +517,8 @@ export default function GroupSetup() {
           >
             <div className="flex items-center gap-2 mb-3">
               <Utensils className="w-4 h-4 text-[#6C2BD9]" />
-              <h2 className="text-[12px] font-bold uppercase tracking-[0.1em] text-foreground">Dietary needs</h2>
-              <span className="text-[10px] text-muted-foreground ml-auto">Optional</span>
+              <h2 className="text-[12px] font-bold uppercase tracking-[0.1em] text-foreground">{t("group.dietary")}</h2>
+              <span className="text-[10px] text-muted-foreground ml-auto">{t("group.optional")}</span>
             </div>
             <div className="flex flex-wrap gap-2">
               {RESTRICTIONS.map((r) => {
@@ -555,7 +557,7 @@ export default function GroupSetup() {
           >
             <div className="flex items-center gap-2 mb-3">
               <Users className="w-4 h-4 text-[#00B14F]" />
-              <h2 className="text-[12px] font-bold uppercase tracking-[0.1em] text-foreground">Who's coming?</h2>
+              <h2 className="text-[12px] font-bold uppercase tracking-[0.1em] text-foreground">{t("group.who")}</h2>
             </div>
             <div className="grid grid-cols-4 gap-2 mb-4">
               {GROUP_TYPES.map((g) => {
@@ -599,10 +601,10 @@ export default function GroupSetup() {
                 </div>
                 <div className="flex-1 text-left">
                   <span className="text-[14px] font-bold text-foreground">
-                    {inviteStatus === "sending" ? "Opening LINE..." : inviteStatus === "sent" ? "Invite Sent!" : "Invite via LINE"}
+                    {inviteStatus === "sending" ? t("group.invite_sending") : inviteStatus === "sent" ? t("group.invite_sent") : t("group.invite_line")}
                   </span>
                   <p className="text-[11px] text-muted-foreground">
-                    {inviteStatus === "sending" ? "Select friends to invite" : "Send to friends or group chat"}
+                    {inviteStatus === "sending" ? t("group.invite_select") : t("group.invite_send")}
                   </p>
                 </div>
                 <ChevronRight className="w-4 h-4 text-muted-foreground/40 flex-shrink-0" />
@@ -623,7 +625,7 @@ export default function GroupSetup() {
           style={{ boxShadow: "0 8px 25px -5px rgba(0,0,0,0.25)" }}
         >
           <Sparkles className="w-4 h-4" />
-          Start Session
+          {t("group.start_session")}
         </button>
       </div>
     </div>

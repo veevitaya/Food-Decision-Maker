@@ -4,50 +4,25 @@ import { useLocation } from "wouter";
 import { BottomNav } from "@/components/BottomNav";
 import { Sparkles, Clock, Wallet, TrendingUp, MapPin, Search, UtensilsCrossed, X, Check } from "lucide-react";
 import { useTasteProfile } from "@/hooks/use-taste-profile";
+import { useRestaurants } from "@/hooks/use-restaurants";
 import { shareWithLiffOrClipboard } from "@/lib/share";
+import { useLanguage } from "@/i18n/LanguageProvider";
 import mascotPath from "@assets/image_1772011321697.png";
 import drunkToastPath from "@assets/drunk_toast_nobg.png";
 
-const ALL_MENUS = [
-  { id: 1, name: "Pad Thai", type: "Thai", tags: ["Noodles", "Spicy", "Shrimp"], restaurantCount: 9, imageUrl: "https://images.unsplash.com/photo-1559314809-0d155014e29e?w=600&auto=format&fit=crop&q=60", budget: "Cheap", interests: ["Popular spots", "Hot & spicy", "Comfort food", "Delivery"], dietary: [], setting: ["Street food", "Late night", "Delivery"] },
-  { id: 2, name: "Korean BBQ", type: "Korean", tags: ["Grilled", "Meat", "Group"], restaurantCount: 10, imageUrl: "https://images.unsplash.com/photo-1583224964978-2257b960c3d3?w=600&auto=format&fit=crop&q=60", budget: "Moderate", interests: ["Popular spots", "Comfort food"], dietary: ["Gluten-Free"], setting: ["Restaurants", "Trendy spots", "Late night"] },
-  { id: 3, name: "Tonkotsu Ramen", type: "Japanese", tags: ["Noodles", "Pork", "Rich"], restaurantCount: 7, imageUrl: "https://images.unsplash.com/photo-1557872943-16a5ac26437e?w=600&auto=format&fit=crop&q=60", budget: "Moderate", interests: ["Popular spots", "Comfort food", "Hot & spicy", "Delivery"], dietary: [], setting: ["Restaurants", "Near BTS", "At the mall", "Late night", "Delivery"] },
-  { id: 4, name: "Margherita Pizza", type: "Italian", tags: ["Cheesy", "Tomato", "Basil"], restaurantCount: 8, imageUrl: "https://images.unsplash.com/photo-1574071318508-1cdbab80d002?w=600&auto=format&fit=crop&q=60", budget: "Moderate", interests: ["Popular spots", "Vegetarian", "Comfort food", "Delivery"], dietary: ["Vegetarian"], setting: ["Restaurants", "At the mall", "Delivery"] },
-  { id: 5, name: "Green Curry", type: "Thai", tags: ["Spicy", "Coconut", "Rice"], restaurantCount: 12, imageUrl: "https://images.unsplash.com/photo-1455619452474-d2be8b1e70cd?w=600&auto=format&fit=crop&q=60", budget: "Cheap", interests: ["Hot & spicy", "Comfort food", "Budget-friendly", "Delivery"], dietary: ["Gluten-Free"], setting: ["Street food", "Restaurants", "Delivery"] },
-  { id: 6, name: "Sushi Omakase", type: "Japanese", tags: ["Fresh", "Raw", "Premium"], restaurantCount: 5, imageUrl: "https://images.unsplash.com/photo-1579871494447-9811cf80d66c?w=600&auto=format&fit=crop&q=60", budget: "Expensive", interests: ["Fine dining", "Popular spots"], dietary: ["Gluten-Free"], setting: ["Restaurants", "Trendy spots"] },
-  { id: 7, name: "Smash Burger", type: "Western", tags: ["Burger", "Cheesy", "Fries"], restaurantCount: 11, imageUrl: "https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=600&auto=format&fit=crop&q=60", budget: "Moderate", interests: ["Popular spots", "Comfort food", "Delivery"], dietary: [], setting: ["Restaurants", "Late night", "At the mall", "Delivery"] },
-  { id: 8, name: "Som Tum", type: "Thai", tags: ["Salad", "Spicy", "Peanuts"], restaurantCount: 15, imageUrl: "https://images.unsplash.com/photo-1562565652-a0d8f0c59eb4?w=600&auto=format&fit=crop&q=60", budget: "Cheap", interests: ["Hot & spicy", "Budget-friendly", "Vegetarian", "Healthy", "Delivery"], dietary: ["Vegan", "Gluten-Free"], setting: ["Street food", "Near BTS", "Delivery"] },
-  { id: 9, name: "Dim Sum", type: "Chinese", tags: ["Dumpling", "Tea", "Brunch"], restaurantCount: 6, imageUrl: "https://images.unsplash.com/photo-1496116218417-1a781b1c416c?w=600&auto=format&fit=crop&q=60", budget: "Moderate", interests: ["Popular spots", "Comfort food", "Brunch"], dietary: [], setting: ["Restaurants", "At the mall"] },
-  { id: 10, name: "Tacos", type: "Mexican", tags: ["Taco", "Spicy", "Fresh"], restaurantCount: 4, imageUrl: "https://images.unsplash.com/photo-1565299585323-38d6b0865b47?w=600&auto=format&fit=crop&q=60", budget: "Cheap", interests: ["Hot & spicy", "Budget-friendly", "Delivery"], dietary: ["Gluten-Free"], setting: ["Street food", "Late night", "Trendy spots", "Delivery"] },
-  { id: 11, name: "Mango Sticky Rice", type: "Thai", tags: ["Dessert", "Mango", "Rice"], restaurantCount: 8, imageUrl: "https://images.unsplash.com/photo-1621293954908-907159247fc8?w=600&auto=format&fit=crop&q=60", budget: "Cheap", interests: ["Dessert", "Popular spots", "Budget-friendly", "Sweets"], dietary: ["Vegan", "Gluten-Free"], setting: ["Street food", "Near BTS"] },
-  { id: 12, name: "Tom Yum Goong", type: "Thai", tags: ["Soup", "Spicy", "Shrimp"], restaurantCount: 14, imageUrl: "https://images.unsplash.com/photo-1548943487-a2e4e43b4853?w=600&auto=format&fit=crop&q=60", budget: "Moderate", interests: ["Hot & spicy", "Comfort food", "Popular spots", "Delivery"], dietary: ["Gluten-Free"], setting: ["Restaurants", "By the river", "Outdoor dining", "Delivery"] },
-  { id: 13, name: "Khao Soi", type: "Thai", tags: ["Noodles", "Coconut", "Spicy"], restaurantCount: 6, imageUrl: "https://images.unsplash.com/photo-1534422298391-e4f8c172dddb?w=600&auto=format&fit=crop&q=60", budget: "Cheap", interests: ["Hot & spicy", "Comfort food", "Budget-friendly", "Delivery"], dietary: [], setting: ["Street food", "Restaurants", "Delivery"] },
-  { id: 14, name: "Seafood Platter", type: "Seafood", tags: ["Crab", "Shrimp", "Fresh"], restaurantCount: 7, imageUrl: "https://images.unsplash.com/photo-1615141982883-c7ad0e69fd62?w=600&auto=format&fit=crop&q=60", budget: "Fancy", interests: ["Fine dining", "Outdoor dining"], dietary: ["Gluten-Free"], setting: ["By the river", "Restaurants", "Rooftops", "Outdoor dining"] },
-  { id: 15, name: "Chicken Biryani", type: "Indian", tags: ["Curry", "Rice", "Spicy"], restaurantCount: 5, imageUrl: "https://images.unsplash.com/photo-1563379091339-03b21ab4a4f8?w=600&auto=format&fit=crop&q=60", budget: "Moderate", interests: ["Hot & spicy", "Comfort food", "Delivery"], dietary: ["Halal"], setting: ["Restaurants", "Near BTS", "Delivery"] },
-  { id: 16, name: "Açaí Bowl", type: "Western", tags: ["Berry", "Bowl", "Healthy"], restaurantCount: 4, imageUrl: "https://images.unsplash.com/photo-1590301157890-4810ed352733?w=600&auto=format&fit=crop&q=60", budget: "Moderate", interests: ["Vegetarian", "Coffee", "Outdoor dining", "Healthy", "Brunch"], dietary: ["Vegan", "Gluten-Free"], setting: ["Trendy spots", "Near BTS", "Outdoor dining"] },
-  { id: 17, name: "Matcha Latte & Cake", type: "Japanese", tags: ["Coffee", "Dessert", "Matcha"], restaurantCount: 9, imageUrl: "https://images.unsplash.com/photo-1536256263959-770b48d82b0a?w=600&auto=format&fit=crop&q=60", budget: "Moderate", interests: ["Coffee", "Dessert", "Trendy spots", "Drinks", "Sweets"], dietary: ["Vegetarian"], setting: ["At the mall", "Trendy spots"] },
-  { id: 18, name: "Pad Kra Pao", type: "Thai", tags: ["Spicy", "Fried egg", "Basil"], restaurantCount: 20, imageUrl: "https://images.unsplash.com/photo-1569562211093-4ed0d0758f12?w=600&auto=format&fit=crop&q=60", budget: "Cheap", interests: ["Budget-friendly", "Hot & spicy", "Popular spots", "Delivery"], dietary: [], setting: ["Street food", "Late night", "Near BTS", "Delivery"] },
-  { id: 19, name: "Eggs Benedict", type: "Western", tags: ["Eggs", "Bacon", "Brunch"], restaurantCount: 7, imageUrl: "https://images.unsplash.com/photo-1525351484163-7529414344d8?w=600&auto=format&fit=crop&q=60", budget: "Moderate", interests: ["Popular spots", "Coffee", "Outdoor dining", "Brunch"], dietary: [], setting: ["Restaurants", "Trendy spots", "Near BTS", "Outdoor dining"] },
-  { id: 20, name: "Pancakes & Waffles", type: "Western", tags: ["Pancakes", "Waffles", "Syrup"], restaurantCount: 8, imageUrl: "https://images.unsplash.com/photo-1567620905732-2d1ec7ab7445?w=600&auto=format&fit=crop&q=60", budget: "Moderate", interests: ["Dessert", "Popular spots", "Comfort food", "Brunch", "Sweets"], dietary: ["Vegetarian"], setting: ["Restaurants", "Trendy spots", "At the mall"] },
-  { id: 21, name: "Smoothie Bowl", type: "Western", tags: ["Berry", "Bowl", "Healthy"], restaurantCount: 6, imageUrl: "https://images.unsplash.com/photo-1501443762994-82bd5dace89a?w=600&auto=format&fit=crop&q=60", budget: "Moderate", interests: ["Vegetarian", "Outdoor dining", "Coffee", "Healthy", "Brunch", "Drinks"], dietary: ["Vegan", "Gluten-Free"], setting: ["Trendy spots", "Near BTS", "Outdoor dining"] },
-  { id: 22, name: "Croissant & Pastry", type: "French", tags: ["Croissant", "Buttery", "Coffee"], restaurantCount: 9, imageUrl: "https://images.unsplash.com/photo-1530610476181-d83430b64dcd?w=600&auto=format&fit=crop&q=60", budget: "Moderate", interests: ["Coffee", "Popular spots", "Dessert", "Brunch", "Sweets"], dietary: ["Vegetarian"], setting: ["Trendy spots", "At the mall", "Near BTS"] },
-  { id: 23, name: "Thai Milk Tea", type: "Thai", tags: ["Drink", "Tea", "Sweet"], restaurantCount: 12, imageUrl: "https://images.unsplash.com/photo-1558857563-b371033873b8?w=600&auto=format&fit=crop&q=60", budget: "Cheap", interests: ["Budget-friendly", "Popular spots", "Drinks", "Sweets"], dietary: [], setting: ["Street food", "Near BTS", "At the mall", "Delivery"] },
-  { id: 24, name: "Bubble Tea", type: "Taiwanese", tags: ["Boba", "Drink", "Tapioca"], restaurantCount: 15, imageUrl: "https://images.unsplash.com/photo-1541696490-8744a5dc0228?w=600&auto=format&fit=crop&q=60", budget: "Cheap", interests: ["Popular spots", "Budget-friendly", "Drinks", "Sweets"], dietary: [], setting: ["At the mall", "Near BTS", "Trendy spots", "Delivery"] },
-  { id: 25, name: "Khao Tom", type: "Thai", tags: ["Soup", "Rice", "Late night"], restaurantCount: 10, imageUrl: "https://images.unsplash.com/photo-1547592166-23ac45744acd?w=600&auto=format&fit=crop&q=60", budget: "Cheap", interests: ["Budget-friendly", "Comfort food", "Delivery"], dietary: ["Gluten-Free"], setting: ["Street food", "Late night", "Delivery"] },
-  { id: 26, name: "Ice Cream & Gelato", type: "Western", tags: ["Ice cream", "Gelato", "Sweet"], restaurantCount: 8, imageUrl: "https://images.unsplash.com/photo-1488900128323-21503983a07e?w=600&auto=format&fit=crop&q=60", budget: "Moderate", interests: ["Dessert", "Popular spots", "Sweets", "Drinks"], dietary: ["Vegetarian"], setting: ["At the mall", "Trendy spots", "Near BTS", "Delivery"] },
-  { id: 27, name: "Craft Cocktails", type: "Western", tags: ["Cocktail", "Spirits", "Night out"], restaurantCount: 8, imageUrl: "https://images.unsplash.com/photo-1514362545857-3bc16c4c7d1b?w=600&auto=format&fit=crop&q=60", budget: "Expensive", interests: ["Drinks", "Fine dining", "Popular spots"], dietary: [], setting: ["Rooftops", "Trendy spots", "Late night", "Outdoor dining"] },
-  { id: 28, name: "Wine & Tapas", type: "Western", tags: ["Wine", "Tapas", "Classy"], restaurantCount: 5, imageUrl: "https://images.unsplash.com/photo-1510812431401-41d2bd2722f3?w=600&auto=format&fit=crop&q=60", budget: "Fancy", interests: ["Drinks", "Fine dining", "Outdoor dining"], dietary: [], setting: ["Restaurants", "Rooftops", "Trendy spots", "Outdoor dining"] },
-  { id: 29, name: "Beer Garden Bites", type: "Western", tags: ["Beer", "Wings", "Social"], restaurantCount: 6, imageUrl: "https://images.unsplash.com/photo-1575037614876-c38a4c44f5b8?w=600&auto=format&fit=crop&q=60", budget: "Moderate", interests: ["Drinks", "Comfort food", "Outdoor dining"], dietary: [], setting: ["Outdoor dining", "Rooftops", "Late night", "Trendy spots"] },
-  { id: 30, name: "Wagyu Steak", type: "Japanese", tags: ["Steak", "Premium", "Grilled"], restaurantCount: 4, imageUrl: "https://images.unsplash.com/photo-1546833998-877b37c2e5c6?w=600&auto=format&fit=crop&q=60", budget: "Fancy", interests: ["Fine dining", "Popular spots"], dietary: ["Gluten-Free"], setting: ["Restaurants", "Trendy spots"] },
-  { id: 31, name: "Lobster & Champagne", type: "Western", tags: ["Lobster", "Champagne", "Luxury"], restaurantCount: 3, imageUrl: "https://images.unsplash.com/photo-1553621042-f6e147245754?w=600&auto=format&fit=crop&q=60", budget: "Fancy", interests: ["Fine dining", "Outdoor dining", "Drinks"], dietary: ["Gluten-Free"], setting: ["Restaurants", "Rooftops", "By the river", "Outdoor dining"] },
-  { id: 32, name: "Poke Bowl", type: "Western", tags: ["Fish", "Avocado", "Healthy"], restaurantCount: 7, imageUrl: "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=600&auto=format&fit=crop&q=60", budget: "Moderate", interests: ["Healthy", "Vegetarian", "Popular spots", "Delivery"], dietary: ["Gluten-Free"], setting: ["Trendy spots", "Near BTS", "At the mall", "Delivery"] },
-  { id: 33, name: "Grilled Seafood by the River", type: "Thai", tags: ["Seafood", "Grilled", "Riverside"], restaurantCount: 5, imageUrl: "https://images.unsplash.com/photo-1559339352-11d035aa65de?w=600&auto=format&fit=crop&q=60", budget: "Moderate", interests: ["Outdoor dining", "Popular spots", "Comfort food"], dietary: ["Gluten-Free"], setting: ["By the river", "Outdoor dining", "Restaurants"] },
-  { id: 34, name: "Avocado Toast & Latte", type: "Western", tags: ["Avocado", "Coffee", "Brunch"], restaurantCount: 8, imageUrl: "https://images.unsplash.com/photo-1525351484163-7529414344d8?w=600&auto=format&fit=crop&q=60", budget: "Moderate", interests: ["Coffee", "Brunch", "Healthy", "Outdoor dining"], dietary: ["Vegetarian"], setting: ["Trendy spots", "Outdoor dining", "Near BTS"] },
-  { id: 35, name: "Thai Iced Coffee", type: "Thai", tags: ["Coffee", "Iced", "Sweet"], restaurantCount: 14, imageUrl: "https://images.unsplash.com/photo-1461023058943-07fcbe16d735?w=600&auto=format&fit=crop&q=60", budget: "Cheap", interests: ["Coffee", "Drinks", "Budget-friendly"], dietary: [], setting: ["Street food", "Near BTS", "At the mall", "Delivery"] },
-  { id: 36, name: "Rooftop Dining Set", type: "Western", tags: ["View", "Premium", "Set menu"], restaurantCount: 4, imageUrl: "https://images.unsplash.com/photo-1414235077428-338989a2e8c0?w=600&auto=format&fit=crop&q=60", budget: "Fancy", interests: ["Fine dining", "Outdoor dining", "Popular spots"], dietary: [], setting: ["Rooftops", "Outdoor dining", "Restaurants"] },
-];
+interface MenuItem {
+  id: number;
+  name: string;
+  type: string;
+  tags: string[];
+  restaurantCount: number;
+  imageUrl: string;
+  budget: "Cheap" | "Moderate" | "Fancy" | "Expensive";
+  interests: string[];
+  dietary: string[];
+  setting: string[];
+}
 
-type MenuItem = typeof ALL_MENUS[0];
 
 function parseQuizParams(): { cuisines: string[]; diet: string[]; locations: string[]; budget: string[]; interests: string[] } {
   const params = new URLSearchParams(window.location.search);
@@ -60,12 +35,12 @@ function parseQuizParams(): { cuisines: string[]; diet: string[]; locations: str
   };
 }
 
-function filterMenus(quizAnswers: ReturnType<typeof parseQuizParams>): MenuItem[] {
+function filterMenus(quizAnswers: ReturnType<typeof parseQuizParams>, menuPool: MenuItem[]): MenuItem[] {
   const { cuisines, diet, locations, budget, interests } = quizAnswers;
   const hasFilters = cuisines.length || diet.length || locations.length || budget.length || interests.length;
-  if (!hasFilters) return ALL_MENUS;
+  if (!hasFilters) return menuPool;
 
-  const scored = ALL_MENUS.map((item) => {
+  const scored = menuPool.map((item) => {
     let score = 0;
 
     if (cuisines.length) {
@@ -114,7 +89,7 @@ function filterMenus(quizAnswers: ReturnType<typeof parseQuizParams>): MenuItem[
   scored.sort((a, b) => b.score - a.score);
 
   const filtered = scored.filter((s) => s.score > 0).map((s) => s.item);
-  return filtered.length >= 2 ? filtered : ALL_MENUS;
+  return filtered.length >= 2 ? filtered : menuPool;
 }
 
 function ToastMascot({ pointDirection, drunk = false }: { pointDirection: "left" | "right" | "center"; drunk?: boolean }) {
@@ -294,9 +269,35 @@ function getPersonalizedThinkingSteps(
 export default function SoloResults() {
   const [, navigate] = useLocation();
   const { topPreference } = useTasteProfile();
+  const { t } = useLanguage();
+  const { data: apiRestaurants = [] } = useRestaurants();
 
   const quizAnswers = useMemo(() => parseQuizParams(), []);
-  const filteredMenus = useMemo(() => filterMenus(quizAnswers), [quizAnswers]);
+  const menuPool = useMemo<MenuItem[]>(() => {
+    return apiRestaurants.map((r) => {
+      const descriptionTerms = (r.description ?? "")
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, " ")
+        .split(/\s+/)
+        .filter((w) => w.length > 2)
+        .slice(0, 3);
+      const priceLevel = Number(r.priceLevel ?? 2);
+      const budget = priceLevel <= 1 ? "Cheap" : priceLevel === 2 ? "Moderate" : priceLevel === 3 ? "Fancy" : "Expensive";
+      return {
+        id: r.id,
+        name: r.name,
+        type: r.category || "Restaurant",
+        tags: descriptionTerms.length > 0 ? descriptionTerms : ["Popular spots"],
+        restaurantCount: 1,
+        imageUrl: r.imageUrl || "",
+        budget,
+        interests: ["Popular spots"],
+        dietary: [],
+        setting: ["Restaurants"],
+      } as MenuItem;
+    });
+  }, [apiRestaurants]);
+  const filteredMenus = useMemo(() => filterMenus(quizAnswers, menuPool), [quizAnswers, menuPool]);
   const isDrinksMode = quizAnswers.interests.includes("Drinks");
 
   const hasFilters = quizAnswers.cuisines.length || quizAnswers.diet.length || quizAnswers.locations.length || quizAnswers.budget.length || quizAnswers.interests.length;
@@ -311,8 +312,8 @@ export default function SoloResults() {
 
   const [currentChoice, setCurrentChoice] = useState<MenuItem | null>(null);
   const [usedIds, setUsedIds] = useState<Set<number>>(new Set([filteredMenus[0]?.id, filteredMenus[1]?.id].filter(Boolean)));
-  const [leftOption, setLeftOption] = useState(filteredMenus[0] || ALL_MENUS[0]);
-  const [rightOption, setRightOption] = useState(filteredMenus[1] || ALL_MENUS[1]);
+  const [leftOption, setLeftOption] = useState<MenuItem | null>(filteredMenus[0] ?? null);
+  const [rightOption, setRightOption] = useState<MenuItem | null>(filteredMenus[1] ?? null);
   const [round, setRound] = useState(1);
   const [animating, setAnimating] = useState(false);
   const [selectedSide, setSelectedSide] = useState<"left" | "right" | null>(null);
@@ -321,6 +322,12 @@ export default function SoloResults() {
   const [decideStep, setDecideStep] = useState<"analyzing" | "result">("analyzing");
   const [aiRecommendation, setAiRecommendation] = useState<MenuItem | null>(null);
   const [shareState, setShareState] = useState("");
+
+  useEffect(() => {
+    if (filteredMenus.length === 0) return;
+    if (!leftOption) setLeftOption(filteredMenus[0]);
+    if (!rightOption) setRightOption(filteredMenus[1] ?? filteredMenus[0]);
+  }, [filteredMenus, leftOption, rightOption]);
 
   const handleShareResult = async () => {
     const choice = currentChoice || aiRecommendation || leftOption;
@@ -331,13 +338,14 @@ export default function SoloResults() {
   };
 
   const getNextMenu = () => {
+    if (!leftOption || !rightOption) return null;
     const currentIds = new Set([leftOption.id, rightOption.id]);
     const remaining = filteredMenus.filter((m) => !usedIds.has(m.id) && !currentIds.has(m.id));
     if (remaining.length === 0) {
       const allOther = filteredMenus.filter((m) => !currentIds.has(m.id));
       if (allOther.length === 0) {
-        const anyOther = ALL_MENUS.filter((m) => !currentIds.has(m.id));
-        return anyOther[Math.floor(Math.random() * anyOther.length)] || ALL_MENUS[0];
+        const anyOther = menuPool.filter((m) => !currentIds.has(m.id));
+        return anyOther[Math.floor(Math.random() * anyOther.length)] ?? null;
       }
       return allOther[Math.floor(Math.random() * allOther.length)];
     }
@@ -346,6 +354,7 @@ export default function SoloResults() {
 
   const handleSelect = (side: "left" | "right") => {
     if (animating) return;
+    if (!leftOption || !rightOption) return;
     setAnimating(true);
     setSelectedSide(side);
 
@@ -360,6 +369,12 @@ export default function SoloResults() {
 
     setTimeout(() => {
       const nextMenu = getNextMenu();
+      if (!nextMenu) {
+        setSelectedSide(null);
+        setReplacingSide(null);
+        setAnimating(false);
+        return;
+      }
       setUsedIds((prev) => new Set([...prev, nextMenu.id]));
 
       if (otherSide === "left") {
@@ -379,6 +394,7 @@ export default function SoloResults() {
 
   const handleReadyToEat = () => {
     const finalChoice = currentChoice || leftOption;
+    if (!finalChoice) return;
     navigate(`/restaurants?category=${encodeURIComponent(finalChoice.name)}`);
   };
 
@@ -399,7 +415,7 @@ export default function SoloResults() {
     return { isWeekend, isPayday };
   };
 
-  const generateAiRecommendation = (): MenuItem => {
+  const generateAiRecommendation = (): MenuItem | null => {
     const timeCtx = getTimeContext();
     const dayCtx = getDayContext();
 
@@ -424,7 +440,7 @@ export default function SoloResults() {
     });
 
     scored.sort((a, b) => b.score - a.score);
-    return scored[0]?.item || filteredMenus[0] || ALL_MENUS[0];
+    return scored[0]?.item ?? filteredMenus[0] ?? null;
   };
 
   const handleDecideForMe = () => {
@@ -450,7 +466,16 @@ export default function SoloResults() {
     return selectedSide;
   };
 
-  const renderCard = (opt: MenuItem, side: "left" | "right") => {
+  const renderCard = (opt: MenuItem | null, side: "left" | "right") => {
+    if (!opt) {
+      return (
+        <div className="flex-1" key={`slot-${side}`}>
+          <div className="bg-white rounded-2xl border border-gray-100 p-4 h-full text-xs text-muted-foreground">
+            No option
+          </div>
+        </div>
+      );
+    }
     const isSelected = selectedSide === side;
     const isDismissed = selectedSide !== null && selectedSide !== side;
     const isReplacing = replacingSide === side;
@@ -541,7 +566,7 @@ export default function SoloResults() {
           className="w-full mb-3"
         >
           <div className="flex items-center gap-1.5 mb-2">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Your preferences</span>
+            <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">{t("solo.preferences")}</span>
             <span className="text-[10px] text-muted-foreground">({filteredMenus.length} matches)</span>
           </div>
           <div className="flex flex-wrap gap-1.5" data-testid="filter-chips">
@@ -567,9 +592,15 @@ export default function SoloResults() {
       <ToastMascot pointDirection={getMascotDirection()} drunk={isDrinksMode} />
 
       <h2 className="text-lg font-semibold mb-0.5" data-testid="text-choose-prompt">
-        {isDrinksMode ? "What are we drinking?" : "Which one sounds better?"}
+        {isDrinksMode ? t("solo.drinks_title") : t("solo.choose_title")}
       </h2>
-      <p className="text-xs text-muted-foreground mb-5">{isDrinksMode ? "Tap to pick your drink" : "Tap to pick — the other gets replaced"}</p>
+      <p className="text-xs text-muted-foreground mb-5">{isDrinksMode ? t("solo.drinks_hint") : t("solo.choose_hint")}</p>
+
+      {filteredMenus.length === 0 && (
+        <div className="w-full max-w-md mb-5 rounded-2xl border border-gray-100 p-4 text-sm text-muted-foreground text-center">
+          {t("solo.no_options")}
+        </div>
+      )}
 
       {currentChoice && (
         <motion.div
@@ -578,7 +609,7 @@ export default function SoloResults() {
           className="flex items-center gap-2 mb-4 bg-amber-50 border border-amber-100 rounded-full px-4 py-2"
         >
           <UtensilsCrossed className="w-3 h-3" />
-          <span className="text-xs font-semibold text-foreground">{isDrinksMode ? "Current drink:" : "Current pick:"} {currentChoice.name}</span>
+          <span className="text-xs font-semibold text-foreground">{isDrinksMode ? t("solo.current_drink") : t("solo.current_pick")} {currentChoice.name}</span>
         </motion.div>
       )}
 
@@ -594,14 +625,14 @@ export default function SoloResults() {
         className="w-full max-w-md py-4 rounded-full bg-[#FFCC02] text-[#2d2000] font-bold text-sm mb-5"
         style={{ boxShadow: "0 6px 20px -4px rgba(255,204,2,0.4)" }}
       >
-        {isDrinksMode ? "Ready to drink!" : "Ready to eat!"}{currentChoice ? ` — ${currentChoice.name}` : ""}
+        {isDrinksMode ? t("solo.ready_drink") : t("solo.ready_eat")}{currentChoice ? ` — ${currentChoice.name}` : ""}
       </motion.button>
       <button
         onClick={handleShareResult}
         className="w-full max-w-md py-3 rounded-2xl bg-white border border-gray-200 text-sm font-semibold mb-5"
         data-testid="button-share-solo-result"
       >
-        Share result
+        {t("solo.share")}
       </button>
       {shareState ? <p className="text-xs text-muted-foreground mb-5">{shareState}</p> : null}
 
@@ -614,7 +645,7 @@ export default function SoloResults() {
           style={{ boxShadow: "0 2px 8px -2px rgba(0,0,0,0.04)" }}
         >
           <Search className="w-4 h-4" />
-          Search
+          {t("solo.search")}
         </motion.button>
         <motion.button
           onClick={handleDecideForMe}
@@ -626,7 +657,7 @@ export default function SoloResults() {
           <div className="w-8 h-8 rounded-full bg-gradient-to-br from-amber-50 to-[#FFCC02]/20 flex items-center justify-center mb-0.5">
             <Sparkles className="w-4 h-4 text-[#FFCC02]" />
           </div>
-          <span className="text-foreground">Decide for me</span>
+          <span className="text-foreground">{t("solo.decide")}</span>
         </motion.button>
         <motion.button
           onClick={() => navigate("/swipe")}
@@ -636,7 +667,7 @@ export default function SoloResults() {
           style={{ boxShadow: "0 2px 8px -2px rgba(0,0,0,0.04)" }}
         >
           <UtensilsCrossed className="w-4 h-4" />
-          Swipe
+          {t("solo.swipe")}
         </motion.button>
       </div>
 
@@ -674,7 +705,7 @@ export default function SoloResults() {
                   animate={isDrinksMode ? undefined : { y: [0, -8, 0], rotate: [0, 5, -5, 0] }}
                   transition={isDrinksMode ? undefined : { duration: 2, repeat: Infinity, ease: "easeInOut" }}
                 />
-                <h2 className="text-xl font-bold text-foreground mb-2" data-testid="text-analyzing">{isDrinksMode ? "Toast is mixing..." : "Toast is thinking..."}</h2>
+                <h2 className="text-xl font-bold text-foreground mb-2" data-testid="text-analyzing">{isDrinksMode ? t("solo.mixing") : t("solo.thinking")}</h2>
                 <div className="space-y-3 w-full max-w-xs">
                   {getPersonalizedThinkingSteps(
                     { topKey: topPreference.key, topLabel: topPreference.label, score: topPreference.score },
@@ -725,8 +756,8 @@ export default function SoloResults() {
                 >
                   <Sparkles className="w-6 h-6 text-[#2d2000]" />
                 </motion.div>
-                <h2 className="text-xl font-bold text-foreground mb-1" data-testid="text-toast-suggests">Toast suggests</h2>
-                <p className="text-sm text-muted-foreground mb-6">Based on your taste, time & trends</p>
+                <h2 className="text-xl font-bold text-foreground mb-1" data-testid="text-toast-suggests">{t("solo.suggests")}</h2>
+                <p className="text-sm text-muted-foreground mb-6">{t("solo.based_on")}</p>
 
                 {(() => {
                   const timeCtx = getTimeContext();
@@ -737,10 +768,10 @@ export default function SoloResults() {
                         <Clock className="w-3 h-3" /> {timeCtx.label}
                       </span>
                       {dayCtx.isWeekend && (
-                        <span className="text-xs bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400 rounded-full px-3 py-1 font-medium">Weekend vibes</span>
+                        <span className="text-xs bg-amber-50 dark:bg-amber-500/10 text-amber-700 dark:text-amber-400 rounded-full px-3 py-1 font-medium">{t("solo.weekend")}</span>
                       )}
                       {dayCtx.isPayday && (
-                        <span className="text-xs bg-green-50 dark:bg-green-500/10 text-green-700 dark:text-green-400 rounded-full px-3 py-1 font-medium">Treat yourself</span>
+                        <span className="text-xs bg-green-50 dark:bg-green-500/10 text-green-700 dark:text-green-400 rounded-full px-3 py-1 font-medium">{t("solo.payday")}</span>
                       )}
                       {quizAnswers.budget.length > 0 && (
                         <span className="text-xs bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 rounded-full px-3 py-1 font-medium flex items-center gap-1">
@@ -763,7 +794,7 @@ export default function SoloResults() {
                     <div className="w-full aspect-[16/10] overflow-hidden relative">
                       <img src={aiRecommendation.imageUrl} alt={aiRecommendation.name} className="w-full h-full object-cover" />
                       <div className="absolute top-3 left-3 bg-[#FFCC02] text-[#2d2000] text-xs font-bold rounded-full px-3 py-1 flex items-center gap-1" style={{ boxShadow: "0 2px 8px rgba(255,204,2,0.4)" }}>
-                        <Sparkles className="w-3 h-3" /> Toast Pick
+                        <Sparkles className="w-3 h-3" /> {t("solo.toast_pick")}
                       </div>
                     </div>
                     <div className="p-5">
@@ -780,7 +811,7 @@ export default function SoloResults() {
                       </div>
 
                       <div className="mt-4 pt-3 border-t border-gray-100 dark:border-border">
-                        <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-2">Why this pick</p>
+                        <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-2">{t("solo.why_pick")}</p>
                         <p className="text-xs text-muted-foreground leading-relaxed" data-testid="text-recommendation-reason">
                           {(() => {
                             const timeCtx = getTimeContext();
@@ -808,7 +839,7 @@ export default function SoloResults() {
                   className="w-full max-w-sm py-4 rounded-full bg-[#FFCC02] text-[#2d2000] font-bold text-sm mb-3"
                   style={{ boxShadow: "0 6px 20px -4px rgba(255,204,2,0.4)" }}
                 >
-                  Let's go — {aiRecommendation?.name}
+                  {t("solo.lets_go", { name: aiRecommendation?.name ?? "" })}
                 </motion.button>
 
                 <motion.button
@@ -820,7 +851,7 @@ export default function SoloResults() {
                   transition={{ delay: 0.6 }}
                   className="text-sm font-medium text-muted-foreground py-2"
                 >
-                  I'll keep choosing myself
+                  {t("solo.keep_choosing")}
                 </motion.button>
               </motion.div>
             )}

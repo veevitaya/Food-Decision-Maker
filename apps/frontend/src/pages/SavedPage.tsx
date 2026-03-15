@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Heart, MapPin } from "lucide-react";
 import { BottomNav } from "@/components/BottomNav";
 import { useSavedRestaurants } from "@/hooks/use-saved-restaurants";
+import { useLanguage } from "@/i18n/LanguageProvider";
 
 type RestaurantCard = {
   id: number;
@@ -18,6 +19,7 @@ type RestaurantCard = {
 export default function SavedPage() {
   const [, navigate] = useLocation();
   const { data } = useSavedRestaurants();
+  const { t } = useLanguage();
 
   const savedIds = useMemo(() => [...new Set([...data.mine, ...data.partner])], [data.mine, data.partner]);
 
@@ -39,22 +41,24 @@ export default function SavedPage() {
   return (
     <div className="w-full min-h-[100dvh] bg-[hsl(30,20%,97%)] pb-24" data-testid="saved-page">
       <div className="px-6 pt-12 pb-4">
-        <h1 className="text-[26px] font-bold tracking-tight">Saved</h1>
+        <h1 className="text-[26px] font-bold tracking-tight">{t("saved.title")}</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          {savedIds.length} restaurant{savedIds.length !== 1 ? "s" : ""} in your list
+          {savedIds.length === 1
+            ? t("saved.count_one", { count: savedIds.length })
+            : t("saved.count_other", { count: savedIds.length })}
         </p>
       </div>
 
       <div className="px-6 space-y-3">
         {isLoading && (
-          <div className="rounded-2xl bg-white border border-gray-100 p-5 text-sm text-muted-foreground">Loading saved places...</div>
+          <div className="rounded-2xl bg-white border border-gray-100 p-5 text-sm text-muted-foreground">{t("saved.loading")}</div>
         )}
 
         {!isLoading && restaurants.length === 0 && (
           <div className="rounded-2xl bg-white border border-gray-100 p-6 text-center">
             <Heart className="w-8 h-8 mx-auto text-muted-foreground mb-2" />
-            <p className="font-semibold">No saved places yet</p>
-            <p className="text-sm text-muted-foreground mt-1">Tap the heart on any restaurant to save it for later.</p>
+            <p className="font-semibold">{t("saved.empty_title")}</p>
+            <p className="text-sm text-muted-foreground mt-1">{t("saved.empty_desc")}</p>
           </div>
         )}
 

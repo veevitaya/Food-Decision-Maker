@@ -24,9 +24,11 @@ import {
   Lock,
 } from "lucide-react";
 import { tierAtLeast, type OwnerTier } from "@/components/TierGate";
-import toastLogo from "@assets/toast_logo_nobg.png";
 import { useSocketIO } from "@/hooks/useSocketIO";
 import { useToast } from "@/hooks/use-toast";
+import { useLanguage } from "@/i18n/LanguageProvider";
+
+const toastLogo = "/api/uploads/toast_logo_.png";
 
 interface AdminSession {
   sessionType: "admin" | "owner";
@@ -218,6 +220,8 @@ export default function AdminLayout({ children, title }: { children: React.React
     },
   });
 
+  const { t, language, setLanguage } = useLanguage();
+
   if (!session) return null;
 
   const navGroups = isOwner ? ownerNavGroups : adminNavGroups;
@@ -324,14 +328,23 @@ export default function AdminLayout({ children, title }: { children: React.React
               </span>
             </div>
           </div>
-          <button
-            onClick={handleLogout}
-            className="text-[13px] text-gray-400 hover:text-gray-700 transition-colors flex items-center gap-1.5"
-            data-testid="button-logout"
-          >
-            <LogOut className="w-3.5 h-3.5" />
-            Logout
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setLanguage(language === "en" ? "th" : "en")}
+              className="text-[11px] font-bold text-gray-400 hover:text-gray-700 transition-colors border border-gray-200 rounded-full px-2 py-0.5"
+              data-testid="button-lang-toggle"
+            >
+              {t("layout.language")}
+            </button>
+            <button
+              onClick={handleLogout}
+              className="text-[13px] text-gray-400 hover:text-gray-700 transition-colors flex items-center gap-1.5"
+              data-testid="button-logout"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              {t("layout.logout")}
+            </button>
+          </div>
         </div>
       </aside>
 
@@ -366,7 +379,7 @@ export default function AdminLayout({ children, title }: { children: React.React
             <Link href="/">
               <span className="text-[13px] text-gray-400 hover:text-gray-700 transition-colors flex items-center gap-1.5 cursor-pointer" data-testid="link-view-app">
                 <ExternalLink className="w-3.5 h-3.5" />
-                View App
+                {t("layout.view_app")}
               </span>
             </Link>
             <span className="hidden max-md:inline text-[13px] text-gray-500" data-testid="text-admin-username-mobile">
@@ -378,7 +391,7 @@ export default function AdminLayout({ children, title }: { children: React.React
               data-testid="button-logout-mobile"
             >
               <LogOut className="w-3.5 h-3.5" />
-              Logout
+              {t("layout.logout")}
             </button>
           </div>
         </header>

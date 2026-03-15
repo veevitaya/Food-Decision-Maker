@@ -9,14 +9,17 @@ interface UseRestaurantsOptions {
   query?: string;
   forceRefresh?: boolean;
   localOnly?: boolean;
-  sourcePreference?: "osm-first" | "google-first" | "hybrid";
+  enrichMissing?: boolean;
+  enrichLimit?: number;
   limit?: number;
+  enabled?: boolean;
 }
 
 // Fetch restaurants for the swipe deck
 export function useRestaurants(mode?: string, options?: UseRestaurantsOptions) {
   return useQuery({
     queryKey: [api.restaurants.list.path, { mode, ...options }],
+    enabled: options?.enabled !== false,
     queryFn: async () => {
       // Build query string if mode is provided
       const params = new URLSearchParams();
@@ -28,7 +31,8 @@ export function useRestaurants(mode?: string, options?: UseRestaurantsOptions) {
       if (options?.query) params.append("query", options.query);
       if (options?.forceRefresh) params.append("forceRefresh", "true");
       if (options?.localOnly) params.append("localOnly", "true");
-      if (options?.sourcePreference) params.append("sourcePreference", options.sourcePreference);
+      if (options?.enrichMissing) params.append("enrichMissing", "true");
+      if (Number.isFinite(options?.enrichLimit)) params.append("enrichLimit", String(options?.enrichLimit));
 
       const url = `${api.restaurants.list.path}?${params.toString()}`;
       

@@ -407,7 +407,7 @@ export default function AdminCampaigns() {
                     className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
                       form.targetGroups.includes(group)
                         ? "bg-[var(--admin-blue)] text-white"
-                        : "bg-gray-100 text-gray-600"
+                        : "bg-gray-200 text-gray-600"
                     }`}
                     data-testid={`toggle-target-${group}`}
                   >
@@ -650,7 +650,7 @@ export default function AdminCampaigns() {
                     )}
                     {campaign.status === "active" && (
                       <button
-                        className="inline-flex items-center gap-1 border border-gray-100 text-muted-foreground hover:text-foreground hover:bg-gray-50 text-sm font-medium rounded-xl px-4 py-1.5 transition-colors disabled:opacity-50"
+                        className="inline-flex items-center gap-1 border border-gray-200 text-muted-foreground hover:text-foreground hover:bg-gray-50 text-sm font-medium rounded-xl px-4 py-1.5 transition-colors disabled:opacity-50"
                         onClick={() =>
                           updateMutation.mutate({
                             id: campaign.id,
@@ -666,7 +666,7 @@ export default function AdminCampaigns() {
                     )}
                     {campaign.status === "paused" && (
                       <button
-                        className="inline-flex items-center gap-1 border border-gray-100 text-muted-foreground hover:text-foreground hover:bg-gray-50 text-sm font-medium rounded-xl px-4 py-1.5 transition-colors disabled:opacity-50"
+                        className="inline-flex items-center gap-1 border border-gray-200 text-muted-foreground hover:text-foreground hover:bg-gray-50 text-sm font-medium rounded-xl px-4 py-1.5 transition-colors disabled:opacity-50"
                         onClick={() =>
                           updateMutation.mutate({
                             id: campaign.id,
@@ -682,7 +682,7 @@ export default function AdminCampaigns() {
                     )}
                     {(campaign.status === "active" || campaign.status === "paused") && (
                       <button
-                        className="inline-flex items-center gap-1 border border-gray-100 text-muted-foreground hover:text-foreground hover:bg-gray-50 text-sm font-medium rounded-xl px-4 py-1.5 transition-colors disabled:opacity-50"
+                        className="inline-flex items-center gap-1 border border-gray-200 text-muted-foreground hover:text-foreground hover:bg-gray-50 text-sm font-medium rounded-xl px-4 py-1.5 transition-colors disabled:opacity-50"
                         onClick={() =>
                           updateMutation.mutate({
                             id: campaign.id,
@@ -697,7 +697,7 @@ export default function AdminCampaigns() {
                       </button>
                     )}
                     <button
-                      className="inline-flex items-center gap-1 border border-gray-100 text-muted-foreground hover:text-[var(--admin-blue)] hover:bg-blue-50 text-sm font-medium rounded-xl px-4 py-1.5 transition-colors"
+                      className="inline-flex items-center gap-1 border border-gray-200 text-muted-foreground hover:text-[var(--admin-blue)] hover:bg-blue-50 text-sm font-medium rounded-xl px-4 py-1.5 transition-colors"
                       onClick={() => {
                         setNotifMessage(`Hey! Check out our deal: ${campaign.dealValue || campaign.title} 🎉`);
                         setNotifLineIds("");
@@ -785,7 +785,7 @@ export default function AdminCampaigns() {
                       <CheckCircle className="w-4 h-4" /> Approve
                     </button>
                     <button
-                      className="inline-flex items-center gap-1 border border-gray-100 text-muted-foreground hover:text-red-500 hover:bg-red-50 text-sm font-medium rounded-xl px-4 py-1.5 transition-colors disabled:opacity-50"
+                      className="inline-flex items-center gap-1 border border-gray-200 text-muted-foreground hover:text-red-500 hover:bg-red-50 text-sm font-medium rounded-xl px-4 py-1.5 transition-colors disabled:opacity-50"
                       disabled={reviewSponsoredMutation.isPending}
                       onClick={() => reviewSponsoredMutation.mutate({ id: req.id, status: "rejected" })}
                       data-testid={`reject-sponsored-${req.id}`}

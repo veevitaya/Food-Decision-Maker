@@ -88,7 +88,8 @@ export const api = {
         limit: z.coerce.number().int().positive().max(100).optional(),
         localOnly: z.coerce.boolean().optional(),
         forceRefresh: z.coerce.boolean().optional(),
-        sourcePreference: z.enum(["osm-first", "google-first", "hybrid"]).optional().default("osm-first"),
+        enrichMissing: z.coerce.boolean().optional().default(false),
+        enrichLimit: z.coerce.number().int().positive().max(30).optional().default(30),
       }).optional(),
       responses: {
         200: z.array(restaurantListItemSchema),

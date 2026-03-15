@@ -1,13 +1,10 @@
 import type { NormalizedPlace, PlacesQuery, PlacesResult } from "./types.js";
 import * as cache from "./cache/cacheRepo.js";
-import { queryOverpass } from "./providers/overpass.js";
 import { queryGoogle } from "./providers/google.js";
 import { storage } from "../../storage.js";
 import type { Restaurant } from "@shared/schema";
 
-// Read at call-time so env vars can be changed in tests
-const getProviderFallback = () => process.env.PROVIDER_FALLBACK ?? "osm-error-only";
-
+const SEED_FULL_DATA_THRESHOLD = 30;
 
 /** Haversine distance in metres between two coordinates */
 function distanceM(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -37,30 +34,6 @@ function dedupe(places: NormalizedPlace[]): NormalizedPlace[] {
   return seen;
 }
 
-/** Merge OSM + Google results: prefer OSM base data, fill missing fields from Google */
-function merge(osmPlaces: NormalizedPlace[], googlePlaces: NormalizedPlace[]): NormalizedPlace[] {
-  const merged = [...osmPlaces];
-  for (const gp of googlePlaces) {
-    const normName = gp.name.toLowerCase().replace(/[^a-z0-9]/g, "");
-    const match = merged.find(
-      (op) =>
-        op.name.toLowerCase().replace(/[^a-z0-9]/g, "") === normName &&
-        distanceM(op.lat, op.lng, gp.lat, gp.lng) < 100,
-    );
-    if (match) {
-      // Enrich OSM entry with Google data where missing
-      if (!match.rating && gp.rating) match.rating = gp.rating;
-      if (!match.priceLevel && gp.priceLevel) match.priceLevel = gp.priceLevel;
-      if (!match.photos?.length && gp.photos?.length) match.photos = gp.photos;
-      if (!match.phone && gp.phone) match.phone = gp.phone;
-      match.source = "mixed";
-    } else {
-      merged.push(gp);
-    }
-  }
-  return merged;
-}
-
 /** Convert a DB restaurant row to a NormalizedPlace for the cache layer. */
 function restaurantToPlace(r: Restaurant, userLat: number, userLng: number): NormalizedPlace {
   const rLat = Number(r.lat);
@@ -76,13 +49,13 @@ function restaurantToPlace(r: Restaurant, userLat: number, userLng: number): Nor
     priceLevel: r.priceLevel ?? undefined,
     photos: r.imageUrl ? [r.imageUrl] : [],
     phone: r.phone ?? undefined,
-    source: "cache",
+    source: "google",
     distanceMeters: distanceM(userLat, userLng, rLat, rLng),
   };
 }
 
 export async function query(params: PlacesQuery): Promise<PlacesResult> {
-  const { lat, lng, radius = 2000, query: q = "restaurant", forceRefresh, sourcePreference } = params;
+  const { lat, lng, radius = 2000, query: q = "restaurant", forceRefresh } = params;
   const cacheKey = cache.buildKey(lat, lng, radius, q);
 
   // ── L1: In-memory cache ───────────────────────────────────────────────────
@@ -99,101 +72,49 @@ export async function query(params: PlacesQuery): Promise<PlacesResult> {
   }
 
   // ── L2: DB tile cache ─────────────────────────────────────────────────────
-  // Check if this ~1km grid tile has already been fetched from external APIs.
-  // This survives server restarts and prevents duplicate API calls for nearby locations.
+  // Require 30 restaurants with full data (photos + rating + hours).
+  // Once seeded, the area is served from DB forever — zero external API calls.
   if (!forceRefresh) {
     try {
       const tileKey = cache.buildTileKey(lat, lng, radius, q);
-      // A tile that exists is always valid — once fetched, DB data is the source of truth forever.
-      // Use forceRefresh: true to explicitly re-fetch an area from the external APIs.
       const tile = await storage.getPlacesTile(tileKey);
 
       if (tile) {
-        const dbRestaurants = await storage.findRestaurantsNear(lat, lng, radius);
-        if (dbRestaurants.length >= cache.getMinResults()) {
+        const fullCount = await storage.countFullDataRestaurantsNear(lat, lng, radius);
+        if (fullCount >= SEED_FULL_DATA_THRESHOLD) {
+          const dbRestaurants = await storage.findRestaurantsNear(lat, lng, radius);
           const places = dbRestaurants
             .map((r) => restaurantToPlace(r, lat, lng))
             .sort((a, b) => (a.distanceMeters ?? 0) - (b.distanceMeters ?? 0));
 
-          // Warm L1 so the next request within this server lifecycle is instant
           cache.set(cacheKey, places);
           return { data: places, source: "cache", fromCache: true, isFallback: false };
         }
       }
     } catch (err) {
-      // DB unavailable — fall through to external API (graceful degradation)
       console.warn("[placesService] L2 tile check failed, falling through to API:", err);
     }
   }
 
-  // ── L3: External API fetch ────────────────────────────────────────────────
+  // ── L3: Google Places API ─────────────────────────────────────────────────
   return fetchAndCache(params, cacheKey);
 }
 
 async function fetchAndCache(params: PlacesQuery, cacheKey: string): Promise<PlacesResult> {
-  const { lat, lng, radius = 2000, query: q = "restaurant", sourcePreference } = params;
-  const preference = sourcePreference ?? "hybrid";
+  const { lat, lng, radius = 2000, query: q = "restaurant" } = params;
 
-  let osmPlaces: NormalizedPlace[] = [];
-  let googlePlaces: NormalizedPlace[] = [];
-  let isFallback = false;
-
-  const providerFallback = getProviderFallback();
-
-  if (preference === "google-first") {
-    googlePlaces = await queryGoogle(lat, lng, radius);
-    if (googlePlaces.length === 0 && providerFallback !== "none") {
-      try {
-        osmPlaces = await queryOverpass(lat, lng, radius);
-      } catch {
-        osmPlaces = [];
-      }
-    }
-  } else {
-    // osm-first or hybrid (default)
-    try {
-      osmPlaces = await queryOverpass(lat, lng, radius);
-    } catch {
-      osmPlaces = [];
-    }
-
-    const shouldFallback =
-      providerFallback !== "none" &&
-      (osmPlaces.length === 0 || preference === "hybrid");
-
-    if (shouldFallback) {
-      googlePlaces = await queryGoogle(lat, lng, radius);
-      isFallback = osmPlaces.length === 0;
-    }
-  }
-
-  let combined: NormalizedPlace[];
-  let source: PlacesResult["source"];
-
-  if (osmPlaces.length > 0 && googlePlaces.length > 0) {
-    combined = dedupe(merge(osmPlaces, googlePlaces));
-    source = "mixed";
-  } else if (googlePlaces.length > 0) {
-    combined = dedupe(googlePlaces);
-    source = "google";
-  } else {
-    combined = dedupe(osmPlaces);
-    source = "osm";
-  }
-
-  // Sort by distance
+  const googlePlaces = await queryGoogle(lat, lng, radius);
+  const combined = dedupe(googlePlaces);
   combined.sort((a, b) => (a.distanceMeters ?? 0) - (b.distanceMeters ?? 0));
 
-  // Write to L1 memory cache
   cache.set(cacheKey, combined);
 
-  // Write to L2 DB tile tracker (async, non-blocking — don't delay the response)
   const tileKey = cache.buildTileKey(lat, lng, radius, q);
-  storage.upsertPlacesTile(tileKey, combined.length, source).catch((err) => {
+  storage.upsertPlacesTile(tileKey, combined.length, "google").catch((err) => {
     console.warn("[placesService] Failed to write places tile:", err);
   });
 
-  return { data: combined, source, fromCache: false, isFallback };
+  return { data: combined, source: "google", fromCache: false, isFallback: false };
 }
 
 function refreshInBackground(params: PlacesQuery, cacheKey: string): void {

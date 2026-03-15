@@ -2,8 +2,9 @@ import { useState } from "react";
 import { useLocation } from "wouter";
 import { Input } from "@/components/ui/input";
 import { apiRequest } from "@/lib/queryClient";
-import toastLogo from "@assets/toast_logo_nobg.png";
 import { Lock, Mail } from "lucide-react";
+
+const toastLogo = "/api/uploads/toast_logo_.png";
 
 export default function OwnerLogin() {
   const [, setLocation] = useLocation();
@@ -217,4 +218,3 @@ export default function OwnerLogin() {
     </div>
   );
 }
-

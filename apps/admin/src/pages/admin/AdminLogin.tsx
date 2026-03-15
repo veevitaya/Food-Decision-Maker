@@ -2,8 +2,9 @@ import { useState, useRef, useEffect } from "react";
 import { useLocation } from "wouter";
 import { Input } from "@/components/ui/input";
 import { apiRequest } from "@/lib/queryClient";
-import toastLogo from "@assets/toast_logo_nobg.png";
 import { Lock, User, Mail, ArrowLeft, QrCode, Smartphone } from "lucide-react";
+
+const toastLogo = "/api/uploads/toast_logo_.png";
 
 type LoginMode = "admin" | "owner";
 type OwnerLoginMethod = "email" | "line";

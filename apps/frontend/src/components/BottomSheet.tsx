@@ -6,7 +6,7 @@ import { RestaurantRow } from "./RestaurantRow";
 import { useRestaurants, useSuggestions } from "@/hooks/use-restaurants";
 import { useVibeFrequency, type VibeOption } from "@/hooks/use-vibe-frequency";
 import { X } from "lucide-react";
-import toastLogoPath from "@assets/toast_logo_nobg.png";
+const toastLogoPath = "/api/uploads/toast_logo_.png";
 
 interface SearchResult {
   id: number;

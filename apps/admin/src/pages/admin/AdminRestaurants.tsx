@@ -45,7 +45,11 @@ import {
   Sparkles,
   Loader2,
   ImagePlus,
+  Map,
+  Wand2,
+  RefreshCw,
 } from "lucide-react";
+import { AdminImportMap, type GoogleImportParams } from "@/components/AdminImportMap";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Restaurant as BaseRestaurant, RestaurantOwner, RestaurantClaim, RestaurantOpeningHour } from "@shared/schema";
 import { VIBE_TAGS, VIBE_LABELS, VIBE_EMOJI, BANGKOK_DISTRICTS } from "@shared/vibeConfig";
@@ -73,15 +77,7 @@ type EnrichedClaim = RestaurantClaim & {
   restaurantImageUrl: string;
 };
 
-type TabMode = "restaurants" | "claims";
-
-type OsmImportResult = {
-  ok: boolean;
-  fetched: number;
-  saved: number;
-  failed: number;
-  results: { name: string; id: number; enriched: boolean }[];
-};
+type TabMode = "restaurants" | "claims" | "map";
 
 type AutoAssignPreviewItem = {
   id: number;
@@ -154,27 +150,36 @@ export default function AdminRestaurants() {
   const [deleteTarget, setDeleteTarget] = useState<Restaurant | null>(null);
   const [expandedRow, setExpandedRow] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<TabMode>("restaurants");
-  const [osmModalOpen, setOsmModalOpen] = useState(false);
-  const [osmLat, setOsmLat] = useState("13.7563");
-  const [osmLng, setOsmLng] = useState("100.5018");
-  const [osmRadius, setOsmRadius] = useState("2000");
-  const [osmEnrich, setOsmEnrich] = useState(true);
-  const [osmResult, setOsmResult] = useState<OsmImportResult | null>(null);
+  const [googleMapResult, setGoogleMapResult] = useState<{ processed: number; saved: number; failed: number } | null>(null);
+  const [enrichingId, setEnrichingId] = useState<number | null>(null);
+  const [enrichResult, setEnrichResult] = useState<{ id: number; photos: number; hasPhone: boolean; hasHours: boolean; cost: number } | null>(null);
+  const [bulkEnrichResult, setBulkEnrichResult] = useState<{ done: number; failed: number; totalCost: number } | null>(null);
   const [autoAssignPreviewOpen, setAutoAssignPreviewOpen] = useState(false);
   const [autoAssignPreview, setAutoAssignPreview] = useState<AutoAssignPreviewResponse | null>(null);
 
-  const osmImportMutation = useMutation({
-    mutationFn: () =>
-      apiRequest("POST", "/api/admin/restaurants/import/osm", {
-        lat: parseFloat(osmLat),
-        lng: parseFloat(osmLng),
-        radius: parseInt(osmRadius, 10),
-        enrichWithGoogle: osmEnrich,
-      }),
+  const googleMapImportMutation = useMutation({
+    mutationFn: (params: GoogleImportParams) =>
+      apiRequest("POST", "/api/admin/restaurants/import/google", params),
     onSuccess: async (data) => {
-      const json = await data.json() as OsmImportResult;
-      setOsmResult(json);
+      const json = await data.json() as { ok: boolean; run: { summary: { fetched: number; processed: number; saved: number; failed: number } } };
+      setGoogleMapResult({
+        processed: json.run?.summary?.processed ?? 0,
+        saved: json.run?.summary?.saved ?? 0,
+        failed: json.run?.summary?.failed ?? 0,
+      });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/restaurants"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/restaurants/all"] });
+    },
+  });
+
+  const [fixImagesResult, setFixImagesResult] = useState<{ done: number; failed: number; totalCost: number } | null>(null);
+  const fixImagesMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/admin/restaurants/enrich-batch", { onlyMissingImages: true, limit: 500 }),
+    onSuccess: async (data) => {
+      const json = await data.json() as { done: number; failed: number; totalCost: number };
+      setFixImagesResult({ done: json.done ?? 0, failed: json.failed ?? 0, totalCost: json.totalCost ?? 0 });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/restaurants"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/restaurants/all"] });
     },
   });
 
@@ -182,6 +187,30 @@ export default function AdminRestaurants() {
     mutationFn: () => apiRequest("POST", "/api/admin/restaurants/re-enrich-images", { limit: 100 }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/restaurants"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/restaurants/all"] });
+    },
+  });
+
+  const enrichOneMutation = useMutation({
+    mutationFn: (id: number) => apiRequest("POST", `/api/admin/restaurants/${id}/enrich`),
+    onMutate: (id) => setEnrichingId(id),
+    onSuccess: async (data) => {
+      const json = await data.json() as { ok: boolean; photos: string[]; hasPhone: boolean; hasHours: boolean; cost: number; restaurant: { id: number } };
+      setEnrichResult({ id: json.restaurant?.id, photos: json.photos?.length ?? 0, hasPhone: json.hasPhone, hasHours: json.hasHours, cost: json.cost });
+      setEnrichingId(null);
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/restaurants"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/restaurants/all"] });
+    },
+    onError: () => setEnrichingId(null),
+  });
+
+  const bulkEnrichMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/admin/restaurants/enrich-batch", { limit: 500 }),
+    onSuccess: async (data) => {
+      const json = await data.json() as { done: number; failed: number; totalCost: number };
+      setBulkEnrichResult({ done: json.done, failed: json.failed, totalCost: json.totalCost });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/restaurants"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/restaurants/all"] });
     },
   });
 
@@ -189,6 +218,14 @@ export default function AdminRestaurants() {
     queryKey: ["/api/admin/restaurants"],
   });
   const restaurants = restaurantsData?.items ?? [];
+
+  // All restaurants for map view (unpaginated)
+  const { data: allRestaurantsData } = useQuery<{ items: Restaurant[] }>({
+    queryKey: ["/api/admin/restaurants/all"],
+    queryFn: () => fetch("/api/admin/restaurants?all=true", { credentials: "include" }).then((r) => r.json()),
+    enabled: activeTab === "map",
+    staleTime: 60_000,
+  });
 
   const { data: owners = [] } = useQuery<RestaurantOwner[]>({
     queryKey: ["/api/admin/owners"],
@@ -323,6 +360,18 @@ export default function AdminRestaurants() {
                 </span>
               )}
             </button>
+            <button
+              onClick={() => setActiveTab("map")}
+              className={`text-sm font-medium px-3 py-1.5 rounded-lg transition-colors inline-flex items-center gap-1.5 ${
+                activeTab === "map"
+                  ? "bg-foreground text-white"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+              data-testid="tab-map"
+            >
+              <Map className="w-3.5 h-3.5" />
+              Map
+            </button>
           </div>
         </div>
         {activeTab === "restaurants" && (
@@ -362,14 +411,6 @@ export default function AdminRestaurants() {
               {previewAutoAssignMutation.isPending ? "Analyzing..." : "Preview Auto-Assign"}
             </button>
             <button
-              onClick={() => { setOsmModalOpen(true); setOsmResult(null); }}
-              data-testid="button-import-osm"
-              className="inline-flex items-center gap-1.5 bg-blue-50 border border-blue-200 text-blue-700 rounded-xl px-5 py-2 text-sm font-medium transition-colors hover:bg-blue-100"
-            >
-              <MapPin className="w-4 h-4" />
-              Import OSM
-            </button>
-            <button
               onClick={() => reEnrichMutation.mutate()}
               disabled={reEnrichMutation.isPending}
               data-testid="button-re-enrich-images"
@@ -378,58 +419,23 @@ export default function AdminRestaurants() {
               {reEnrichMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Star className="w-4 h-4" />}
               {reEnrichMutation.isPending ? "Fetching..." : "Fix Images"}
             </button>
+            <button
+              onClick={() => { setBulkEnrichResult(null); bulkEnrichMutation.mutate(); }}
+              disabled={bulkEnrichMutation.isPending}
+              data-testid="button-bulk-enrich"
+              className="inline-flex items-center gap-1.5 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-xl px-5 py-2 text-sm font-medium transition-colors hover:bg-emerald-100 disabled:opacity-50"
+            >
+              {bulkEnrichMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
+              {bulkEnrichMutation.isPending ? "Enriching..." : "Bulk Enrich"}
+            </button>
+            {bulkEnrichResult && (
+              <span className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2">
+                ✓ {bulkEnrichResult.done} enriched · {bulkEnrichResult.failed} failed · ${bulkEnrichResult.totalCost.toFixed(3)}
+              </span>
+            )}
           </div>
         )}
       </div>
-
-      {osmModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setOsmModalOpen(false)}>
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between">
-              <h2 className="text-base font-semibold">Import from OpenStreetMap</h2>
-              <button onClick={() => setOsmModalOpen(false)} className="text-muted-foreground hover:text-foreground">
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <Label className="text-xs">Latitude</Label>
-                <Input value={osmLat} onChange={(e) => setOsmLat(e.target.value)} placeholder="13.7563" className="rounded-xl border-gray-100" />
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs">Longitude</Label>
-                <Input value={osmLng} onChange={(e) => setOsmLng(e.target.value)} placeholder="100.5018" className="rounded-xl border-gray-100" />
-              </div>
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Radius (meters)</Label>
-              <Input value={osmRadius} onChange={(e) => setOsmRadius(e.target.value)} placeholder="2000" className="rounded-xl border-gray-100" />
-            </div>
-            <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
-              <input type="checkbox" checked={osmEnrich} onChange={(e) => setOsmEnrich(e.target.checked)} className="rounded" />
-              Enrich with Google Places (rating, photos, price)
-            </label>
-            {osmResult && (
-              <div className="rounded-xl bg-green-50 border border-green-200 px-4 py-3 text-sm space-y-1">
-                <p className="font-medium text-green-800">Import complete</p>
-                <p className="text-green-700">Fetched: {osmResult.fetched} · Saved: {osmResult.saved} · Failed: {osmResult.failed}</p>
-                <p className="text-green-600 text-xs">Enriched with Google: {osmResult.results.filter((r) => r.enriched).length}</p>
-              </div>
-            )}
-            {osmImportMutation.isError && (
-              <p className="text-sm text-red-600">Import failed. Check that lat/lng/radius are valid.</p>
-            )}
-            <Button
-              onClick={() => osmImportMutation.mutate()}
-              disabled={osmImportMutation.isPending}
-              className="w-full rounded-xl"
-            >
-              {osmImportMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-              {osmImportMutation.isPending ? "Importing..." : "Start Import"}
-            </Button>
-          </div>
-        </div>
-      )}
 
       {autoAssignPreviewOpen && autoAssignPreview && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setAutoAssignPreviewOpen(false)}>
@@ -679,12 +685,30 @@ export default function AdminRestaurants() {
                               <Button
                                 size="icon"
                                 variant="ghost"
+                                title="Enrich with Google (photos, phone, hours)"
+                                disabled={enrichingId === r.id}
+                                onClick={() => { setEnrichResult(null); enrichOneMutation.mutate(r.id); }}
+                                data-testid={`button-enrich-restaurant-${r.id}`}
+                              >
+                                {enrichingId === r.id
+                                  ? <Loader2 className="w-4 h-4 animate-spin text-emerald-500" />
+                                  : <Wand2 className={`w-4 h-4 ${enrichResult?.id === r.id ? "text-emerald-500" : "text-muted-foreground"}`} />
+                                }
+                              </Button>
+                              <Button
+                                size="icon"
+                                variant="ghost"
                                 onClick={() => setDeleteTarget(r)}
                                 data-testid={`button-delete-restaurant-${r.id}`}
                               >
                                 <Trash2 className="w-4 h-4 text-red-400" />
                               </Button>
                             </div>
+                            {enrichResult?.id === r.id && (
+                              <p className="text-[10px] text-emerald-600 mt-0.5 whitespace-nowrap">
+                                {enrichResult.photos}📷 {enrichResult.hasPhone ? "📞" : ""}{enrichResult.hasHours ? "🕐" : ""} ${enrichResult.cost.toFixed(3)}
+                              </p>
+                            )}
                           </td>
                         </tr>
                         {isExpanded && (
@@ -702,8 +726,19 @@ export default function AdminRestaurants() {
             </table>
           </div>
         </div>
-      ) : (
+      ) : activeTab === "claims" ? (
         <ClaimsQueue claims={claims} onReview={reviewClaimMutation} />
+      ) : (
+        <AdminImportMap
+          restaurants={allRestaurantsData?.items ?? []}
+          onGoogleImport={(p: GoogleImportParams) => googleMapImportMutation.mutate(p)}
+          importing={googleMapImportMutation.isPending}
+          importResult={googleMapResult ? { source: "google" as const, data: googleMapResult } : null}
+          onFixImages={() => fixImagesMutation.mutate()}
+          fixingImages={fixImagesMutation.isPending}
+          fixImagesResult={fixImagesResult}
+          onEdit={(r) => { setIsNewMode(false); setEditingRestaurant(r); }}
+        />
       )}
 
       {editingRestaurant && (
@@ -712,6 +747,7 @@ export default function AdminRestaurants() {
           isNew={isNewMode}
           owners={owners}
           claims={claims}
+          side={activeTab === "map" ? "left" : "right"}
           onClose={() => {
             setEditingRestaurant(null);
             setIsNewMode(false);
@@ -955,12 +991,14 @@ function EditPanel({
   isNew,
   owners,
   claims,
+  side = "right",
   onClose,
 }: {
   restaurant: Restaurant;
   isNew: boolean;
   owners: RestaurantOwner[];
   claims: EnrichedClaim[];
+  side?: "left" | "right";
   onClose: () => void;
 }) {
   const [form, setForm] = useState({ ...restaurant });
@@ -1113,12 +1151,12 @@ function EditPanel({
 
   return (
     <div
-      className="fixed inset-y-0 right-0 z-50 flex"
+      className={`fixed inset-y-0 z-50 flex ${side === "left" ? "left-0" : "right-0"}`}
       data-testid="panel-edit-restaurant"
     >
       <div className="fixed inset-0 bg-black/20" onClick={onClose} />
-      <div className="relative ml-auto w-[460px] h-full bg-white rounded-l-2xl shadow-xl overflow-y-auto">
-        <div className="h-1 rounded-tl-2xl" style={{ backgroundColor: "var(--admin-blue)" }} />
+      <div className={`relative w-[460px] h-full bg-white shadow-xl overflow-y-auto ${side === "left" ? "mr-auto rounded-r-2xl" : "ml-auto rounded-l-2xl"}`}>
+        <div className={`h-1 ${side === "left" ? "rounded-tr-2xl" : "rounded-tl-2xl"}`} style={{ backgroundColor: "var(--admin-blue)" }} />
         <div className="sticky top-0 z-10 bg-white border-b border-gray-100">
           <div className="flex items-center justify-between gap-4 px-6 py-4">
             <h2 className="font-semibold text-foreground text-[15px]" data-testid="text-panel-title">
@@ -1173,7 +1211,8 @@ function EditPanel({
                     <Input
                       value={form.imageUrl}
                       onChange={(e) => update("imageUrl", e.target.value)}
-                      className="rounded-xl border-gray-100 focus-visible:ring-foreground/20"
+                      placeholder="Paste image URL here..."
+                      className="rounded-xl border-gray-200 focus-visible:ring-foreground/20"
                       data-testid="input-edit-imageUrl"
                     />
                     <input

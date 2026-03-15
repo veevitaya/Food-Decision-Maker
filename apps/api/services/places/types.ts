@@ -9,7 +9,7 @@ export interface NormalizedPlace {
   priceLevel?: number;
   photos?: string[];
   phone?: string;
-  source: "osm" | "google" | "cache" | "mixed";
+  source: "google" | "cache";
   distanceMeters?: number;
   freshnessScore?: number;
   isFallback?: boolean;
@@ -22,12 +22,11 @@ export interface PlacesQuery {
   query?: string;
   mode?: string;
   forceRefresh?: boolean;
-  sourcePreference?: "osm-first" | "google-first" | "hybrid";
 }
 
 export interface PlacesResult {
   data: NormalizedPlace[];
-  source: "osm" | "google" | "cache" | "mixed";
+  source: "google" | "cache";
   fromCache: boolean;
   isFallback: boolean;
 }

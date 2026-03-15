@@ -36,7 +36,7 @@ export function useBranding() {
     heroTitle: data.uiConfig?.heroTitle || DEFAULTS.uiConfig.heroTitle,
     heroSubtitle: data.uiConfig?.heroSubtitle || DEFAULTS.uiConfig.heroSubtitle,
     mascotGreeting: data.uiConfig?.mascotGreeting || DEFAULTS.uiConfig.mascotGreeting,
-    logoUrl: data.imageUrls?.logo || "",
+    logoUrl: data.imageUrls?.logo || "/api/uploads/toast_logo_.png",
     mascotUrl: data.imageUrls?.mascot || "",
     imageUrls: data.imageUrls || {},
   };

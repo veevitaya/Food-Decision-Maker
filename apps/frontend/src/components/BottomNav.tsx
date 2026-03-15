@@ -3,6 +3,7 @@ import { useLocation } from "wouter";
 import { Search, Flame, User, ArrowLeft, Heart } from "lucide-react";
 import { useFeatureFlags } from "@/hooks/use-feature-flags";
 import { useBranding } from "@/hooks/use-branding";
+import { useLanguage } from "@/i18n/LanguageProvider";
 
 interface BottomNavProps {
   showBack?: boolean;
@@ -34,7 +35,8 @@ export function BottomNav({ showBack = true, onBack, hidden = false }: BottomNav
   const [location, navigate] = useLocation();
   const activeTab = getActiveTab(location);
   const { isEnabled } = useFeatureFlags();
-  const { accentColor, bottomNavLabels } = useBranding();
+  const { accentColor } = useBranding();
+  const { t } = useLanguage();
   const visibleTabs = tabs.filter((t) => t.key !== "swipe" || isEnabled("swipe_mode"));
 
   const isHidden = hidden;
@@ -50,10 +52,10 @@ export function BottomNav({ showBack = true, onBack, hidden = false }: BottomNav
   };
 
   const labelFor = (key: TabKey) => {
-    if (key === "explore") return bottomNavLabels.explore;
-    if (key === "swipe") return bottomNavLabels.swipe;
-    if (key === "saved") return "Saved";
-    return bottomNavLabels.profile;
+    if (key === "explore") return t("nav.explore");
+    if (key === "swipe") return t("nav.swipe");
+    if (key === "saved") return t("nav.saved");
+    return t("nav.profile");
   };
 
   return (
@@ -73,7 +75,7 @@ export function BottomNav({ showBack = true, onBack, hidden = false }: BottomNav
             data-testid="button-back"
           >
             <ArrowLeft className="w-[22px] h-[22px]" strokeWidth={1.5} />
-            <span className="text-[10px] font-medium leading-tight">Back</span>
+            <span className="text-[10px] font-medium leading-tight">{t("nav.back")}</span>
           </button>
         )}
         {visibleTabs.map((tab) => {

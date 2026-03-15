@@ -22,6 +22,7 @@ import {
   ArrowDownRight,
   ChevronRight,
   Flame,
+  AlertTriangle,
 } from "lucide-react";
 
 interface DashboardData {
@@ -243,7 +244,7 @@ function RadialArc({ value, max, color, size = 44 }: { value: number; max: numbe
 }
 
 export default function AdminDashboard() {
-  const { data: dashboard, isLoading: dashLoading } = useQuery<DashboardData>({
+  const { data: dashboard, isLoading: dashLoading, error: dashboardError } = useQuery<DashboardData>({
     queryKey: ["/api/admin/dashboard"],
   });
 
@@ -404,9 +405,18 @@ export default function AdminDashboard() {
   ];
 
   const maxBarCount = Math.max(...last7Days.map((d) => d.count), 1);
+  const hasDashboardError = Boolean(dashboardError);
 
   return (
     <div className="space-y-6 bg-[#F8F8F8] min-h-full p-1" data-testid="admin-dashboard-page">
+      {hasDashboardError && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-amber-900 flex items-start gap-2">
+          <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+          <p className="text-xs">
+            Dashboard API unavailable. KPI cards are showing fallback zeros. Check `/api/admin/dashboard` response in Network tab and API logs.
+          </p>
+        </div>
+      )}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3" data-testid="kpi-grid">
         {kpis.map((kpi) => (
           <div

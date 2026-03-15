@@ -7,7 +7,6 @@ import { useLineProfile } from "@/hooks/use-line-profile";
 import { sendInvite } from "@/lib/liff";
 import { trackEvent } from "@/lib/analytics";
 import { BottomNav } from "@/components/BottomNav";
-import { MOCK_HOME_CAMPAIGNS, MOCK_RESTAURANT_CAMPAIGNS, getDealLabel as getCampaignDealLabel } from "@/components/CampaignBanner";
 import { Share2 } from "lucide-react";
 import drunkToastImg from "@assets/drunk_toast_nobg.png";
 
@@ -100,19 +99,6 @@ interface PersonalizedResponse {
   experimentKey: string;
   items: PersonalizedItem[];
 }
-
-const RESTAURANT_SWIPE_CARDS: RestaurantCard[] = [
-  { id: 201, name: "Thipsamai", category: "🇹🇭 Thai · Street food", tags: ["🍜 Pad Thai", "🔥 Famous", "📸 Iconic"], description: "The legendary Pad Thai since 1966. Their signature wrapped-in-egg version is unbeatable.", imageUrl: "https://images.unsplash.com/photo-1559314809-0d155014e29e?w=600&auto=format&fit=crop&q=60", priceLevel: 1, rating: "4.9", address: "Maha Chai Rd", isNew: false, matchChance: 0 },
-  { id: 244, name: "Jay Fai", category: "🇹🇭 Thai · Michelin", tags: ["⭐ Michelin", "🦀 Crab", "🔥 Legendary"], description: "Michelin-starred street food legend. Exquisite dishes from her legendary wok.", imageUrl: "https://images.unsplash.com/photo-1569562211093-4ed0d0758f12?w=600&auto=format&fit=crop&q=60", priceLevel: 3, rating: "4.9", address: "Maha Chai Rd", isNew: false, matchChance: 0 },
-  { id: 231, name: "Peppina", category: "🍕 Italian · Pizza", tags: ["🍕 Neapolitan", "🔥 Wood-fired", "🇮🇹 Authentic"], description: "Neapolitan pizza with San Marzano tomatoes, fired at 485°C for 90 seconds.", imageUrl: "https://images.unsplash.com/photo-1513104890138-7c749659a591?w=600&auto=format&fit=crop&q=60", priceLevel: 3, rating: "4.8", address: "Sukhumvit 33", isNew: false, matchChance: 0.5 },
-  { id: 251, name: "Sushi Masato", category: "🇯🇵 Japanese · Omakase", tags: ["🍣 Sushi", "✨ Premium", "🎌 8-seat"], description: "Intimate 8-seat counter with fish flown directly from Tsukiji market.", imageUrl: "https://images.unsplash.com/photo-1579871494447-9811cf80d66c?w=600&auto=format&fit=crop&q=60", priceLevel: 4, rating: "4.9", address: "Thonglor 13", isNew: false, matchChance: 0.7 },
-  { id: 222, name: "Bankara Ramen", category: "🇯🇵 Japanese · Ramen", tags: ["🍜 Tonkotsu", "🍖 Rich", "🔥 Hot"], description: "Rich 18-hour pork bone broth with secret back-fat topping.", imageUrl: "https://images.unsplash.com/photo-1557872943-16a5ac26437e?w=600&auto=format&fit=crop&q=60", priceLevel: 2, rating: "4.7", address: "Thonglor", isNew: false, matchChance: 0 },
-  { id: 261, name: "Daniel Thaiger", category: "🍔 American · Burger", tags: ["🍔 Smash", "🚚 Food truck", "🤤 Juicy"], description: "Bangkok's OG food truck burger. Dry-aged Aussie beef with secret tiger sauce.", imageUrl: "https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=600&auto=format&fit=crop&q=60", priceLevel: 2, rating: "4.5", address: "Sukhumvit 36", isNew: false, matchChance: 0 },
-  { id: 373, name: "Gaggan Anand", category: "🇮🇳 Indian · Fine dining", tags: ["✨ Asia's Best", "🍽️ 25 courses", "🌟 Progressive"], description: "Progressive Indian cuisine by the legendary Chef Gaggan. Asia's Best Restaurant.", imageUrl: "https://images.unsplash.com/photo-1414235077428-338989a2e8c0?w=600&auto=format&fit=crop&q=60", priceLevel: 4, rating: "4.9", address: "Langsuan", isNew: false, matchChance: 1.0 },
-  { id: 241, name: "Krua Apsorn", category: "🇹🇭 Thai · Royal", tags: ["👑 Royal recipe", "⭐ Bib Gourmand", "🌶️ Curry"], description: "Royal recipe green curry, awarded Michelin Bib Gourmand.", imageUrl: "https://images.unsplash.com/photo-1455619452474-d2be8b1e70cd?w=600&auto=format&fit=crop&q=60", priceLevel: 1, rating: "4.8", address: "Samsen Rd", isNew: false, matchChance: 0 },
-  { id: 212, name: "Mongkol Korean", category: "🇰🇷 Korean · BBQ", tags: ["🥩 Wagyu", "🔥 Premium", "🍖 BBQ"], description: "Premium Korean cuts with authentic banchan spread. Wagyu-grade from Korean farms.", imageUrl: "https://images.unsplash.com/photo-1583224964978-2257b960c3d3?w=600&auto=format&fit=crop&q=60", priceLevel: 3, rating: "4.6", address: "Sukhumvit 24", isNew: true, matchChance: 0.3 },
-  { id: 341, name: "P'Aor Tom Yum", category: "🇹🇭 Thai · Soup", tags: ["🦐 Prawns", "🌶️ Spicy", "🔥 Cult"], description: "Legendary creamy tom yum goong with massive river prawns.", imageUrl: "https://images.unsplash.com/photo-1548943487-a2e4e43b4853?w=600&auto=format&fit=crop&q=60", priceLevel: 2, rating: "4.9", address: "Phetchaburi Rd", isNew: false, matchChance: 0.8 },
-];
 
 function makeDealTag(dealType: string, dealValue: string): string {
   if (dealType === "percentage") return `💰 ${dealValue}% off`;
@@ -479,15 +465,6 @@ function RestaurantSwipeCard({
               New
             </div>
           )}
-          {MOCK_RESTAURANT_CAMPAIGNS[item.id] && (
-            <div className="bg-gradient-to-r from-amber-400 to-orange-400 backdrop-blur-sm rounded-full px-3 py-1.5 text-[10px] font-bold uppercase tracking-wide text-white flex items-center gap-1.5 deal-badge-glow"
-              style={{ boxShadow: "0 2px 12px rgba(251,191,36,0.4)" }}
-              data-testid={`badge-deal-${item.id}`}
-            >
-              <span className="text-xs animate-deal-bounce inline-block">🏷️</span>
-              {getCampaignDealLabel(MOCK_RESTAURANT_CAMPAIGNS[item.id][0].dealType, MOCK_RESTAURANT_CAMPAIGNS[item.id][0].dealValue)}
-            </div>
-          )}
         </div>
       </div>
 
@@ -578,7 +555,7 @@ export default function SwipePage() {
     retry: false,
   });
 
-  const campaignSource = (apiCampaigns && apiCampaigns.length > 0) ? apiCampaigns : MOCK_HOME_CAMPAIGNS;
+  const campaignSource = apiCampaigns ?? [];
   const campaignCardIds = campaignSource.map((c) => c.id);
   const campaignSwipeCards: RestaurantCard[] = campaignSource.map((c, idx) => ({
     id: idx,
@@ -586,7 +563,7 @@ export default function SwipePage() {
     category: `🏷️ ${c.title}`,
     tags: [makeDealTag(c.dealType, c.dealValue), "🏷️ Limited time", "⭐ Verified deal"],
     description: c.description,
-    imageUrl: c.restaurantImage || MOCK_HOME_CAMPAIGNS[idx % MOCK_HOME_CAMPAIGNS.length]?.restaurantImage || "",
+    imageUrl: c.restaurantImage || "",
     priceLevel: 2,
     rating: "4.7",
     address: "Bangkok",
@@ -618,7 +595,7 @@ export default function SwipePage() {
       ? campaignSwipeCards
       : personalizedCards.length > 0
       ? personalizedCards
-      : RESTAURANT_SWIPE_CARDS;
+      : [];
   const items = isRestaurantMode ? restaurantItems : menuItems;
 
   useEffect(() => {

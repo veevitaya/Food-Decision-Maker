@@ -17,7 +17,6 @@ CREATE TABLE IF NOT EXISTS "restaurants" (
   "phone" text,
   "opening_hours" jsonb,
   "reviews" jsonb,
-  "review_replies" jsonb,
   "is_sponsored" boolean NOT NULL DEFAULT false,
   "sponsored_until" text,
   "vibes" text[] DEFAULT '{}'::text[],
@@ -25,7 +24,8 @@ CREATE TABLE IF NOT EXISTS "restaurants" (
   "photos" text[] DEFAULT '{}'::text[],
   "google_place_id" text,
   "osm_id" text,
-  "review_count" integer NOT NULL DEFAULT 0
+  "review_count" integer NOT NULL DEFAULT 0,
+  "review_replies" jsonb
 );
 
 CREATE TABLE IF NOT EXISTS "restaurant_owners" (
@@ -64,6 +64,12 @@ END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS "restaurant_owners_email_unique" ON "restaurant_owners" USING btree ("email");
 CREATE INDEX IF NOT EXISTS "restaurant_owners_restaurant_id_idx" ON "restaurant_owners" USING btree ("restaurant_id");
 CREATE INDEX IF NOT EXISTS "restaurant_owners_email_idx" ON "restaurant_owners" USING btree ("email");
+
+-- Ensure optional restaurant source columns exist before index creation on older DBs
+ALTER TABLE "restaurants" ADD COLUMN IF NOT EXISTS "google_place_id" text;
+ALTER TABLE "restaurants" ADD COLUMN IF NOT EXISTS "osm_id" text;
+ALTER TABLE "restaurants" ADD COLUMN IF NOT EXISTS "review_count" integer NOT NULL DEFAULT 0;
+ALTER TABLE "restaurants" ADD COLUMN IF NOT EXISTS "review_replies" jsonb;
 
 CREATE TABLE IF NOT EXISTS "campaigns" (
   "id" serial PRIMARY KEY NOT NULL,

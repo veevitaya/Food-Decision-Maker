@@ -40,8 +40,9 @@ import {
   TrendingUp,
 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
-import toastLogo from "@assets/toast_logo_nobg.png";
 import mascotImg from "@assets/image_1772011321697.png";
+
+const toastLogo = "/api/uploads/toast_logo_.png";
 
 type FeatureToggle = {
   id: string;

@@ -7,6 +7,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { useEffect } from "react";
 import { useBranding } from "@/hooks/use-branding";
 import { useLineProfile } from "@/hooks/use-line-profile";
+import { LanguageProvider, useLanguage } from "@/i18n/LanguageProvider";
 import { AnimatePresence, motion } from "framer-motion";
 import NotFound from "@/pages/not-found";
 import Home from "@/pages/Home";
@@ -64,12 +65,14 @@ function RequireLiffLogin({ children }: { children: React.ReactNode }) {
     login();
   }, [liffAvailable, liffReady, loading, loggedIn, profile?.userId, login]);
 
+  const { t } = useLanguage();
+
   if (!liffAvailable) {
     return (
       <div className="w-full h-[100dvh] flex items-center justify-center px-6 text-center">
         <div>
-          <p className="text-base font-semibold text-foreground">LINE login unavailable</p>
-          <p className="text-sm text-muted-foreground mt-1">Set `VITE_LIFF_ID` to enable personalized routes.</p>
+          <p className="text-base font-semibold text-foreground">{t("auth.line_unavailable")}</p>
+          <p className="text-sm text-muted-foreground mt-1">{t("auth.set_liff_id")}</p>
         </div>
       </div>
     );
@@ -79,8 +82,8 @@ function RequireLiffLogin({ children }: { children: React.ReactNode }) {
     return (
       <div className="w-full h-[100dvh] flex items-center justify-center px-6 text-center">
         <div>
-          <p className="text-base font-semibold text-foreground">Redirecting to LINE login...</p>
-          <p className="text-sm text-muted-foreground mt-1">Authentication is required for personalized experience.</p>
+          <p className="text-base font-semibold text-foreground">{t("auth.redirecting")}</p>
+          <p className="text-sm text-muted-foreground mt-1">{t("auth.required")}</p>
         </div>
       </div>
     );
@@ -174,11 +177,13 @@ function App() {
   return (
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
-        <TooltipProvider>
-          <BrandingApplier />
-          <Toaster />
-          <Router />
-        </TooltipProvider>
+        <LanguageProvider>
+          <TooltipProvider>
+            <BrandingApplier />
+            <Toaster />
+            <Router />
+          </TooltipProvider>
+        </LanguageProvider>
       </QueryClientProvider>
     </ErrorBoundary>
   );

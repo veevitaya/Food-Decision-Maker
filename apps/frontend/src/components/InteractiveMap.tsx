@@ -19,12 +19,14 @@ interface InteractiveMapProps {
   selectedPinId: number | null;
   onPinSelect: (id: number) => void;
   filteredCategory: string | null;
+  activeLocation?: { lat: number; lng: number } | null;
 }
 
-export function InteractiveMap({ pins, center, zoom = 13, selectedPinId, onPinSelect, filteredCategory }: InteractiveMapProps) {
+export function InteractiveMap({ pins, center, zoom = 13, selectedPinId, onPinSelect, filteredCategory, activeLocation = null }: InteractiveMapProps) {
   const mapRef = useRef<HTMLDivElement>(null);
   const leafletMap = useRef<L.Map | null>(null);
   const markersRef = useRef<Map<number, L.Marker>>(new Map());
+  const activeLocationMarkerRef = useRef<L.Marker | null>(null);
   const onPinSelectRef = useRef(onPinSelect);
   onPinSelectRef.current = onPinSelect;
 
@@ -51,6 +53,7 @@ export function InteractiveMap({ pins, center, zoom = 13, selectedPinId, onPinSe
       map.remove();
       leafletMap.current = null;
       markersRef.current.clear();
+      activeLocationMarkerRef.current = null;
     };
   }, []);
 
@@ -109,6 +112,38 @@ export function InteractiveMap({ pins, center, zoom = 13, selectedPinId, onPinSe
       markersRef.current.set(pin.id, marker);
     });
   }, [pins, selectedPinId, filteredCategory]);
+
+  useEffect(() => {
+    const map = leafletMap.current;
+    if (!map) return;
+
+    if (!activeLocation) {
+      if (activeLocationMarkerRef.current) {
+        activeLocationMarkerRef.current.remove();
+        activeLocationMarkerRef.current = null;
+      }
+      return;
+    }
+
+    const latlng: L.LatLngExpression = [activeLocation.lat, activeLocation.lng];
+    const icon = L.divIcon({
+      html: `
+        <div class="active-location-pin" data-testid="map-active-location">
+          <span class="active-location-pulse"></span>
+          <span class="active-location-core"></span>
+        </div>
+      `,
+      className: "active-location-icon",
+      iconSize: [36, 36],
+      iconAnchor: [18, 18],
+    });
+
+    if (!activeLocationMarkerRef.current) {
+      activeLocationMarkerRef.current = L.marker(latlng, { icon }).addTo(map);
+    } else {
+      activeLocationMarkerRef.current.setLatLng(latlng);
+    }
+  }, [activeLocation]);
 
   return (
     <>
@@ -181,6 +216,39 @@ export function InteractiveMap({ pins, center, zoom = 13, selectedPinId, onPinSe
         }
         .leaflet-tile {
           filter: saturate(1.1) contrast(0.94) brightness(1.02) hue-rotate(-5deg);
+        }
+        .active-location-icon {
+          background: none !important;
+          border: none !important;
+        }
+        .active-location-pin {
+          position: relative;
+          width: 36px;
+          height: 36px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .active-location-pulse {
+          position: absolute;
+          width: 28px;
+          height: 28px;
+          border-radius: 999px;
+          background: rgba(26, 115, 232, 0.25);
+          animation: active-location-ping 1.9s ease-out infinite;
+        }
+        .active-location-core {
+          width: 12px;
+          height: 12px;
+          border-radius: 999px;
+          background: #1a73e8;
+          border: 2px solid #ffffff;
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+        }
+        @keyframes active-location-ping {
+          0% { transform: scale(0.7); opacity: 0.7; }
+          70% { transform: scale(1.5); opacity: 0; }
+          100% { transform: scale(1.5); opacity: 0; }
         }
         .pin-drunk-sway {
           animation: pin-sway 8s cubic-bezier(0.45, 0, 0.55, 1) infinite;

@@ -16,127 +16,6 @@ interface CampaignBannerData {
   accentColor?: string;
 }
 
-export const MOCK_HOME_CAMPAIGNS: CampaignBannerData[] = [
-  {
-    id: "camp_1",
-    restaurantId: 231,
-    restaurantName: "Peppina",
-    restaurantImage: "https://images.unsplash.com/photo-1513104890138-7c749659a591?w=800&auto=format&fit=crop&q=60",
-    title: "Pizza Night Special",
-    dealType: "percentage",
-    dealValue: "25",
-    description: "All wood-fired pizzas, every Thursday to Sunday",
-    endDate: "2026-03-31",
-    accentColor: "#E85D04",
-  },
-  {
-    id: "camp_2",
-    restaurantId: 241,
-    restaurantName: "Krua Apsorn",
-    restaurantImage: "https://images.unsplash.com/photo-1455619452474-d2be8b1e70cd?w=800&auto=format&fit=crop&q=60",
-    title: "Lunch Set Menu",
-    dealType: "fixedAmount",
-    dealValue: "100",
-    description: "฿100 off any set menu, weekday lunch only",
-    endDate: "2026-04-15",
-    accentColor: "#1E293B",
-  },
-  {
-    id: "camp_3",
-    restaurantId: 251,
-    restaurantName: "Sushi Masato",
-    restaurantImage: "https://images.unsplash.com/photo-1579871494447-9811cf80d66c?w=800&auto=format&fit=crop&q=60",
-    title: "Omakase for Two",
-    dealType: "bogo",
-    dealValue: "",
-    description: "Bring a friend — second omakase seat complimentary",
-    endDate: "2026-03-15",
-    accentColor: "#1A1A2E",
-  },
-  {
-    id: "camp_4",
-    restaurantId: 222,
-    restaurantName: "Bankara Ramen",
-    restaurantImage: "https://images.unsplash.com/photo-1557872943-16a5ac26437e?w=800&auto=format&fit=crop&q=60",
-    title: "Free Gyoza Set",
-    dealType: "freeItem",
-    dealValue: "Gyoza (6pc)",
-    description: "Free gyoza with any ramen order",
-    endDate: "2026-03-20",
-    accentColor: "#8B4513",
-  },
-  {
-    id: "camp_5",
-    restaurantId: 301,
-    restaurantName: "Tep Bar",
-    restaurantImage: "https://images.unsplash.com/photo-1514362545857-3bc16c4c7d1b?w=800&auto=format&fit=crop&q=60",
-    title: "Happy Hour",
-    dealType: "bogo",
-    dealValue: "",
-    description: "Buy 1 get 1 on all heritage cocktails, 5–7PM",
-    endDate: "2026-05-01",
-    accentColor: "#6B21A8",
-  },
-  {
-    id: "camp_6",
-    restaurantId: 244,
-    restaurantName: "Jay Fai",
-    restaurantImage: "https://images.unsplash.com/photo-1569562211093-4ed0d0758f12?w=800&auto=format&fit=crop&q=60",
-    title: "Weekday Special",
-    dealType: "fixedAmount",
-    dealValue: "200",
-    description: "฿200 off crab omelette, Mon–Thu only",
-    endDate: "2026-04-01",
-    accentColor: "#B91C1C",
-  },
-];
-
-export const MOCK_RESTAURANT_CAMPAIGNS: Record<number, CampaignBannerData[]> = {
-  201: [{
-    id: "rcamp_1", restaurantId: 201, restaurantName: "Thipsamai",
-    restaurantImage: "https://images.unsplash.com/photo-1559314809-0d155014e29e?w=600",
-    title: "Late Night Pad Thai", dealType: "percentage", dealValue: "15",
-    description: "15% off all orders after 9PM", endDate: "2026-04-30",
-  }],
-  231: [{
-    id: "rcamp_2", restaurantId: 231, restaurantName: "Peppina",
-    restaurantImage: "https://images.unsplash.com/photo-1513104890138-7c749659a591?w=600",
-    title: "Pizza Night Special", dealType: "percentage", dealValue: "25",
-    description: "All wood-fired pizzas, every Thursday to Sunday", endDate: "2026-03-31",
-    accentColor: "#E85D04",
-  }],
-  241: [{
-    id: "rcamp_3", restaurantId: 241, restaurantName: "Krua Apsorn",
-    restaurantImage: "https://images.unsplash.com/photo-1455619452474-d2be8b1e70cd?w=600",
-    title: "Lunch Set Menu", dealType: "fixedAmount", dealValue: "100",
-    description: "฿100 off any set menu, weekday lunch", endDate: "2026-04-15",
-  }],
-  251: [{
-    id: "rcamp_4", restaurantId: 251, restaurantName: "Sushi Masato",
-    restaurantImage: "https://images.unsplash.com/photo-1579871494447-9811cf80d66c?w=600",
-    title: "Omakase for Two", dealType: "bogo", dealValue: "",
-    description: "Bring a friend — second seat complimentary", endDate: "2026-03-15",
-  }],
-  222: [{
-    id: "rcamp_5", restaurantId: 222, restaurantName: "Bankara Ramen",
-    restaurantImage: "https://images.unsplash.com/photo-1557872943-16a5ac26437e?w=600",
-    title: "Free Gyoza Set", dealType: "freeItem", dealValue: "Gyoza (6pc)",
-    description: "Free gyoza with any ramen order", endDate: "2026-03-20",
-  }],
-  244: [{
-    id: "rcamp_6", restaurantId: 244, restaurantName: "Jay Fai",
-    restaurantImage: "https://images.unsplash.com/photo-1569562211093-4ed0d0758f12?w=600",
-    title: "Weekday Special", dealType: "fixedAmount", dealValue: "200",
-    description: "฿200 off crab omelette, Mon–Thu only", endDate: "2026-04-01",
-  }],
-  301: [{
-    id: "rcamp_7", restaurantId: 301, restaurantName: "Tep Bar",
-    restaurantImage: "https://images.unsplash.com/photo-1514362545857-3bc16c4c7d1b?w=600",
-    title: "Happy Hour", dealType: "bogo", dealValue: "",
-    description: "Buy 1 get 1 on all heritage cocktails, 5–7PM", endDate: "2026-05-01",
-  }],
-};
-
 export function getDealLabel(dealType: string, dealValue: string) {
   switch (dealType) {
     case "percentage": return `${dealValue}% off`;
@@ -167,7 +46,8 @@ export function HomeCampaignBanner() {
       return res.json();
     },
   });
-  const campaigns = (apiCampaigns && apiCampaigns.length > 0) ? apiCampaigns : MOCK_HOME_CAMPAIGNS;
+  const campaigns = apiCampaigns ?? [];
+  if (campaigns.length === 0) return null;
 
   return (
     <div className="mb-2" data-testid="home-campaign-banner">
@@ -247,8 +127,7 @@ export function RestaurantCampaignBanner({ restaurantId }: RestaurantCampaignBan
     },
   });
   const apiMatch = apiCampaigns?.find((c) => Number(c.restaurantId) === restaurantId);
-  const mockCampaigns = MOCK_RESTAURANT_CAMPAIGNS[restaurantId];
-  const campaign = apiMatch ?? (mockCampaigns && mockCampaigns.length > 0 ? mockCampaigns[0] : null);
+  const campaign = apiMatch ?? null;
   if (!campaign) return null;
 
   return (

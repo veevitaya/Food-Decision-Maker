@@ -1,7 +1,7 @@
 import type { NormalizedPlace } from "../types.js";
 
 const OVERPASS_URL = "https://overpass-api.de/api/interpreter";
-const TIMEOUT_MS = 10_000;
+const TIMEOUT_MS = 30_000;
 
 interface OverpassElement {
   type: string;
@@ -40,7 +40,7 @@ export async function queryOverpass(
   radius: number,
 ): Promise<NormalizedPlace[]> {
   const query = `
-    [out:json][timeout:10];
+    [out:json][timeout:30];
     (
       node["amenity"~"restaurant|cafe|bar|fast_food"](around:${radius},${lat},${lng});
       way["amenity"~"restaurant|cafe|bar|fast_food"](around:${radius},${lat},${lng});
@@ -60,9 +60,15 @@ export async function queryOverpass(
     });
     clearTimeout(timer);
 
-    if (!res.ok) return [];
+    if (!res.ok) {
+      const body = await res.text().catch(() => String(res.status));
+      throw new Error(`Overpass returned ${res.status}: ${body.slice(0, 200)}`);
+    }
 
-    const json = (await res.json()) as { elements: OverpassElement[] };
+    const json = (await res.json()) as { elements: OverpassElement[]; remark?: string };
+    if (json.remark?.includes("runtime error") || json.remark?.includes("rate_limited")) {
+      throw new Error(`Overpass error: ${json.remark}`);
+    }
     const elements: OverpassElement[] = json.elements ?? [];
 
     return elements
@@ -89,9 +95,8 @@ export async function queryOverpass(
           distanceMeters: haversine(lat, lng, elLat, elLon),
         };
       });
-  } catch {
-    // Timeout or network error — return empty, let orchestrator decide fallback
-    return [];
+  } catch (err) {
+    throw err; // callers decide: placesService catches+falls back, admin import surfaces the error
   }
 }
 

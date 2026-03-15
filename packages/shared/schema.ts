@@ -9,9 +9,45 @@ export type RestaurantOpeningHour = {
 
 export type RestaurantReview = {
   author: string;
+  authorPhoto?: string;
   rating: number;
   text: string;
   timeAgo?: string;
+};
+
+export type ServiceOptions = {
+  dineIn?: boolean;
+  takeout?: boolean;
+  delivery?: boolean;
+  curbsidePickup?: boolean;
+  reservable?: boolean;
+};
+
+export type Amenities = {
+  hasOutdoorSeating?: boolean;
+  hasWifi?: boolean;
+  allowsDogs?: boolean;
+  liveMusic?: boolean;
+  goodForChildren?: boolean;
+  goodForGroups?: boolean;
+  goodForWatchingSports?: boolean;
+  menuForChildren?: boolean;
+  servesBeer?: boolean;
+  servesWine?: boolean;
+  servesCocktails?: boolean;
+  servesCoffee?: boolean;
+  servesBreakfast?: boolean;
+  servesLunch?: boolean;
+  servesDinner?: boolean;
+  servesBrunch?: boolean;
+  servesVegetarianFood?: boolean;
+};
+
+export type PaymentOptions = {
+  acceptsCreditCards?: boolean;
+  acceptsCashOnly?: boolean;
+  acceptsNfc?: boolean;
+  acceptsDebitCards?: boolean;
 };
 
 export const restaurants = pgTable("restaurants", {
@@ -39,6 +75,12 @@ export const restaurants = pgTable("restaurants", {
   googlePlaceId: text("google_place_id"),
   osmId: text("osm_id"),
   reviewCount: integer("review_count").notNull().default(0),
+  website: text("website"),
+  plusCode: text("plus_code"),
+  editorialSummary: text("editorial_summary"),
+  serviceOptions: jsonb("service_options").$type<ServiceOptions>(),
+  amenities: jsonb("amenities").$type<Amenities>(),
+  paymentOptions: jsonb("payment_options").$type<PaymentOptions>(),
 });
 
 export const insertRestaurantSchema = createInsertSchema(restaurants).omit({ id: true });
