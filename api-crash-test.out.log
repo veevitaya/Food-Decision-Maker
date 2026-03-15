@@ -1,0 +1,71 @@
+
+> @toast/api@1.0.0 dev C:\Users\garin\OneDrive\Desktop\Projects\Food-Decision-Maker\apps\api
+> tsx --env-file=../../.env index.ts
+
+[init] Setting up CORS...
+[init] CORS allowed origins: [
+  'https://toast.fastforwardssl.com',
+  'https://admin-toast.fastforwardssl.com',
+  'http://localhost:5002',
+  'http://localhost:5001'
+]
+[init] Setting up rate limiter...
+[init] PgSessionStore created OK
+[init] Session middleware created OK
+12:58:06 PM [db] ✅ Database connected OK - toast @ Sun Mar 15 2026 12:58:06 GMT+0700 (Indochina Time)
+12:58:06 PM [migrate] ✅ Database migrations applied.
+12:58:06 PM [express] serving on port 5002
+[middleware/helmet] Entering
+[middleware/helmet] Done
+[middleware/cors] Entering
+[cors] Checking origin: undefined
+[middleware/cors] Done
+[middleware/session] Entering for GET /health
+[middleware/session] OK - sessionID: kLs-GTkgFy0uk9hf0Sqv9n7e3woZ88eC path: /health
+[middleware/helmet] Entering
+[middleware/helmet] Done
+[middleware/cors] Entering
+[cors] Checking origin: undefined
+[middleware/cors] Done
+[middleware/session] Entering for GET /health
+[middleware/session] OK - sessionID: GttGibGJZQ7fGQwjdxyX5hN3mC2VtvPU path: /health
+[middleware/helmet] Entering
+[middleware/helmet] Done
+[middleware/cors] Entering
+[cors] Checking origin: undefined
+[middleware/cors] Done
+[middleware/session] Entering for POST /api/events/batch
+[middleware/session] OK - sessionID: 1CG8ORA6doU2KbpLzYG4Iu9KNi8eke5V path: /api/events/batch
+12:59:47 PM [express] POST /api/events/batch 200 in 61861ms [21066b57-56ad-4408-8f76-e45400165318] :: response=object
+[middleware/helmet] Entering
+[middleware/helmet] Done
+[middleware/cors] Entering
+[cors] Checking origin: undefined
+[middleware/cors] Done
+[middleware/session] Entering for POST /api/events/batch
+[middleware/session] OK - sessionID: HxoFgzElq76KQNVhCDQAtrwaaLK9F6VU path: /api/events/batch
+12:59:47 PM [express] POST /api/events/batch 200 in 26ms [5e7f6b73-c4cc-468d-b89a-070c893339f8] :: response=object
+[middleware/helmet] Entering
+[middleware/helmet] Done
+[middleware/cors] Entering
+[cors] Checking origin: undefined
+[middleware/cors] Done
+[middleware/session] Entering for POST /api/events/batch
+[middleware/session] OK - sessionID: bD0Ne4dvOYfV_lBdfWF_v3v_Da31IiZh path: /api/events/batch
+12:59:48 PM [express] POST /api/events/batch 200 in 15ms [b69b29df-16ab-43fe-bd3c-23f5af78e1c8] :: response=object
+[middleware/helmet] Entering
+[middleware/helmet] Done
+[middleware/cors] Entering
+[cors] Checking origin: undefined
+[middleware/cors] Done
+[middleware/session] Entering for POST /api/events/batch
+[middleware/session] OK - sessionID: LAFGQsA0hhTWSeR3q9PiDIuzotsqXWem path: /api/events/batch
+1:00:13 PM [express] POST /api/events/batch 200 in 9ms [77e54469-a1b2-464c-a548-9f0f920233a0] :: response=object
+[middleware/helmet] Entering
+[middleware/helmet] Done
+[middleware/cors] Entering
+[cors] Checking origin: undefined
+[middleware/cors] Done
+[middleware/session] Entering for POST /api/events/batch
+[middleware/session] OK - sessionID: RHKZB5vFLGMiKbxzo5gTIwQJGkAzvE8u path: /api/events/batch
+1:00:13 PM [express] POST /api/events/batch 200 in 8ms [1e7366e3-0f19-4eea-9466-816bb621a2cb] :: response=object

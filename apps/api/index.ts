@@ -10,11 +10,13 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { registerRoutes } from "./routes";
 import { createServer } from "http";
+import { initSocketIO } from "./socket";
 import { pool, db } from "./db";
 import { startDataRetentionJob } from "./jobs/dataRetention";
 import { startAnalyticsQualityJob } from "./jobs/analyticsQuality";
 import { startAggregationJob } from "./jobs/aggregationJob";
 import { startFeatureUpdateJob } from "./jobs/featureUpdateJob";
+import { startQueueMonitorJob } from "./jobs/queueMonitor";
 import type { AdminRole } from "@shared/schema";
 import { adminUsers } from "@shared/schema";
 import bcrypt from "bcryptjs";
@@ -302,6 +304,7 @@ app.use((req, res, next) => {
   startAnalyticsQualityJob();
   startAggregationJob();
   startFeatureUpdateJob();
+  startQueueMonitorJob();
 
   // ── Seed initial superadmin from env if none exists ────────────────────────
   try {
@@ -331,6 +334,10 @@ app.use((req, res, next) => {
   }
 
   await registerRoutes(httpServer, app);
+
+  // ── Initialize Socket.IO for real-time notifications ─────────────────────
+  initSocketIO(httpServer);
+  log("Socket.IO initialized");
 
   // ── Global error handler ────────────────────────────────────────────────────
   app.use((err: any, req: Request, res: Response, next: NextFunction) => {

@@ -9,6 +9,18 @@
     "start": "node --env-file=../../.env ../../dist/index.cjs",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "seed:admin": "tsx --env-file=../../.env scripts/seedAdmin.ts"
+    "seed:admin": "tsx --env-file=../../.env scripts/seedAdmin.ts",
+    "seed:owner": "tsx --env-file=../../.env scripts/seedOwner.ts",
+    "ml:export": "tsx --env-file=../../.env scripts/ml/exportTrainingSet.ts",
+    "ml:train": "tsx --env-file=../../.env scripts/ml/trainRecommendationModel.ts",
+    "ml:build": "pnpm run ml:export && pnpm run ml:train",
+    "ml:train-ranker": "tsx --env-file=../../.env scripts/ml/trainPairwiseRanker.ts",
+    "ml:eval": "tsx --env-file=../../.env scripts/ml/evaluateRanking.ts",
+    "events:worker": "tsx --env-file=../../.env workers/eventIngestWorker.ts",
+    "events:replay-dlq": "tsx --env-file=../../.env scripts/events/replayDlq.ts",
+    "events:smoke": "tsx --env-file=../../.env scripts/events/smokeIngest.ts"
+  },
+  "dependencies": {
+    "socket.io": "4.8.1"
   }
 }

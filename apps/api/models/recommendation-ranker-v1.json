@@ -1,0 +1,33 @@
+{
+  "modelType": "linear_ranker",
+  "version": "recommendation-ranker-v1",
+  "trainedAt": "2026-03-15T07:14:56.435Z",
+  "features": [
+    "cuisine_affinity",
+    "price_match",
+    "distance_score",
+    "popularity_score",
+    "disliked",
+    "hour_active",
+    "is_weekend",
+    "new_restaurant"
+  ],
+  "bias": 0,
+  "weights": {
+    "cuisine_affinity": 0,
+    "price_match": -0.0060653046111500365,
+    "distance_score": 0,
+    "popularity_score": -0.034231444190489325,
+    "disliked": 0.009717084719092843,
+    "hour_active": 0,
+    "is_weekend": 0,
+    "new_restaurant": -0.14535114876315877
+  },
+  "metrics": {
+    "trainRows": 3732,
+    "validRows": 933,
+    "trainPairs": 1230,
+    "trainNdcgAt10": 0.594109030173118,
+    "validNdcgAt10": 0.5630551548020976
+  }
+}

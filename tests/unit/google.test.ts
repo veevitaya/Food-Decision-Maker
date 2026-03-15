@@ -2,26 +2,30 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { queryGoogle, _resetForTest, _getDailySpend } from "../../apps/api/services/places/providers/google";
 
 const GOOGLE_PLACE = (id: string, photoRef?: string) => ({
-  place_id: id,
-  name: `Place ${id}`,
-  geometry: { location: { lat: 13.74, lng: 100.54 } },
-  vicinity: "Bangkok",
-  types: ["restaurant", "food"],
+  id,
+  displayName: { text: `Place ${id}` },
+  location: { latitude: 13.74, longitude: 100.54 },
+  shortFormattedAddress: "Bangkok",
+  types: ["restaurant"],
   rating: 4.2,
-  price_level: 2,
-  ...(photoRef ? { photos: [{ photo_reference: photoRef }] } : {}),
+  priceLevel: "PRICE_LEVEL_MODERATE",
+  ...(photoRef ? { photos: [{ name: `places/${id}/photos/${photoRef}` }] } : {}),
 });
 
 const makeGoogleResponse = (places: object[]) => ({
   ok: true,
-  json: () => Promise.resolve({ status: "OK", results: places }),
+  json: () => Promise.resolve({ places }),
 });
+
+let warnSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   _resetForTest();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
   vi.stubEnv("GOOGLE_PLACES_API_KEY", "test-key-123");
+  warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
 describe("queryGoogle — no API key", () => {
@@ -52,14 +56,13 @@ describe("queryGoogle — budget circuit breaker", () => {
   it("accumulates spend across calls", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(makeGoogleResponse([GOOGLE_PLACE("a")])));
     await queryGoogle(13.74, 100.54, 2000);
-    expect(_getDailySpend()).toBeCloseTo(0.032, 3);
+    expect(_getDailySpend()).toBeCloseTo(0.035, 3);
     await queryGoogle(13.74, 100.54, 2000);
-    expect(_getDailySpend()).toBeCloseTo(0.064, 3);
+    expect(_getDailySpend()).toBeCloseTo(0.07, 3);
   });
 
   it("emits console.warn at 80% of budget", async () => {
     vi.stubEnv("GOOGLE_DAILY_BUDGET_USD", "0.04"); // one search = 80%
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(makeGoogleResponse([GOOGLE_PLACE("w")])));
     await queryGoogle(13.74, 100.54, 2000);
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("budget"));
@@ -98,7 +101,7 @@ describe("queryGoogle — parsing", () => {
       "fetch",
       vi.fn().mockResolvedValue({
         ok: true,
-        json: () => Promise.resolve({ status: "REQUEST_DENIED", results: [] }),
+        json: () => Promise.resolve({ error: { message: "REQUEST_DENIED" }, places: [] }),
       }),
     );
     const result = await queryGoogle(13.74, 100.54, 2000);

@@ -1,3 +1,4 @@
+import React from "react";
 import "@testing-library/jest-dom";
 import { vi } from "vitest";
 
@@ -153,7 +154,28 @@ vi.mock("@tanstack/react-query", async () => {
   const actual = await vi.importActual("@tanstack/react-query");
   return {
     ...actual,
-    useQuery: vi.fn().mockReturnValue({ data: undefined, isLoading: false, error: null }),
+    useQuery: vi.fn((options: any) => {
+      const rawKey = Array.isArray(options?.queryKey) ? options.queryKey[0] : options?.queryKey;
+      if (rawKey === "/api/campaigns/active") {
+        return {
+          data: [{
+            id: "camp_1",
+            title: "Pizza Night Special",
+            dealType: "percentage",
+            dealValue: "20",
+            endDate: "2099-12-31",
+            restaurantName: "Peppina",
+            restaurantImage: "",
+            description: "Get 20% off selected pizzas every Friday night.",
+            accentColor: "#1A1A1A",
+            restaurantId: 1,
+          }],
+          isLoading: false,
+          error: null,
+        };
+      }
+      return { data: undefined, isLoading: false, error: null };
+    }),
     useMutation: vi.fn().mockReturnValue({
       mutate: vi.fn(),
       mutateAsync: vi.fn().mockResolvedValue({}),

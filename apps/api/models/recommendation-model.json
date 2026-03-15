@@ -1,0 +1,34 @@
+{
+  "modelType": "logistic_regression",
+  "version": "recommendation-ml-v1",
+  "trainedAt": "2026-03-15T07:14:51.839Z",
+  "features": [
+    "cuisine_affinity",
+    "price_match",
+    "distance_score",
+    "popularity_score",
+    "disliked",
+    "hour_active",
+    "is_weekend",
+    "new_restaurant"
+  ],
+  "bias": -1.384016768415972,
+  "weights": {
+    "cuisine_affinity": 0,
+    "price_match": -0.813167144895222,
+    "distance_score": -0.6906067983061143,
+    "popularity_score": -0.12234319419388778,
+    "disliked": -0.008714049534061302,
+    "hour_active": -0.11776619113222411,
+    "is_weekend": -0.23897386089949724,
+    "new_restaurant": -0.333826788663456
+  },
+  "metrics": {
+    "trainRows": 3732,
+    "validRows": 933,
+    "trainAuc": 0.5158354230519179,
+    "validAuc": 0.5035212552453932,
+    "trainLogLoss": 0.27510363593103415,
+    "validLogLoss": 0.25068286040033727
+  }
+}

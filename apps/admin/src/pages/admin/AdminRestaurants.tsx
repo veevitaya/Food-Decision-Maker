@@ -279,6 +279,7 @@ export default function AdminRestaurants() {
       googlePlaceId: null,
       osmId: null,
       reviewCount: 0,
+      reviewReplies: null,
       photos: [],
       vibes: [],
       district: null,

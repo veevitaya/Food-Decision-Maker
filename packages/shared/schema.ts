@@ -30,6 +30,7 @@ export const restaurants = pgTable("restaurants", {
   phone: text("phone"),
   openingHours: jsonb("opening_hours").$type<RestaurantOpeningHour[]>(),
   reviews: jsonb("reviews").$type<RestaurantReview[]>(),
+  reviewReplies: jsonb("review_replies").$type<Record<string, { text: string; repliedAt: string }>>(),
   isSponsored: boolean("is_sponsored").notNull().default(false),
   sponsoredUntil: text("sponsored_until"),
   vibes: text("vibes").array().default([]),
@@ -86,17 +87,20 @@ export type InsertPromotion = z.infer<typeof insertPromotionSchema>;
 
 export const restaurantOwners = pgTable("restaurant_owners", {
   id: serial("id").primaryKey(),
-  restaurantId: integer("restaurant_id").notNull().references(() => restaurants.id, { onDelete: "cascade" }),
+  restaurantId: integer("restaurant_id").references(() => restaurants.id, { onDelete: "set null" }),
   lineUserId: text("line_user_id"),
   displayName: text("display_name").notNull(),
   email: text("email").notNull().unique(),
   phone: text("phone"),
+  passwordHash: text("password_hash"),
   isVerified: boolean("is_verified").notNull().default(false),
   verificationStatus: text("verification_status").notNull().default("pending"),
   subscriptionTier: text("subscription_tier").notNull().default("free"),
   subscriptionExpiry: text("subscription_expiry"),
   paymentConnected: boolean("payment_connected").notNull().default(false),
   paymentMethod: text("payment_method"),
+  stripeCustomerId: text("stripe_customer_id"),
+  omiseCustomerId: text("omise_customer_id"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (t) => ({
   restaurantIdIdx: index("restaurant_owners_restaurant_id_idx").on(t.restaurantId),
@@ -106,6 +110,30 @@ export const restaurantOwners = pgTable("restaurant_owners", {
 export const insertRestaurantOwnerSchema = createInsertSchema(restaurantOwners).omit({ id: true, createdAt: true });
 export type RestaurantOwnerRow = typeof restaurantOwners.$inferSelect;
 export type InsertRestaurantOwner = z.infer<typeof insertRestaurantOwnerSchema>;
+
+export const paymentTransactions = pgTable("payment_transactions", {
+  id: serial("id").primaryKey(),
+  ownerId: integer("owner_id").notNull().references(() => restaurantOwners.id, { onDelete: "cascade" }),
+  amount: integer("amount").notNull(), // in satang (THB * 100)
+  currency: text("currency").notNull().default("thb"),
+  provider: text("provider").notNull(), // "stripe" | "omise"
+  method: text("method").notNull(), // "card" | "promptpay" | "mobile_banking" | "bank_transfer"
+  status: text("status").notNull().default("pending"), // "pending" | "succeeded" | "failed" | "requires_action"
+  providerChargeId: text("provider_charge_id"),
+  tier: text("tier").notNull().default("free"), // "free" | "growth" | "pro" | "enterprise"
+  slipUrl: text("slip_url"), // for bank_transfer slips
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  ownerIdIdx: index("payment_transactions_owner_id_idx").on(t.ownerId),
+  statusIdx: index("payment_transactions_status_idx").on(t.status),
+  createdAtIdx: index("payment_transactions_created_at_idx").on(t.createdAt),
+}));
+
+export const insertPaymentTransactionSchema = createInsertSchema(paymentTransactions).omit({ id: true, createdAt: true, updatedAt: true });
+export type PaymentTransaction = typeof paymentTransactions.$inferSelect;
+export type InsertPaymentTransaction = z.infer<typeof insertPaymentTransactionSchema>;
 
 export const restaurantClaims = pgTable("restaurant_claims", {
   id: serial("id").primaryKey(),
@@ -153,6 +181,8 @@ export const userProfiles = pgTable("user_profiles", {
   partnerLineUserId: text("partner_line_user_id"),
   partnerDisplayName: text("partner_display_name"),
   partnerPictureUrl: text("partner_picture_url"),
+  gender: text("gender"),
+  ageGroup: text("age_group"),
 });
 
 export const insertUserProfileSchema = createInsertSchema(userProfiles).omit({ id: true });
@@ -359,6 +389,26 @@ export const insertAnalyticsDailyRollupSchema = createInsertSchema(analyticsDail
 export type AnalyticsDailyRollup = typeof analyticsDailyRollups.$inferSelect;
 export type InsertAnalyticsDailyRollup = z.infer<typeof insertAnalyticsDailyRollupSchema>;
 
+export const notifications = pgTable("notifications", {
+  id: serial("id").primaryKey(),
+  ownerId: integer("owner_id").notNull().references(() => restaurantOwners.id, { onDelete: "cascade" }),
+  type: text("type").notNull(), // "review" | "campaign" | "milestone" | "verification" | "tip" | "delivery" | "save"
+  title: text("title").notNull(),
+  message: text("message").notNull(),
+  read: boolean("read").notNull().default(false),
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  readAt: timestamp("read_at"),
+}, (t) => ({
+  ownerIdIdx: index("notifications_owner_id_idx").on(t.ownerId),
+  readIdx: index("notifications_read_idx").on(t.read),
+  createdAtIdx: index("notifications_created_at_idx").on(t.createdAt),
+}));
+
+export const insertNotificationSchema = createInsertSchema(notifications).omit({ id: true, createdAt: true, readAt: true });
+export type Notification = typeof notifications.$inferSelect;
+export type InsertNotification = z.infer<typeof insertNotificationSchema>;
+
 export const notificationLogs = pgTable("notification_logs", {
   id: serial("id").primaryKey(),
   channel: text("channel").notNull().default("line"), // "line" | "internal"
@@ -509,3 +559,20 @@ export const partnerInvites = pgTable("partner_invites", {
 }));
 
 export type PartnerInvite = typeof partnerInvites.$inferSelect;
+
+export const supportTickets = pgTable("support_tickets", {
+  id: serial("id").primaryKey(),
+  ownerId: integer("owner_id").notNull().references(() => restaurantOwners.id, { onDelete: "cascade" }),
+  subject: text("subject").notNull(),
+  status: text("status").notNull().default("open"), // "open" | "resolved"
+  priority: text("priority").notNull().default("medium"), // "low" | "medium" | "high"
+  messages: jsonb("messages").notNull().default([]), // {from:"you"|"support", text:string, time:string}[]
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => ({
+  ownerIdIdx: index("support_tickets_owner_id_idx").on(t.ownerId),
+}));
+
+export const insertSupportTicketSchema = createInsertSchema(supportTickets).omit({ id: true, createdAt: true, updatedAt: true });
+export type SupportTicket = typeof supportTickets.$inferSelect;
+export type InsertSupportTicket = z.infer<typeof insertSupportTicketSchema>;

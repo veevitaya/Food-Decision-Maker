@@ -34,6 +34,7 @@ function makeRestaurant(overrides: Partial<Restaurant>): Restaurant {
     googlePlaceId: null,
     osmId: null,
     reviewCount: 0,
+    reviewReplies: null,
     ...overrides,
   };
 }

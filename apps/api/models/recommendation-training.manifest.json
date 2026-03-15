@@ -1,0 +1,66 @@
+{
+  "generatedAt": "2026-03-15T07:14:18.648Z",
+  "sqlPath": "C:\\Users\\garin\\OneDrive\\Desktop\\Projects\\Food-Decision-Maker\\apps\\api\\scripts\\ml\\training_set.sql",
+  "csvPath": "C:\\Users\\garin\\OneDrive\\Desktop\\Projects\\Food-Decision-Maker\\apps\\api\\models\\recommendation-training.csv",
+  "totalRows": 4665,
+  "positives": 354,
+  "positiveRate": 0.075884,
+  "missingByColumn": {
+    "view_event_id": {
+      "missing": 0,
+      "missingPct": 0
+    },
+    "group_key": {
+      "missing": 0,
+      "missingPct": 0
+    },
+    "user_id": {
+      "missing": 0,
+      "missingPct": 0
+    },
+    "item_id": {
+      "missing": 0,
+      "missingPct": 0
+    },
+    "created_at": {
+      "missing": 0,
+      "missingPct": 0
+    },
+    "cuisine_affinity": {
+      "missing": 0,
+      "missingPct": 0
+    },
+    "price_match": {
+      "missing": 0,
+      "missingPct": 0
+    },
+    "distance_score": {
+      "missing": 0,
+      "missingPct": 0
+    },
+    "popularity_score": {
+      "missing": 0,
+      "missingPct": 0
+    },
+    "disliked": {
+      "missing": 0,
+      "missingPct": 0
+    },
+    "hour_active": {
+      "missing": 0,
+      "missingPct": 0
+    },
+    "is_weekend": {
+      "missing": 0,
+      "missingPct": 0
+    },
+    "new_restaurant": {
+      "missing": 0,
+      "missingPct": 0
+    },
+    "label": {
+      "missing": 0,
+      "missingPct": 0
+    }
+  }
+}

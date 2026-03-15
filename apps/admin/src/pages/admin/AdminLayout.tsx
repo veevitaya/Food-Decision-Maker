@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useLocation, Link } from "wouter";
+import { useQuery } from "@tanstack/react-query";
 import {
   LayoutDashboard,
   Users,
@@ -20,8 +21,12 @@ import {
   CreditCard,
   Lightbulb,
   HelpCircle,
+  Lock,
 } from "lucide-react";
+import { tierAtLeast, type OwnerTier } from "@/components/TierGate";
 import toastLogo from "@assets/toast_logo_nobg.png";
+import { useSocketIO } from "@/hooks/useSocketIO";
+import { useToast } from "@/hooks/use-toast";
 
 interface AdminSession {
   sessionType: "admin" | "owner";
@@ -46,6 +51,7 @@ interface NavItem {
   label: string;
   icon: typeof LayoutDashboard;
   href: string;
+  minTier?: OwnerTier;
 }
 
 const adminNavGroups: NavGroup[] = [
@@ -80,7 +86,6 @@ const adminNavGroups: NavGroup[] = [
       { label: "Swipe Sessions", icon: Users, href: "/admin/swipe-sessions" },
       { label: "Predictions", icon: Lightbulb, href: "/admin/predictive-intelligence" },
       { label: "Partner Clickouts", icon: ExternalLink, href: "/admin/partner-clickouts" },
-      { label: "Audit Logs", icon: ShieldCheck, href: "/admin/audit-logs" },
     ],
   },
   {
@@ -88,8 +93,8 @@ const adminNavGroups: NavGroup[] = [
     items: [
       { label: "Payments", icon: CreditCard, href: "/admin/payments" },
       { label: "Integrations", icon: Settings2, href: "/admin/integrations" },
-      { label: "Data Ops", icon: Settings2, href: "/admin/data-ops" },
       { label: "Reports", icon: BarChart3, href: "/admin/reports" },
+      { label: "ML Status", icon: BarChart3, href: "/admin/ml-status" },
       { label: "Coming Soon", icon: Lightbulb, href: "/admin/coming-soon" },
       { label: "App Config", icon: Settings2, href: "/admin/config" },
     ],
@@ -107,19 +112,19 @@ const ownerNavGroups: NavGroup[] = [
     label: "Management",
     items: [
       { label: "Menu & Hours", icon: UtensilsCrossed, href: "/admin/owner/menu" },
-      { label: "Reviews", icon: MessageSquare, href: "/admin/owner/reviews" },
-      { label: "Promotions", icon: Megaphone, href: "/admin/owner/promotions" },
+      { label: "Reviews", icon: MessageSquare, href: "/admin/owner/reviews", minTier: "growth" },
+      { label: "Promotions", icon: Megaphone, href: "/admin/owner/promotions", minTier: "growth" },
     ],
   },
   {
     label: "Insights",
     items: [
-      { label: "Performance", icon: TrendingUp, href: "/admin/owner/performance" },
-      { label: "AI Insights", icon: Lightbulb, href: "/admin/owner/insights" },
-      { label: "Customer Insights", icon: Users, href: "/admin/owner/customer-insights" },
-      { label: "Decision Intel", icon: Lightbulb, href: "/admin/owner/decision-intelligence" },
-      { label: "Delivery Conversions", icon: TrendingUp, href: "/admin/owner/delivery-conversions" },
-      { label: "Notifications", icon: Bell, href: "/admin/owner/notifications" },
+      { label: "Performance", icon: TrendingUp, href: "/admin/owner/performance", minTier: "growth" },
+      { label: "AI Insights", icon: Lightbulb, href: "/admin/owner/insights", minTier: "pro" },
+      { label: "Customer Insights", icon: Users, href: "/admin/owner/customer-insights", minTier: "pro" },
+      { label: "Delivery Conversions", icon: TrendingUp, href: "/admin/owner/delivery-conversions", minTier: "pro" },
+      { label: "Notifications", icon: Bell, href: "/admin/owner/notifications", minTier: "pro" },
+      { label: "Decision Intel", icon: Lightbulb, href: "/admin/owner/decision-intelligence", minTier: "enterprise" },
     ],
   },
   {
@@ -154,6 +159,7 @@ function getPageTitle(path: string, groups: NavGroup[]): string {
 export default function AdminLayout({ children, title }: { children: React.ReactNode; title?: string }) {
   const [location, setLocation] = useLocation();
   const [session, setSession] = useState<AdminSession | null>(null);
+  const { toast } = useToast();
 
   useEffect(() => {
     const raw = localStorage.getItem("toast_admin_session");
@@ -178,9 +184,42 @@ export default function AdminLayout({ children, title }: { children: React.React
     setLocation("/admin/login");
   };
 
+  // Fetch unread notification count for owners (API fallback)
+  const isOwner = session?.sessionType === "owner";
+  const { data: unreadCountData } = useQuery<{ count: number }>({
+    queryKey: ["/api/owner/notifications/unread-count"],
+    enabled: isOwner && !!session,
+    refetchInterval: 30000, // Poll every 30 seconds as fallback
+  });
+  const [unreadCount, setUnreadCount] = useState(unreadCountData?.count ?? 0);
+
+  // Sync API data with state
+  useEffect(() => {
+    if (unreadCountData?.count !== undefined) {
+      setUnreadCount(unreadCountData.count);
+    }
+  }, [unreadCountData?.count]);
+
+  // Socket.IO for real-time notifications
+  const { connected: socketConnected, markNotificationRead: markReadSocket, markAllNotificationsRead: markAllReadSocket } = useSocketIO({
+    session: session ? { loggedIn: session.loggedIn, sessionType: session.sessionType, ownerId: (session as any).ownerId } : null,
+    onNotification: (notification) => {
+      // Increment unread count when new notification arrives
+      setUnreadCount((prev) => prev + 1);
+      // Show toast notification
+      toast({
+        title: notification.title,
+        description: notification.message,
+        duration: 5000,
+      });
+    },
+    onUnreadCount: (count) => {
+      setUnreadCount(count);
+    },
+  });
+
   if (!session) return null;
 
-  const isOwner = session.sessionType === "owner";
   const navGroups = isOwner ? ownerNavGroups : adminNavGroups;
   const pageTitle = title ?? getPageTitle(location, navGroups);
   const displayName = isOwner ? session.displayName || session.email || "Owner" : session.username || "Admin";
@@ -226,30 +265,36 @@ export default function AdminLayout({ children, title }: { children: React.React
                 <div className="flex flex-col gap-0.5">
                   {group.items.map((item) => {
                     const active = location.startsWith(item.href);
+                    const locked = isOwner && item.minTier && !tierAtLeast(session.subscriptionTier, item.minTier);
                     return (
                       <Link key={item.href} href={item.href}>
                         <div
                           className={`flex items-center gap-3 px-3 py-2 rounded-xl text-[13px] font-medium cursor-pointer transition-all relative ${
-                            active
-                              ? `text-gray-900`
-                              : "text-gray-500 hover:text-gray-800 hover:bg-gray-50"
+                            locked
+                              ? "text-gray-300 cursor-default"
+                              : active
+                                ? "text-gray-900"
+                                : "text-gray-500 hover:text-gray-800 hover:bg-gray-50"
                           }`}
-                          style={active ? { backgroundColor: `${accentColor}19` } : undefined}
+                          style={active && !locked ? { backgroundColor: `${accentColor}19` } : undefined}
                           data-testid={`nav-${item.label.toLowerCase().replace(/\s+/g, "-")}`}
                         >
-                          {active && (
+                          {active && !locked && (
                             <div
                               className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-r-full"
                               style={{ backgroundColor: accentColor }}
                             />
                           )}
                           <item.icon
-                            className={`w-[17px] h-[17px] ${active ? "" : "text-gray-400"}`}
-                            style={active ? { color: accentColor } : undefined}
-                            strokeWidth={active ? 2 : 1.5}
+                            className={`w-[17px] h-[17px] ${locked ? "text-gray-300" : active ? "" : "text-gray-400"}`}
+                            style={active && !locked ? { color: accentColor } : undefined}
+                            strokeWidth={active && !locked ? 2 : 1.5}
                           />
                           <span className="flex-1">{item.label}</span>
-                          {active && <ChevronRight className="w-3.5 h-3.5 text-gray-300" />}
+                          {locked
+                            ? <Lock className="w-3 h-3 text-gray-300" />
+                            : active && <ChevronRight className="w-3.5 h-3.5 text-gray-300" />
+                          }
                         </div>
                       </Link>
                     );
@@ -302,6 +347,22 @@ export default function AdminLayout({ children, title }: { children: React.React
             </h1>
           </div>
           <div className="flex items-center gap-4 flex-wrap">
+            {isOwner && (
+              <Link href="/admin/owner/notifications">
+                <div className="relative cursor-pointer p-2 rounded-full hover:bg-gray-100 transition-colors" data-testid="notification-bell">
+                  <Bell className="w-4 h-4 text-gray-500" />
+                  {unreadCount > 0 && (
+                    <span className="absolute -top-0.5 -right-0.5 bg-red-400 text-white text-[10px] font-bold rounded-full min-w-[16px] h-4 flex items-center justify-center px-1">
+                      {unreadCount > 99 ? "99+" : unreadCount}
+                    </span>
+                  )}
+                  {/* Socket.IO connection indicator */}
+                  {socketConnected && (
+                    <span className="absolute bottom-0 right-0 w-2 h-2 bg-green-400 rounded-full border border-white" title="Real-time notifications active" />
+                  )}
+                </div>
+              </Link>
+            )}
             <Link href="/">
               <span className="text-[13px] text-gray-400 hover:text-gray-700 transition-colors flex items-center gap-1.5 cursor-pointer" data-testid="link-view-app">
                 <ExternalLink className="w-3.5 h-3.5" />

@@ -874,7 +874,7 @@ function OwnerDashboard() {
       </div>
     );
   }
-  const overviewStats = Object.values(insights.overview);
+  const overviewStats = Object.values(insights.overview) as Array<{ label: string; value: number; trend: number }>;
   const hourlyValues = insights.hourlyData.map((d: any) => d.value);
   const maxHourly = Math.max(...hourlyValues, 1);
 
@@ -1141,7 +1141,7 @@ function OwnerDashboard() {
           </div>
         </div>
         <div className="grid grid-cols-2 gap-2.5">
-          {overviewStats.map((stat) => {
+          {overviewStats.map((stat: { label: string; value: number; trend: number }) => {
             const isPositive = stat.trend >= 0;
             return (
               <div
@@ -1206,7 +1206,7 @@ function OwnerDashboard() {
         <div className="bg-white dark:bg-card rounded-2xl border border-gray-100 dark:border-border p-4">
           <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">Engagement Funnel</p>
           <div className="space-y-2.5">
-            {insights.engagementFunnel.map((step, i) => (
+            {insights.engagementFunnel.map((step: any, i: number) => (
               <div key={step.stage} data-testid={`funnel-${i}`}>
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-[12px] font-medium">{step.stage}</span>
@@ -1380,7 +1380,7 @@ function OwnerDashboard() {
           <div className="px-4 pt-4 pb-2">
             <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">User Interactions</p>
           </div>
-          {insights.userActions.map((action, i) => {
+          {insights.userActions.map((action: any, i: number) => {
             const Icon = action.icon;
             return (
               <div key={action.action}>
@@ -1445,7 +1445,7 @@ function OwnerDashboard() {
                     <div>
                       <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">Weekly Performance</p>
                       <div className="space-y-2">
-                        {insights.weeklyData.map((day) => (
+                        {insights.weeklyData.map((day: any) => (
                           <div key={day.day} className="flex items-center gap-3" data-testid={`weekly-${day.day.toLowerCase()}`}>
                             <span className="text-[11px] font-semibold text-muted-foreground w-7">{day.day}</span>
                             <div className="flex-1 h-5 bg-gray-50 dark:bg-muted rounded-full overflow-hidden relative">
@@ -1467,7 +1467,7 @@ function OwnerDashboard() {
                           <Zap className="w-3.5 h-3.5 text-[#FFCC02]" />
                           <p className="text-[11px] font-bold">Best performing day</p>
                         </div>
-                        <p className="text-xs text-muted-foreground">{insights.bestDay} has the highest engagement with {Math.max(...insights.weeklyData.map(d => d.views))} total interactions</p>
+                        <p className="text-xs text-muted-foreground">{insights.bestDay} has the highest engagement with {Math.max(...insights.weeklyData.map((d: any) => d.views))} total interactions</p>
                       </div>
                     </div>
                   )}
@@ -1476,7 +1476,7 @@ function OwnerDashboard() {
                     <div>
                       <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">Top Menu Items by Swipe Performance</p>
                       <div className="space-y-2.5">
-                        {insights.topMenuItems.map((item, i) => (
+                        {insights.topMenuItems.map((item: any, i: number) => (
                           <div key={item.name} className="flex items-center gap-3" data-testid={`menu-stat-${i}`}>
                             <div
                               className={`w-7 h-7 rounded-lg flex items-center justify-center text-[11px] font-bold ${
@@ -1517,7 +1517,7 @@ function OwnerDashboard() {
                     <div>
                       <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">Peak Engagement Hours</p>
                       <div className="space-y-2">
-                        {insights.peakHours.map((peak, i) => (
+                        {insights.peakHours.map((peak: any, i: number) => (
                           <div key={peak.time} className="flex items-center gap-3" data-testid={`peak-${i}`}>
                             <div className="w-8 h-8 rounded-xl bg-gray-50 dark:bg-muted flex items-center justify-center">
                               <Clock className="w-4 h-4 text-muted-foreground" />
@@ -1545,7 +1545,7 @@ function OwnerDashboard() {
                       <div className="mt-4">
                         <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">Weekly Heatmap</p>
                         <div className="grid grid-cols-7 gap-1.5">
-                          {insights.weeklyData.map((day) => {
+                          {insights.weeklyData.map((day: any) => {
                             const intensity = day.views / 140;
                             return (
                               <div key={day.day} className="flex flex-col items-center gap-1">

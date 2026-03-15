@@ -25,26 +25,6 @@ import Profile from "@/pages/Profile";
 import SavedPage from "@/pages/SavedPage";
 import ToastPicks from "@/pages/ToastPicks";
 import CampaignDetail from "@/pages/CampaignDetail";
-import AdminLogin from "@/pages/admin/AdminLogin";
-import OwnerLogin from "@/pages/admin/OwnerLogin";
-import AdminLayout from "@/pages/admin/AdminLayout";
-import AdminDashboard from "@/pages/admin/AdminDashboard";
-import AdminUsers from "@/pages/admin/AdminUsers";
-import AdminRestaurants from "@/pages/admin/AdminRestaurants";
-import AdminCampaigns from "@/pages/admin/AdminCampaigns";
-import AdminBanners from "@/pages/admin/AdminBanners";
-import AdminAnalytics from "@/pages/admin/AdminAnalytics";
-import AdminConfig from "@/pages/admin/AdminConfig";
-import AdminOwnerDashboard from "@/pages/admin/AdminOwnerDashboard";
-import AdminMapCheck from "@/pages/admin/AdminMapCheck";
-import AdminPlaces from "@/pages/admin/AdminPlaces";
-import AdminRestaurantEditor from "@/pages/admin/AdminRestaurantEditor";
-import AdminRestaurantImport from "@/pages/admin/AdminRestaurantImport";
-import AdminSessions from "@/pages/admin/AdminSessions";
-import AdminRecommendations from "@/pages/admin/AdminRecommendations";
-import AdminExperiments from "@/pages/admin/AdminExperiments";
-import AdminOperations from "@/pages/admin/AdminOperations";
-import AdminSecurityAudit from "@/pages/admin/AdminSecurityAudit";
 
 const pageVariants = {
   initial: { opacity: 0, y: 8 },
@@ -165,65 +145,8 @@ function Router() {
           <Route path="/toast-picks">
             <AnimatedPage><ToastPicks /></AnimatedPage>
           </Route>
-          <Route path="/admin/login">
-            <AdminLogin />
-          </Route>
-          <Route path="/owner/login">
-            <OwnerLogin />
-          </Route>
-          <Route path="/admin/dashboard">
-            <AdminLayout><AdminDashboard /></AdminLayout>
-          </Route>
-          <Route path="/admin/users">
-            <AdminLayout><AdminUsers /></AdminLayout>
-          </Route>
-          <Route path="/admin/restaurants">
-            <AdminLayout><AdminRestaurants /></AdminLayout>
-          </Route>
-          <Route path="/admin/campaigns">
-            <AdminLayout><AdminCampaigns /></AdminLayout>
-          </Route>
-          <Route path="/admin/banners">
-            <AdminLayout><AdminBanners /></AdminLayout>
-          </Route>
-          <Route path="/admin/analytics">
-            <AdminLayout><AdminAnalytics /></AdminLayout>
-          </Route>
-          <Route path="/admin/recommendations">
-            <AdminLayout><AdminRecommendations /></AdminLayout>
-          </Route>
-          <Route path="/admin/experiments">
-            <AdminLayout><AdminExperiments /></AdminLayout>
-          </Route>
-          <Route path="/admin/operations">
-            <AdminLayout><AdminOperations /></AdminLayout>
-          </Route>
-          <Route path="/admin/security-audit">
-            <AdminLayout><AdminSecurityAudit /></AdminLayout>
-          </Route>
-          <Route path="/admin/config">
-            <AdminLayout><AdminConfig /></AdminLayout>
-          </Route>
-          <Route path="/admin/restaurants/import/google">
-            <AdminRestaurantImport />
-          </Route>
-          <Route path="/admin/map-check">
-            <AdminMapCheck />
-          </Route>
-          <Route path="/admin/restaurants/:id">
-            <AdminRestaurantEditor />
-          </Route>
-          <Route path="/admin/sessions">
-            <AdminSessions />
-          </Route>
-          <Route path="/admin/places">
-            <AdminPlaces />
-          </Route>
-          <Route path="/admin/my-restaurant">
-            <AdminLayout><AdminOwnerDashboard /></AdminLayout>
-          </Route>
           <Route path="/admin">
-            <Redirect to="/admin/dashboard" />
+            <Redirect to="/" />
           </Route>
           <Route>
             <AnimatedPage><NotFound /></AnimatedPage>

@@ -65,6 +65,12 @@ import {
   type InsertNotificationLog,
   partnerInvites,
   type PartnerInvite,
+  notifications,
+  type Notification,
+  type InsertNotification,
+  supportTickets,
+  type SupportTicket,
+  type InsertSupportTicket,
 } from "@shared/schema";
 import { eq, desc, ilike, or, and, lte, gte, lt, sql, SQL } from "drizzle-orm";
 import type { NormalizedPlace } from "./services/places/types";
@@ -151,6 +157,7 @@ export interface IStorage {
   getAdminConfig(configKey: string): Promise<AdminConfig | undefined>;
   upsertAdminConfig(configKey: string, value: Record<string, unknown>): Promise<AdminConfig>;
   createEventLog(data: InsertEventLog): Promise<EventLog | null>;
+  createEventLogsBulk(data: InsertEventLog[]): Promise<EventLog[]>;
   listEventLogsByUser(userId: string): Promise<EventLog[]>;
   listEventLogs(limit?: number, since?: Date): Promise<EventLog[]>;
   listEventLogsByType(eventType: string, since?: Date, limit?: number): Promise<EventLog[]>;
@@ -161,6 +168,7 @@ export interface IStorage {
   getUserFeatureSnapshot(userId: string): Promise<UserFeatureSnapshot | undefined>;
   // Applies additive deltas to item metrics. Fields are incremented, not overwritten.
   upsertItemFeatureSnapshot(itemId: number, delta: Partial<InsertItemFeatureSnapshot>): Promise<ItemFeatureSnapshot>;
+  upsertItemFeatureSnapshotsBulk(deltas: Array<{ itemId: number; delta: Partial<InsertItemFeatureSnapshot> }>): Promise<void>;
   createConsentLog(data: InsertConsentLog): Promise<ConsentLog>;
   getLatestConsent(userId: string, consentType?: string): Promise<ConsentLog | undefined>;
   deletePrivacyData(userId: string): Promise<number>;
@@ -183,6 +191,18 @@ export interface IStorage {
   getPartnerInviteByTokenAny(token: string): Promise<PartnerInvite | undefined>;
   updatePartnerInvite(token: string, updates: Partial<{ status: string; acceptedAt: Date }>): Promise<PartnerInvite | undefined>;
   unlinkPartner(lineUserId: string): Promise<void>;
+  // Owner notifications
+  createNotification(data: InsertNotification): Promise<Notification>;
+  listNotificationsByOwner(ownerId: number, unreadOnly?: boolean, limit?: number): Promise<Notification[]>;
+  getNotificationById(id: number): Promise<Notification | undefined>;
+  markNotificationRead(id: number): Promise<Notification | undefined>;
+  markAllNotificationsRead(ownerId: number): Promise<number>;
+  getUnreadNotificationCount(ownerId: number): Promise<number>;
+  // Support tickets
+  listSupportTickets(ownerId: number): Promise<SupportTicket[]>;
+  getSupportTicket(id: number, ownerId: number): Promise<SupportTicket | undefined>;
+  createSupportTicket(data: InsertSupportTicket): Promise<SupportTicket>;
+  updateSupportTicket(id: number, ownerId: number, updates: Partial<Pick<SupportTicket, "messages" | "status">>): Promise<SupportTicket | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -748,6 +768,15 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
+  async createEventLogsBulk(data: InsertEventLog[]): Promise<EventLog[]> {
+    if (data.length === 0) return [];
+    return db
+      .insert(eventLogs)
+      .values(data)
+      .onConflictDoNothing({ target: eventLogs.idempotencyKey })
+      .returning();
+  }
+
   async listEventLogsByUser(userId: string, limit = 500): Promise<EventLog[]> {
     return db
       .select()
@@ -895,6 +924,26 @@ export class DatabaseStorage implements IStorage {
       })
       .returning();
     return created;
+  }
+
+  async upsertItemFeatureSnapshotsBulk(
+    deltas: Array<{ itemId: number; delta: Partial<InsertItemFeatureSnapshot> }>,
+  ): Promise<void> {
+    if (deltas.length === 0) return;
+    const mergedByItem = new Map<number, Partial<InsertItemFeatureSnapshot>>();
+    for (const entry of deltas) {
+      const existing = mergedByItem.get(entry.itemId) ?? {};
+      mergedByItem.set(entry.itemId, {
+        itemType: existing.itemType ?? entry.delta.itemType ?? "restaurant",
+        ctr: (existing.ctr ?? 0) + (entry.delta.ctr ?? 0),
+        likeRate: (existing.likeRate ?? 0) + (entry.delta.likeRate ?? 0),
+        superLikeRate: (existing.superLikeRate ?? 0) + (entry.delta.superLikeRate ?? 0),
+        conversionRate: (existing.conversionRate ?? 0) + (entry.delta.conversionRate ?? 0),
+      });
+    }
+    for (const [itemId, delta] of mergedByItem.entries()) {
+      await this.upsertItemFeatureSnapshot(itemId, delta);
+    }
   }
 
   async createConsentLog(data: InsertConsentLog): Promise<ConsentLog> {
@@ -1075,6 +1124,83 @@ export class DatabaseStorage implements IStorage {
       .update(userProfiles)
       .set({ partnerLineUserId: null, partnerDisplayName: null, partnerPictureUrl: null })
       .where(eq(userProfiles.lineUserId, lineUserId));
+  }
+
+  // Owner notifications
+  async createNotification(data: InsertNotification): Promise<Notification> {
+    const [created] = await db.insert(notifications).values(data).returning();
+    return created;
+  }
+
+  async listNotificationsByOwner(ownerId: number, unreadOnly = false, limit = 50): Promise<Notification[]> {
+    if (unreadOnly) {
+      return db
+        .select()
+        .from(notifications)
+        .where(and(eq(notifications.ownerId, ownerId), eq(notifications.read, false)))
+        .orderBy(desc(notifications.createdAt))
+        .limit(limit);
+    }
+    return db
+      .select()
+      .from(notifications)
+      .where(eq(notifications.ownerId, ownerId))
+      .orderBy(desc(notifications.createdAt))
+      .limit(limit);
+  }
+
+  async getNotificationById(id: number): Promise<Notification | undefined> {
+    const [notification] = await db.select().from(notifications).where(eq(notifications.id, id)).limit(1);
+    return notification;
+  }
+
+  async markNotificationRead(id: number): Promise<Notification | undefined> {
+    const [updated] = await db
+      .update(notifications)
+      .set({ read: true, readAt: new Date() })
+      .where(eq(notifications.id, id))
+      .returning();
+    return updated;
+  }
+
+  async markAllNotificationsRead(ownerId: number): Promise<number> {
+    const result = await db
+      .update(notifications)
+      .set({ read: true, readAt: new Date() })
+      .where(and(eq(notifications.ownerId, ownerId), eq(notifications.read, false)))
+      .returning({ id: notifications.id });
+    return result.length;
+  }
+
+  async getUnreadNotificationCount(ownerId: number): Promise<number> {
+    const result = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(notifications)
+      .where(and(eq(notifications.ownerId, ownerId), eq(notifications.read, false)));
+    return result[0]?.count ?? 0;
+  }
+
+  // Support tickets
+  async listSupportTickets(ownerId: number): Promise<SupportTicket[]> {
+    return db.select().from(supportTickets).where(eq(supportTickets.ownerId, ownerId)).orderBy(desc(supportTickets.createdAt));
+  }
+
+  async getSupportTicket(id: number, ownerId: number): Promise<SupportTicket | undefined> {
+    const [row] = await db.select().from(supportTickets).where(and(eq(supportTickets.id, id), eq(supportTickets.ownerId, ownerId))).limit(1);
+    return row;
+  }
+
+  async createSupportTicket(data: InsertSupportTicket): Promise<SupportTicket> {
+    const [row] = await db.insert(supportTickets).values(data).returning();
+    return row;
+  }
+
+  async updateSupportTicket(id: number, ownerId: number, updates: Partial<Pick<SupportTicket, "messages" | "status">>): Promise<SupportTicket | undefined> {
+    const [row] = await db.update(supportTickets)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(and(eq(supportTickets.id, id), eq(supportTickets.ownerId, ownerId)))
+      .returning();
+    return row;
   }
 }
 

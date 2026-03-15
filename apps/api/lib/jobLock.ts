@@ -10,6 +10,7 @@
  * only ONE instance runs any given background job at a time. No Redis needed.
  */
 import { pool } from "../db";
+import type { PoolClient } from "pg";
 
 /** Stable integer lock IDs — arbitrary but unique per job. */
 const JOB_LOCK_IDS: Record<string, number> = {
@@ -17,6 +18,8 @@ const JOB_LOCK_IDS: Record<string, number> = {
   "feature-update-job": 1002,
   "data-retention-job": 1003,
   "analytics-quality-job": 1004,
+  "event-ingest-worker": 1005,
+  "queue-monitor-job": 1006,
 };
 
 /**
@@ -29,7 +32,7 @@ export async function withJobLock(jobName: string, fn: () => Promise<void>): Pro
     throw new Error(`[jobLock] Unknown job name: "${jobName}". Register it in JOB_LOCK_IDS.`);
   }
 
-  let client: Awaited<ReturnType<typeof pool.connect>> | null = null;
+  let client: PoolClient | undefined;
   let lockAcquired = false;
   try {
     client = await pool.connect();

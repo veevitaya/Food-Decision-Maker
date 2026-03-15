@@ -98,6 +98,30 @@ interface ClickoutsData {
   byPlatform: Record<string, number>;
 }
 
+interface UserMetrics {
+  activeThisWeek: number;
+  avgSessionsPerUser: number;
+  avgSessionMinutes: number;
+  retentionRate: number;
+  totalSessions: number;
+}
+
+interface DemographicsData {
+  gender: Record<string, number>;
+  ageGroup: Record<string, number>;
+  genderTotal: number;
+  ageTotal: number;
+  totalProfiles: number;
+}
+
+interface BehavioralCohort {
+  id: string;
+  name: string;
+  description: string;
+  count: number;
+  pct: number;
+}
+
 const HEATMAP_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const HEATMAP_HOURS = Array.from({ length: 18 }, (_, i) => `${i + 6}:00`);
 
@@ -164,9 +188,8 @@ const DATA_INSIGHTS_CATALOG = [
   },
 ];
 
-function getHeatmapColor(value: number): string {
-  const max = 88;
-  const intensity = value / max;
+function getHeatmapColor(value: number, max: number): string {
+  const intensity = max > 0 ? value / max : 0;
   if (intensity < 0.15) return "hsl(255, 50%, 95%)";
   if (intensity < 0.3) return "hsl(255, 55%, 85%)";
   if (intensity < 0.45) return "hsl(252, 60%, 75%)";
@@ -190,12 +213,14 @@ export default function AdminAnalytics() {
   const [showCatalog, setShowCatalog] = useState(false);
   const [showUserIntel, setShowUserIntel] = useState(true);
 
-  const sinceParam =
+  const sinceParam = useMemo(() =>
     dateRange === "7d"
       ? new Date(Date.now() - 7 * 86400000).toISOString()
       : dateRange === "30d"
         ? new Date(Date.now() - 30 * 86400000).toISOString()
-        : "";
+        : "",
+    [dateRange]
+  );
 
   const { data: summary, isLoading: loadingSummary } = useQuery<SummaryData>({
     queryKey: ["/api/analytics/summary"],
@@ -230,6 +255,33 @@ export default function AdminAnalytics() {
     queryKey: ["/api/admin/analytics/clickouts", overviewDays],
     queryFn: async () => {
       const res = await fetch(`/api/admin/analytics/clickouts?days=${overviewDays}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+  });
+
+  const { data: userMetrics, isLoading: loadingUserMetrics } = useQuery<UserMetrics>({
+    queryKey: ["/api/admin/analytics/user-metrics"],
+    queryFn: async () => {
+      const res = await fetch("/api/admin/analytics/user-metrics", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+  });
+
+  const { data: demographics, isLoading: loadingDemographics } = useQuery<DemographicsData>({
+    queryKey: ["/api/admin/analytics/demographics"],
+    queryFn: async () => {
+      const res = await fetch("/api/admin/analytics/demographics", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+  });
+
+  const { data: behavioralCohorts = [], isLoading: loadingCohorts } = useQuery<BehavioralCohort[]>({
+    queryKey: ["/api/admin/analytics/behavioral-cohorts", overviewDays],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/analytics/behavioral-cohorts?days=${overviewDays}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed");
       return res.json();
     },
@@ -273,6 +325,7 @@ export default function AdminAnalytics() {
   }, [overview]);
 
   const liveHeatmap = useMemo(() => overview?.heatmap ?? [], [overview]);
+  const heatmapMax = useMemo(() => Math.max(...(liveHeatmap.flat()), 1), [liveHeatmap]);
 
   const liveGeoHotspots = useMemo(() => {
     const data = overview?.geoHotspots ?? [];
@@ -322,7 +375,12 @@ export default function AdminAnalytics() {
     { label: "Active Campaigns", value: summary?.activeCampaigns || 0, icon: Target, accentColor: "var(--admin-cyan)" },
     { label: "Restaurants", value: summary?.totalRestaurants || 0, icon: ShoppingBag, accentColor: "var(--admin-blue)" },
     { label: "Delivery Clicks", value: overview?.deliveryTotal ?? 0, icon: ExternalLink, accentColor: "var(--admin-teal)" },
-    { label: "Avg Session", value: "—", icon: Timer, accentColor: "var(--admin-deep-purple)" },
+    {
+      label: "Avg Session",
+      value: loadingUserMetrics ? "…" : userMetrics ? `${userMetrics.avgSessionMinutes}m` : "—",
+      icon: Timer,
+      accentColor: "var(--admin-deep-purple)",
+    },
   ];
 
   return (
@@ -403,25 +461,65 @@ export default function AdminAnalytics() {
           <div className="px-6 pb-6 pt-2 space-y-6">
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-4" data-testid="section-user-kpis">
               <UserKpiCard icon={<Users className="w-4 h-4" style={{ color: "var(--admin-deep-purple)" }} />} label="Total Users" value={(summary?.totalUsers || 0).toLocaleString()} accentColor="var(--admin-deep-purple)" />
-              <UserKpiCard icon={<Activity className="w-4 h-4" style={{ color: "var(--admin-pink)" }} />} label="Active This Week" value="—" accentColor="var(--admin-pink)" />
-              <UserKpiCard icon={<BarChart3 className="w-4 h-4" style={{ color: "var(--admin-deep-purple)" }} />} label="Avg Sessions/User" value="—" accentColor="var(--admin-deep-purple)" />
-              <UserKpiCard icon={<TrendingUp className="w-4 h-4" style={{ color: "var(--admin-cyan)" }} />} label="Retention Rate" value="—" accentColor="var(--admin-cyan)" />
+              <UserKpiCard icon={<Activity className="w-4 h-4" style={{ color: "var(--admin-pink)" }} />} label="Active This Week" value={loadingUserMetrics ? "…" : (userMetrics?.activeThisWeek ?? 0).toLocaleString()} accentColor="var(--admin-pink)" />
+              <UserKpiCard icon={<BarChart3 className="w-4 h-4" style={{ color: "var(--admin-deep-purple)" }} />} label="Avg Sessions/User" value={loadingUserMetrics ? "…" : userMetrics ? String(userMetrics.avgSessionsPerUser) : "—"} accentColor="var(--admin-deep-purple)" />
+              <UserKpiCard icon={<TrendingUp className="w-4 h-4" style={{ color: "var(--admin-cyan)" }} />} label="Retention Rate" value={loadingUserMetrics ? "…" : userMetrics ? `${userMetrics.retentionRate}%` : "—"} accentColor="var(--admin-cyan)" />
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               <div className="rounded-xl border border-gray-100 p-5" data-testid="section-gender-distribution">
                 <h4 className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">Gender Distribution</h4>
-                <div className="flex flex-col items-center justify-center py-6 text-center text-muted-foreground gap-2">
-                  <Users className="w-6 h-6 opacity-30" />
-                  <span className="text-xs">No demographic data yet</span>
-                </div>
+                {loadingDemographics ? (
+                  <div className="space-y-2">{[1,2,3,4].map(i => <Skeleton key={i} className="h-6 w-full" />)}</div>
+                ) : !demographics || demographics.genderTotal === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-6 text-center text-muted-foreground gap-2">
+                    <Users className="w-6 h-6 opacity-30" />
+                    <span className="text-xs">No gender data yet — users can set this in their profile</span>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {([ ["male","Male","var(--admin-blue)"], ["female","Female","var(--admin-pink)"], ["other","Other","var(--admin-teal)"], ["prefer_not_to_say","Prefer not to say","#9ca3af"] ] as const).map(([key, label, color]) => {
+                      const count = demographics.gender[key] ?? 0;
+                      const pct = Math.round((count / demographics.genderTotal) * 100);
+                      return (
+                        <div key={key} className="flex items-center gap-2">
+                          <span className="w-28 text-[11px] text-muted-foreground truncate">{label}</span>
+                          <div className="flex-1 bg-gray-100 rounded-full h-3 overflow-hidden">
+                            <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: color }} />
+                          </div>
+                          <span className="text-[11px] font-medium text-foreground w-10 text-right">{count} <span className="text-muted-foreground font-normal">({pct}%)</span></span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
               <div className="rounded-xl border border-gray-100 p-5" data-testid="section-age-demographics">
                 <h4 className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">Age Demographics</h4>
-                <div className="flex flex-col items-center justify-center py-6 text-center text-muted-foreground gap-2">
-                  <Users className="w-6 h-6 opacity-30" />
-                  <span className="text-xs">No demographic data yet</span>
-                </div>
+                {loadingDemographics ? (
+                  <div className="space-y-2">{[1,2,3,4,5].map(i => <Skeleton key={i} className="h-6 w-full" />)}</div>
+                ) : !demographics || demographics.ageTotal === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-6 text-center text-muted-foreground gap-2">
+                    <Users className="w-6 h-6 opacity-30" />
+                    <span className="text-xs">No age data yet — users can set this in their profile</span>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {(["18-24","25-34","35-44","45-54","55+"] as const).map((group) => {
+                      const count = demographics.ageGroup[group] ?? 0;
+                      const pct = Math.round((count / demographics.ageTotal) * 100);
+                      return (
+                        <div key={group} className="flex items-center gap-2">
+                          <span className="w-12 text-[11px] text-muted-foreground">{group}</span>
+                          <div className="flex-1 bg-gray-100 rounded-full h-3 overflow-hidden">
+                            <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: "var(--admin-deep-purple)" }} />
+                          </div>
+                          <span className="text-[11px] font-medium text-foreground w-10 text-right">{count} <span className="text-muted-foreground font-normal">({pct}%)</span></span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             </div>
 
@@ -457,10 +555,42 @@ export default function AdminAnalytics() {
 
             <div className="rounded-xl border border-gray-100 p-5" data-testid="section-behavioral-cohorts">
               <h4 className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest mb-3">Behavioral Cohorts</h4>
-              <div className="flex flex-col items-center justify-center py-6 text-center text-muted-foreground gap-2">
-                <Activity className="w-6 h-6 opacity-30" />
-                <span className="text-xs">No cohort data yet</span>
-              </div>
+              {loadingCohorts ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                  {[1,2,3,4,5].map(i => <Skeleton key={i} className="h-20 w-full" />)}
+                </div>
+              ) : behavioralCohorts.every(c => c.count === 0) ? (
+                <div className="flex flex-col items-center justify-center py-6 text-center text-muted-foreground gap-2">
+                  <Activity className="w-6 h-6 opacity-30" />
+                  <span className="text-xs">No activity yet — cohorts will appear as users interact</span>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                  {behavioralCohorts.map((cohort) => {
+                    const COHORT_COLORS: Record<string, string> = {
+                      power_swiper: "var(--admin-pink)",
+                      explorer: "var(--admin-blue)",
+                      delivery_focused: "var(--admin-teal)",
+                      social: "var(--admin-cyan)",
+                      casual: "#9ca3af",
+                    };
+                    const color = COHORT_COLORS[cohort.id] ?? "var(--admin-deep-purple)";
+                    return (
+                      <div key={cohort.id} className="rounded-lg border border-gray-100 p-3" data-testid={`card-cohort-${cohort.id}`}>
+                        <div className="flex items-center gap-2 mb-1">
+                          <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
+                          <span className="text-xs font-semibold text-foreground truncate">{cohort.name}</span>
+                        </div>
+                        <div className="text-xl font-bold tracking-tight mb-0.5" style={{ color }}>{cohort.count.toLocaleString()}</div>
+                        <div className="w-full bg-gray-100 rounded-full h-1.5 mb-1.5 overflow-hidden">
+                          <div className="h-full rounded-full" style={{ width: `${cohort.pct}%`, backgroundColor: color }} />
+                        </div>
+                        <p className="text-[10px] text-muted-foreground leading-snug">{cohort.description}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -616,7 +746,7 @@ export default function AdminAnalytics() {
                     <div
                       key={hourIdx}
                       className="flex-1 h-6 rounded-sm cursor-default"
-                      style={{ backgroundColor: getHeatmapColor(val) }}
+                      style={{ backgroundColor: getHeatmapColor(val, heatmapMax) }}
                       title={`${HEATMAP_DAYS[dayIdx]} ${HEATMAP_HOURS[hourIdx]} — ${val} sessions`}
                       data-testid={`heatmap-cell-${dayIdx}-${hourIdx}`}
                     />
@@ -713,12 +843,16 @@ export default function AdminAnalytics() {
               ))}
             </div>
           )}
-          <div className="flex items-center gap-3 pt-2 border-t border-gray-100">
-            <div className="flex items-center gap-1.5">
-              <Moon className="w-3 h-3" style={{ color: "hsl(222, 47%, 35%)" }} />
-              <span className="text-[10px] text-muted-foreground">Peak hours: 12pm-1pm, 6pm-8pm</span>
+          {livePeakHours.length > 0 && (
+            <div className="flex items-center gap-3 pt-2 border-t border-gray-100">
+              <div className="flex items-center gap-1.5">
+                <Moon className="w-3 h-3" style={{ color: "hsl(222, 47%, 35%)" }} />
+                <span className="text-[10px] text-muted-foreground">
+                  Peak hours: {livePeakHours.slice(0, 3).map(h => h.hour).join(", ")}
+                </span>
+              </div>
             </div>
-          </div>
+          )}
         </div>
 
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-4" data-testid="card-meal-categories">

@@ -165,7 +165,7 @@ function MiniSparkline({ data, color = "var(--admin-deep-purple)" }: { data: num
   );
 }
 
-function DeliveryRing({ data }: { data: { name: string; clicks: number; pct: number; color: string; avgOrder: string }[] }) {
+function DeliveryRing({ data }: { data: { name: string; clicks: number; pct: number; color: string }[] }) {
   const total = data.reduce((sum, d) => sum + d.clicks, 0);
   const r = 44;
   const cx = 55;
@@ -249,7 +249,6 @@ export default function AdminDashboard() {
 
   const { data: events, isLoading: eventsLoading } = useQuery<AnalyticsEvent[]>({
     queryKey: ["/api/analytics/events"],
-    refetchInterval: 30000,
   });
 
   const { data: segments } = useQuery<UserSegment[]>({
@@ -275,12 +274,12 @@ export default function AdminDashboard() {
   });
 
   const stats = dashboard || fallbackDashboard;
-  const recentEvents = (events || []).slice(0, 20);
+  const allEvents = events || [];
+  const recentEvents = allEvents.slice(0, 20);
   const userSegments = segments ?? [];
   const totalSegmentUsers = userSegments.reduce((sum, s) => sum + s.estimatedCount, 0) || 1;
   const PLAT_COLORS: Record<string, string> = { grab: "#00B14F", lineman: "#06C755", robinhood: "#6C2BD9" };
   const PLAT_NAMES: Record<string, string> = { grab: "Grab", lineman: "LINE MAN", robinhood: "Robinhood" };
-  const PLAT_AVG: Record<string, string> = { grab: "฿285", lineman: "฿310", robinhood: "฿265" };
 
   // Build real daily event counts for sparklines (last 7 days)
   const last7Days = useMemo(() => Array.from({ length: 7 }, (_, i) => {
@@ -288,11 +287,23 @@ export default function AdminDashboard() {
     d.setDate(d.getDate() - (6 - i));
     const dateStr = d.toISOString().slice(0, 10);
     const dayLabel = d.toLocaleDateString("en", { weekday: "short" });
-    const count = recentEvents.filter((e) => e.timestamp?.startsWith(dateStr)).length;
+    const count = allEvents.filter((e) => e.timestamp?.startsWith(dateStr)).length;
     return { dateStr, dayLabel, count };
-  }), [recentEvents]);
+  }), [allEvents]);
 
-  const activitySparkline = last7Days.map(d => d.count);
+  // Separate sparklines per KPI metric (from real events)
+  const sparklines = useMemo(() => {
+    const days = last7Days.map(d => d.dateStr);
+    const swipeTypes = new Set(["swipe_right", "swipe"]);
+    const deliveryTypes = new Set(["delivery_click", "deeplink_click"]);
+    return {
+      users: days.map(d => new Set(allEvents.filter(e => e.timestamp?.startsWith(d) && e.userId).map(e => e.userId)).size),
+      restaurants: days.map(d => new Set(allEvents.filter(e => e.timestamp?.startsWith(d) && e.restaurantId).map(e => e.restaurantId)).size),
+      swipes: days.map(d => allEvents.filter(e => e.timestamp?.startsWith(d) && swipeTypes.has(e.eventType)).length),
+      delivery: days.map(d => allEvents.filter(e => e.timestamp?.startsWith(d) && deliveryTypes.has(e.eventType)).length),
+      activity: last7Days.map(d => d.count),
+    };
+  }, [allEvents, last7Days]);
 
   const liveDelivery = useMemo(() => {
     if (!clickoutsData?.byPlatform || Object.keys(clickoutsData.byPlatform).length === 0) return [];
@@ -302,18 +313,20 @@ export default function AdminDashboard() {
       clicks: count,
       pct: Math.round((count / total) * 100),
       color: PLAT_COLORS[key] ?? "var(--admin-blue)",
-      avgOrder: PLAT_AVG[key] ?? "-",
     }));
   }, [clickoutsData]);
 
   const liveTopRestaurants = useMemo(() => {
     const data = overview?.topRestaurants ?? [];
-    return data.map(r => ({
+    const mapped = data.map(r => ({
       name: r.name,
       swipes: r.rightSwipes,
       conversion: r.views > 0 ? Math.round((r.rightSwipes / r.views) * 100) : 0,
-      trend: "up" as const,
     }));
+    const avgConversion = mapped.length > 0
+      ? mapped.reduce((sum, r) => sum + r.conversion, 0) / mapped.length
+      : 0;
+    return mapped.map(r => ({ ...r, trend: r.conversion >= avgConversion ? "up" : "down" as "up" | "down" }));
   }, [overview]);
 
   const liveCuisines = useMemo(() => {
@@ -357,35 +370,35 @@ export default function AdminDashboard() {
       label: "Total Users",
       value: stats.totalUsers,
       icon: Users,
-      sparkline: activitySparkline,
+      sparkline: sparklines.users,
       accentColor: "var(--admin-deep-purple)",
     },
     {
       label: "Restaurants",
       value: stats.totalRestaurants,
       icon: Utensils,
-      sparkline: activitySparkline,
+      sparkline: sparklines.restaurants,
       accentColor: "var(--admin-blue)",
     },
     {
       label: "Total Swipes",
       value: stats.totalSwipes,
       icon: MousePointerClick,
-      sparkline: activitySparkline,
+      sparkline: sparklines.swipes,
       accentColor: "var(--admin-pink)",
     },
     {
       label: "Delivery Clicks",
       value: overview?.deliveryTotal ?? 0,
       icon: Truck,
-      sparkline: activitySparkline,
+      sparkline: sparklines.delivery,
       accentColor: "var(--admin-teal)",
     },
     {
       label: "Campaigns",
       value: stats.activeCampaigns,
       icon: Megaphone,
-      sparkline: activitySparkline,
+      sparkline: sparklines.activity,
       accentColor: "var(--admin-cyan)",
     },
   ];
@@ -572,7 +585,6 @@ export default function AdminDashboard() {
                     <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: platform.color }} />
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-gray-800">{platform.name}</p>
-                      <p className="text-[10px] text-gray-500">Avg {platform.avgOrder}</p>
                     </div>
                     <div className="text-right flex-shrink-0">
                       <p className="text-sm font-bold text-gray-800">{platform.clicks.toLocaleString()}</p>

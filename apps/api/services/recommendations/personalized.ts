@@ -8,6 +8,13 @@ import {
 } from "@algorithms";
 import { getSuperLikeMultiplier } from "../../lib/superLike";
 import { autoDetectDistrict } from "@shared/vibeConfig";
+import {
+  getLoadedMlModelVersion,
+  getMlBlendAlpha,
+  isMlRankingEnabled,
+  predictMlProbability,
+  type MlFeatureVector,
+} from "../../lib/mlRanking";
 
 type RecommendationFeature = UserFeatureSnapshot & {
   locationClusters?: string[];
@@ -38,6 +45,78 @@ function computeDistanceMeters(lat1: number, lng1: number, lat2: number, lng2: n
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
     Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
   return Math.round(2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+}
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+function buildMlFeatureVector(params: {
+  restaurant: Restaurant;
+  normalizedAffinity: Record<string, number>;
+  preferredPriceLevel: number;
+  dislikedItemIds: number[];
+  activeHours: number[];
+  hourOfDay?: number;
+  dayOfWeek?: number;
+  lat?: number;
+  lng?: number;
+  itemCtrs?: Map<number, number>;
+}): MlFeatureVector {
+  const {
+    restaurant,
+    normalizedAffinity,
+    preferredPriceLevel,
+    dislikedItemIds,
+    activeHours,
+    hourOfDay,
+    dayOfWeek,
+    lat,
+    lng,
+    itemCtrs,
+  } = params;
+
+  const affinity = clamp01(normalizedAffinity[restaurant.category] ?? 0);
+  const priceGap = Math.abs((restaurant.priceLevel ?? 2) - preferredPriceLevel);
+  const priceMatch = clamp01(1 - priceGap / 3);
+  const popularityScore = clamp01((restaurant.trendingScore ?? 0) / 100);
+  const disliked = dislikedItemIds.includes(restaurant.id) ? 1 : 0;
+  const hourActive = typeof hourOfDay === "number" && activeHours.includes(hourOfDay) ? 1 : 0;
+  const isWeekend = dayOfWeek === 0 || dayOfWeek === 6 ? 1 : 0;
+  const newRestaurant = (itemCtrs?.get(restaurant.id) ?? 0) < 10 ? 1 : 0;
+
+  let distanceScore = 0.5;
+  const rLat = Number(restaurant.lat);
+  const rLng = Number(restaurant.lng);
+  if (
+    Number.isFinite(lat) &&
+    Number.isFinite(lng) &&
+    Number.isFinite(rLat) &&
+    Number.isFinite(rLng)
+  ) {
+    const distanceMeters = computeDistanceMeters(lat as number, lng as number, rLat, rLng);
+    distanceScore = clamp01(1 - Math.min(distanceMeters / 10_000, 1));
+  }
+
+  return {
+    cuisine_affinity: affinity,
+    price_match: priceMatch,
+    distance_score: distanceScore,
+    popularity_score: popularityScore,
+    disliked,
+    hour_active: hourActive,
+    is_weekend: isWeekend,
+    new_restaurant: newRestaurant,
+  };
+}
+
+function applyMlBlend(ruleScore: number, vector: MlFeatureVector): { score: number; used: boolean } {
+  if (!isMlRankingEnabled()) return { score: ruleScore, used: false };
+  const mlProb = predictMlProbability(vector);
+  if (mlProb == null) return { score: ruleScore, used: false };
+  const alpha = getMlBlendAlpha();
+  const blended = alpha * mlProb + (1 - alpha) * clamp01(ruleScore);
+  return { score: Number(blended.toFixed(4)), used: true };
 }
 
 /**
@@ -153,11 +232,25 @@ export function buildPersonalizedRecommendations(params: {
             (0.7 * popularityBlend + 0.3 * score.score) * superLikeMultiplier +
             newRestaurantBoost(restaurant.id) +
             locationBoost;
+          const mlVector = buildMlFeatureVector({
+            restaurant,
+            normalizedAffinity,
+            preferredPriceLevel: feature.preferredPriceLevel ?? 2,
+            dislikedItemIds: feature.dislikedItemIds ?? [],
+            activeHours: feature.activeHours ?? [],
+            hourOfDay: context?.hourOfDay,
+            dayOfWeek: context?.dayOfWeek,
+            lat,
+            lng,
+            itemCtrs,
+          });
+          const mlBlend = applyMlBlend(blendedScore, mlVector);
           return {
             ...restaurant,
-            score: Number(blendedScore.toFixed(4)),
+            score: mlBlend.score,
             explanation: [
               "Sparse user: blending popularity and early preference signals",
+              ...(mlBlend.used ? [`ML blend applied (${getLoadedMlModelVersion() ?? "unknown"})`] : []),
               ...(superLikeMultiplier > 1 ? ["Super-like cuisine boost applied"] : []),
               ...(locationBoost > 0 ? ["Near your frequent area"] : []),
               ...score.explanation,
@@ -177,10 +270,24 @@ export function buildPersonalizedRecommendations(params: {
         const detectedDistrict = autoDetectDistrict(restaurant.address ?? "")?.toLowerCase();
         const locationBoost = detectedDistrict && topLocationClusters.includes(detectedDistrict) ? 0.05 : 0;
         const boostedScore = score.score * superLikeMultiplier + newRestaurantBoost(restaurant.id) + locationBoost;
+        const mlVector = buildMlFeatureVector({
+          restaurant,
+          normalizedAffinity,
+          preferredPriceLevel: feature.preferredPriceLevel ?? 2,
+          dislikedItemIds: feature.dislikedItemIds ?? [],
+          activeHours: feature.activeHours ?? [],
+          hourOfDay: context?.hourOfDay,
+          dayOfWeek: context?.dayOfWeek,
+          lat,
+          lng,
+          itemCtrs,
+        });
+        const mlBlend = applyMlBlend(boostedScore, mlVector);
         return {
           ...restaurant,
-          score: Number(boostedScore.toFixed(4)),
+          score: mlBlend.score,
           explanation: [
+            ...(mlBlend.used ? [`ML blend applied (${getLoadedMlModelVersion() ?? "unknown"})`] : []),
             ...(superLikeMultiplier > 1 ? ["Super-like cuisine boost applied"] : []),
             ...(locationBoost > 0 ? ["Near your frequent area"] : []),
             ...score.explanation,
@@ -210,11 +317,25 @@ export function buildPersonalizedRecommendations(params: {
           ? Math.min(computeDistanceMeters(lat as number, lng as number, Number(restaurant.lat), Number(restaurant.lng)) / 10000, 1)
           : 0.4;
       const score = Number((trend * 0.65 + categoryPopularity * 0.35 - distancePenalty * 0.15 + newRestaurantBoost(restaurant.id)).toFixed(4));
+      const mlVector = buildMlFeatureVector({
+        restaurant,
+        normalizedAffinity: {},
+        preferredPriceLevel: 2,
+        dislikedItemIds: [],
+        activeHours: [],
+        hourOfDay: context?.hourOfDay,
+        dayOfWeek: context?.dayOfWeek,
+        lat,
+        lng,
+        itemCtrs,
+      });
+      const mlBlend = applyMlBlend(score, mlVector);
       return {
         ...restaurant,
-        score,
+        score: mlBlend.score,
         explanation: [
           "Cold-start ranking: no user feature profile yet",
+          ...(mlBlend.used ? [`ML blend applied (${getLoadedMlModelVersion() ?? "unknown"})`] : []),
           "Balanced by category popularity and global trend",
           Number.isFinite(lat) && Number.isFinite(lng) ? "Distance-aware fallback applied" : "Location-neutral fallback applied",
         ],

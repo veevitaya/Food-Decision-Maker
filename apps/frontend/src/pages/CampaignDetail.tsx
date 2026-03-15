@@ -4,26 +4,14 @@ import { useLocation, useRoute } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { BottomNav } from "@/components/BottomNav";
 import { ArrowLeft, Clock, MapPin, ChevronRight, X, Copy, Check, Shield } from "lucide-react";
-import { MOCK_HOME_CAMPAIGNS, MOCK_RESTAURANT_CAMPAIGNS, getDealLabel } from "@/components/CampaignBanner";
-
-function getAllMockCampaigns() {
-  const all = [...MOCK_HOME_CAMPAIGNS];
-  const restaurantIds = Object.keys(MOCK_RESTAURANT_CAMPAIGNS).map(Number);
-  for (const rid of restaurantIds) {
-    for (const c of MOCK_RESTAURANT_CAMPAIGNS[rid]) {
-      if (!all.some(existing => existing.id === c.id)) {
-        all.push(c);
-      }
-    }
-  }
-  return all;
-}
+import { getDealLabel } from "@/components/CampaignBanner";
 
 function getDaysLeft(endDate: string) {
+  if (!endDate) return "Limited time offer";
   const end = new Date(endDate);
   const now = new Date();
   const diff = Math.ceil((end.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-  if (diff <= 0) return "Ends today";
+  if (isNaN(diff) || diff <= 0) return "Ends today";
   if (diff === 1) return "1 day left";
   if (diff <= 7) return `${diff} days left`;
   return `${Math.ceil(diff / 7)} weeks left`;
@@ -224,11 +212,10 @@ function RedemptionOverlay({
               <button
                 key={tab.key}
                 onClick={() => setActiveTab(tab.key)}
-                className={`flex-1 py-2 rounded-full text-[12px] font-semibold transition-all duration-200 ${
-                  activeTab === tab.key
+                className={`flex-1 py-2 rounded-full text-[12px] font-semibold transition-all duration-200 ${activeTab === tab.key
                     ? "bg-white text-foreground shadow-sm"
                     : "text-muted-foreground"
-                }`}
+                  }`}
                 data-testid={`tab-${tab.key}`}
               >
                 {tab.label}
@@ -334,7 +321,7 @@ export default function CampaignDetail() {
     else navigate("/");
   };
 
-  const { data: apiCampaigns } = useQuery({
+  const { data: apiCampaigns, isLoading } = useQuery({
     queryKey: ["/api/campaigns/active"],
     queryFn: async () => {
       const res = await fetch("/api/campaigns/active");
@@ -342,10 +329,16 @@ export default function CampaignDetail() {
       return res.json() as Promise<Array<{ id: string; title: string; dealType: string; dealValue: string; endDate: string; restaurantName: string; restaurantImage: string; description: string; accentColor: string; restaurantId?: number }>>;
     },
   });
-  const allMockCampaigns = useMemo(() => getAllMockCampaigns(), []);
-  const campaign = (apiCampaigns && apiCampaigns.length > 0)
-    ? (apiCampaigns.find((c) => c.id === campaignId) ?? allMockCampaigns.find((c) => c.id === campaignId))
-    : allMockCampaigns.find((c) => c.id === campaignId);
+
+  const campaign = apiCampaigns?.find((c) => String(c.id) === String(campaignId));
+
+  if (isLoading) {
+    return (
+      <div className="w-full min-h-[100dvh] bg-white flex items-center justify-center">
+        <div className="w-10 h-10 border-4 border-gray-200 border-t-foreground rounded-full animate-spin" />
+      </div>
+    );
+  }
 
   if (!campaign) {
     return (
@@ -374,7 +367,7 @@ export default function CampaignDetail() {
     <div className="w-full min-h-[100dvh] bg-white pb-40" data-testid="campaign-detail-page">
       <div className="relative w-full h-64 overflow-hidden">
         <img
-          src={campaign.restaurantImage}
+          src={campaign.restaurantImage || "https://images.unsplash.com/photo-1513104890138-7c749659a591?w=800&auto=format&fit=crop&q=60"}
           alt={campaign.restaurantName}
           className="w-full h-full object-cover"
         />
@@ -433,7 +426,7 @@ export default function CampaignDetail() {
           >
             <div className="w-14 h-14 rounded-xl overflow-hidden flex-shrink-0">
               <img
-                src={campaign.restaurantImage}
+                src={campaign.restaurantImage || "https://images.unsplash.com/photo-1513104890138-7c749659a591?w=800&auto=format&fit=crop&q=60"}
                 alt={campaign.restaurantName}
                 className="w-full h-full object-cover"
               />
@@ -484,7 +477,9 @@ export default function CampaignDetail() {
               <Clock className="w-5 h-5 text-muted-foreground" />
               <div>
                 <p className="text-[13px] font-semibold text-foreground">
-                  Valid until {new Date(campaign.endDate).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}
+                  {campaign.endDate
+                    ? `Valid until ${new Date(campaign.endDate).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}`
+                    : "No specific expiration date"}
                 </p>
                 <p className="text-[11px] text-muted-foreground mt-0.5">{daysLeft}</p>
               </div>

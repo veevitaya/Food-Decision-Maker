@@ -17,6 +17,21 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    image: redis:7-alpine
+    container_name: toast-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - toast_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   app:
     build:
       context: .
@@ -26,10 +41,20 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       NODE_ENV: production
       PORT: 5000
       DATABASE_URL: postgres://postgres:postgres@db:5432/toast
+      REDIS_URL: redis://redis:6379
+      EVENT_INGEST_MODE: ${EVENT_INGEST_MODE:-direct}
+      EVENT_REDIS_FAILURE_MODE: ${EVENT_REDIS_FAILURE_MODE:-direct}
+      EVENT_STREAM_KEY: ${EVENT_STREAM_KEY:-events:ingest}
+      EVENT_CONSUMER_GROUP: ${EVENT_CONSUMER_GROUP:-events-workers}
+      EVENT_BATCH_SIZE: ${EVENT_BATCH_SIZE:-200}
+      EVENT_FLUSH_INTERVAL_MS: ${EVENT_FLUSH_INTERVAL_MS:-2000}
+      EVENT_MAX_RETRIES: ${EVENT_MAX_RETRIES:-3}
       VITE_LIFF_ID: ${VITE_LIFF_ID:-}
       LINE_CHANNEL_ID: ${LINE_CHANNEL_ID:-}
       VITE_LIFF_AUTO_LOGIN: ${VITE_LIFF_AUTO_LOGIN:-false}
@@ -38,3 +63,4 @@ services:
 
 volumes:
   toast_db_data:
+  toast_redis_data:

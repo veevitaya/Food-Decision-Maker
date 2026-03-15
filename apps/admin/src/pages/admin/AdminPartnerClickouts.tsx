@@ -116,7 +116,7 @@ export default function AdminPartnerClickouts() {
                     <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
                     <span className="w-24 text-xs text-gray-700 font-medium">{label}</span>
                     <div className="flex-1 bg-gray-100 rounded-full h-3 overflow-hidden">
-                      <div className="h-full rounded-full" style={{ width: `${pct * 2.5}%`, backgroundColor: color }} />
+                      <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: color }} />
                     </div>
                     <span className="w-14 text-right text-xs font-semibold text-gray-700">{count.toLocaleString()}</span>
                     <span className="w-10 text-right text-[10px] text-gray-400">{pct}%</span>

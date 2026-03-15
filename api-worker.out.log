@@ -1,0 +1,7 @@
+
+> @toast/api@1.0.0 events:worker C:\Users\garin\OneDrive\Desktop\Projects\Food-Decision-Maker\apps\api
+> tsx --env-file=../../.env workers/eventIngestWorker.ts
+
+C:\Users\garin\OneDrive\Desktop\Projects\Food-Decision-Maker\apps\api:
+ ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL  @toast/api@1.0.0 events:worker: `tsx --env-file=../../.env workers/eventIngestWorker.ts`
+Exit status 3221225786

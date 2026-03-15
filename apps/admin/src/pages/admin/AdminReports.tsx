@@ -1,99 +1,114 @@
 import { useState } from "react";
-import { FileText, Download, Calendar, Clock, TrendingUp, Users, ExternalLink, BarChart3, Eye, X, Loader2, Check } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  FileText, Download, Calendar, Clock, TrendingUp, Users,
+  ExternalLink, BarChart3, Eye, X, Loader2,
+} from "lucide-react";
 import { getTintVar } from "./adminUtils";
 import { useToast } from "@/hooks/use-toast";
 
-const AVAILABLE_REPORTS = [
-  { name: "Weekly Performance Summary", description: "KPIs, top restaurants, session metrics, clickout breakdown", frequency: "Weekly", lastGenerated: "Mar 8, 2026", format: "PDF", icon: BarChart3, color: "var(--admin-blue)" },
-  { name: "Monthly Investor Report", description: "Growth metrics, user acquisition, revenue indicators, market penetration", frequency: "Monthly", lastGenerated: "Mar 1, 2026", format: "PDF", icon: TrendingUp, color: "var(--admin-deep-purple)" },
-  { name: "Partner Attribution Report", description: "Clickouts by partner, restaurant performance, conversion rates", frequency: "Monthly", lastGenerated: "Mar 1, 2026", format: "CSV", icon: ExternalLink, color: "var(--admin-cyan)" },
-  { name: "User Cohort Analysis", description: "Retention curves, engagement segments, churn risk indicators", frequency: "Monthly", lastGenerated: "Mar 1, 2026", format: "PDF", icon: Users, color: "var(--admin-pink)" },
-  { name: "Owner Activity Report", description: "Portal logins, menu updates, claim status, tier usage", frequency: "Weekly", lastGenerated: "Mar 8, 2026", format: "CSV", icon: FileText, color: "var(--admin-teal)" },
-  { name: "Data Quality Report", description: "Missing images, invalid links, stale data, completeness scores", frequency: "Daily", lastGenerated: "Today", format: "CSV", icon: BarChart3, color: "var(--admin-pink)" },
-];
+type ReportType = "weekly-performance" | "partner-attribution" | "owner-activity" | "data-quality";
 
-const REPORT_PREVIEW_DATA: Record<string, string[][]> = {
-  "Weekly Performance Summary": [
-    ["Metric", "This Week", "Last Week", "Change"],
-    ["Active Users", "4,820", "4,210", "+14.5%"],
-    ["Swipe Sessions", "11,150", "9,800", "+13.8%"],
-    ["Clickouts", "420", "385", "+9.1%"],
-    ["Avg Session Length", "3m 42s", "3m 18s", "+12.1%"],
-    ["Top Restaurant", "Jay Fai", "Som Tam Nua", "—"],
-  ],
-  "Partner Attribution Report": [
-    ["Partner", "Clickouts", "Revenue Share", "Conversion"],
-    ["Grab", "186", "฿18,600", "34%"],
-    ["LINE MAN", "148", "฿14,800", "28%"],
-    ["Robinhood", "86", "฿8,600", "22%"],
-  ],
-  "Owner Activity Report": [
-    ["Owner", "Logins", "Menu Updates", "Tier"],
-    ["Jay Fai", "12", "3", "Premium"],
-    ["Chen W.", "18", "5", "Enterprise"],
-    ["Marcus W.", "8", "2", "Premium"],
-    ["Somchai K.", "4", "1", "Basic"],
-  ],
-  "Data Quality Report": [
-    ["Issue", "Count", "Severity", "Trend"],
-    ["Missing Images", "342", "High", "+12"],
-    ["Missing Tags", "267", "Medium", "-8"],
-    ["No Price Listed", "189", "High", "+4"],
-    ["Invalid Links", "84", "High", "-15"],
-  ],
-};
+interface ReportData {
+  title: string;
+  rows: string[][];
+  generatedAt: string;
+}
+
+const REPORT_DEFS = [
+  {
+    id: "weekly-performance" as ReportType,
+    name: "Weekly Performance Summary",
+    description: "KPIs, top restaurants, session metrics, clickout breakdown",
+    frequency: "Weekly",
+    format: "CSV",
+    icon: BarChart3,
+    color: "var(--admin-blue)",
+  },
+  {
+    id: "partner-attribution" as ReportType,
+    name: "Partner Attribution Report",
+    description: "Clickouts by partner (Grab, LINE MAN, Robinhood) with share %",
+    frequency: "Monthly",
+    format: "CSV",
+    icon: ExternalLink,
+    color: "var(--admin-cyan)",
+  },
+  {
+    id: "owner-activity" as ReportType,
+    name: "Owner Activity Report",
+    description: "Portal logins, menu updates per restaurant owner",
+    frequency: "Weekly",
+    format: "CSV",
+    icon: FileText,
+    color: "var(--admin-teal)",
+  },
+  {
+    id: "data-quality" as ReportType,
+    name: "Data Quality Report",
+    description: "Missing images, phone, opening hours, categories per restaurant",
+    frequency: "Daily",
+    format: "CSV",
+    icon: BarChart3,
+    color: "var(--admin-pink)",
+  },
+  {
+    id: null,
+    name: "Monthly Investor Report",
+    description: "Growth metrics, user acquisition, revenue indicators — requires partner API integration",
+    frequency: "Monthly",
+    format: "PDF",
+    icon: TrendingUp,
+    color: "var(--admin-deep-purple)",
+  },
+  {
+    id: null,
+    name: "User Cohort Analysis",
+    description: "Retention curves, engagement segments — requires longitudinal tracking",
+    frequency: "Monthly",
+    format: "PDF",
+    icon: Users,
+    color: "var(--admin-pink)",
+  },
+] as const;
 
 export default function AdminReports() {
-  const [previewReport, setPreviewReport] = useState<string | null>(null);
-  const [downloadingReport, setDownloadingReport] = useState<string | null>(null);
-  const [scheduledReports, setScheduledReports] = useState([
-    { name: "Weekly Summary", nextRun: "Mar 15, 2026", recipients: "team@toastbkk.com", enabled: true },
-    { name: "Monthly Investor Report", nextRun: "Apr 1, 2026", recipients: "investors@toastbkk.com", enabled: true },
-    { name: "Daily Data Quality", nextRun: "Tomorrow 6:00 AM", recipients: "ops@toastbkk.com", enabled: true },
-    { name: "Partner Attribution", nextRun: "Apr 1, 2026", recipients: "partnerships@toastbkk.com", enabled: false },
-  ]);
+  const [previewType, setPreviewType] = useState<ReportType | null>(null);
+  const [downloadingId, setDownloadingId] = useState<ReportType | null>(null);
   const { toast } = useToast();
 
-  const handleDownload = (reportName: string, format: string) => {
-    setDownloadingReport(reportName);
-    setTimeout(() => {
-      const filename = `${reportName.toLowerCase().replace(/\s+/g, "-")}_${new Date().toISOString().slice(0, 10)}.${format.toLowerCase()}`;
-      let content = "";
-      const preview = REPORT_PREVIEW_DATA[reportName];
-      if (preview && format === "CSV") {
-        content = preview.map(row => row.join(",")).join("\n");
-      } else {
-        content = `${reportName}\nGenerated: ${new Date().toLocaleString()}\n\nThis is a sample report file.\n`;
-        if (preview) {
-          content += "\n" + preview.map(row => row.join("\t")).join("\n");
-        }
-      }
-      const blob = new Blob([content], { type: format === "CSV" ? "text/csv" : "text/plain" });
+  const { data: previewData, isLoading: loadingPreview } = useQuery<ReportData>({
+    queryKey: ["/api/admin/reports/generate", previewType],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/reports/generate?type=${previewType}&days=7`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+    enabled: !!previewType,
+  });
+
+  const handleDownload = async (id: ReportType, format: string) => {
+    setDownloadingId(id);
+    try {
+      const res = await fetch(`/api/admin/reports/generate?type=${id}&days=30`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed");
+      const data: ReportData = await res.json();
+      const content = data.rows.map(row => row.map(cell => `"${cell.replace(/"/g, '""')}"`).join(",")).join("\n");
+      const filename = `${id}_${new Date().toISOString().slice(0, 10)}.${format.toLowerCase()}`;
+      const blob = new Blob([content], { type: "text/csv" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      toast({ title: "Report Downloaded", description: `${filename} has been saved` });
-      setDownloadingReport(null);
-    }, 1500);
+      a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click();
+      document.body.removeChild(a); URL.revokeObjectURL(url);
+      toast({ title: "Report Downloaded", description: `${filename} saved` });
+    } catch {
+      toast({ title: "Download Failed", description: "Could not generate report", variant: "destructive" });
+    } finally {
+      setDownloadingId(null);
+    }
   };
-
-  const toggleScheduled = (name: string) => {
-    setScheduledReports(prev => prev.map(s =>
-      s.name === name ? { ...s, enabled: !s.enabled } : s
-    ));
-    const report = scheduledReports.find(s => s.name === name);
-    toast({
-      title: report?.enabled ? "Report Paused" : "Report Activated",
-      description: `${name} schedule has been ${report?.enabled ? "paused" : "activated"}`
-    });
-  };
-
-  const previewData = previewReport ? REPORT_PREVIEW_DATA[previewReport] : null;
 
   return (
     <div className="space-y-8" data-testid="admin-reports-page">
@@ -101,88 +116,81 @@ export default function AdminReports() {
         <FileText className="w-5 h-5" style={{ color: "var(--admin-teal)" }} />
         <div>
           <h2 className="text-xl font-semibold text-gray-800">Reports</h2>
-          <p className="text-xs text-muted-foreground">Generate, schedule, and download reports</p>
+          <p className="text-xs text-muted-foreground">Generate and download reports from live data</p>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Available Reports */}
         <div className="space-y-3" data-testid="card-available-reports">
           <div className="border-l-[3px] pl-3" style={{ borderColor: "var(--admin-teal)" }}>
             <h3 className="text-[15px] font-semibold text-gray-800">Available Reports</h3>
-            <p className="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Download or regenerate</p>
+            <p className="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Live data — download or preview</p>
           </div>
-          {AVAILABLE_REPORTS.map(report => (
-            <div key={report.name} className="bg-white rounded-2xl border border-gray-100 p-5 hover:border-gray-200 transition-colors">
-              <div className="flex items-start gap-4">
-                <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{ backgroundColor: getTintVar(report.color) }}>
-                  <report.icon className="w-5 h-5" style={{ color: report.color }} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <span className="text-sm font-semibold text-gray-800">{report.name}</span>
-                  <p className="text-xs text-gray-400 mt-0.5">{report.description}</p>
-                  <div className="flex items-center gap-3 mt-2 text-[10px] text-gray-400">
-                    <span className="flex items-center gap-1"><Calendar className="w-3 h-3" />{report.frequency}</span>
-                    <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{report.lastGenerated}</span>
-                    <span className="px-1.5 py-0.5 rounded bg-gray-100 font-medium">{report.format}</span>
+          {REPORT_DEFS.map(report => {
+            const isLive = report.id !== null;
+            return (
+              <div key={report.name} className="bg-white rounded-2xl border border-gray-100 p-5 hover:border-gray-200 transition-colors">
+                <div className="flex items-start gap-4">
+                  <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style={{ backgroundColor: getTintVar(report.color) }}>
+                    <report.icon className="w-5 h-5" style={{ color: report.color }} />
                   </div>
-                </div>
-                <div className="flex gap-1.5 flex-shrink-0">
-                  {REPORT_PREVIEW_DATA[report.name] && (
-                    <button
-                      onClick={() => setPreviewReport(report.name)}
-                      className="flex items-center gap-1 text-xs font-medium px-2.5 py-2 rounded-lg bg-gray-50 text-gray-500 hover:bg-gray-100 transition-colors"
-                      data-testid={`btn-preview-${report.name.toLowerCase().replace(/\s+/g, "-")}`}
-                    >
-                      <Eye className="w-3.5 h-3.5" />
-                    </button>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-semibold text-gray-800">{report.name}</span>
+                      {!isLive && (
+                        <span className="text-[9px] font-medium px-1.5 py-0.5 rounded bg-amber-50 text-amber-600 border border-amber-100">Needs Integration</span>
+                      )}
+                    </div>
+                    <p className="text-xs text-gray-400 mt-0.5">{report.description}</p>
+                    <div className="flex items-center gap-3 mt-2 text-[10px] text-gray-400">
+                      <span className="flex items-center gap-1"><Calendar className="w-3 h-3" />{report.frequency}</span>
+                      <span className="flex items-center gap-1"><Clock className="w-3 h-3" />On demand</span>
+                      <span className="px-1.5 py-0.5 rounded bg-gray-100 font-medium">{report.format}</span>
+                    </div>
+                  </div>
+                  {isLive && (
+                    <div className="flex gap-1.5 flex-shrink-0">
+                      <button
+                        onClick={() => setPreviewType(report.id as ReportType)}
+                        className="flex items-center gap-1 text-xs font-medium px-2.5 py-2 rounded-lg bg-gray-50 text-gray-500 hover:bg-gray-100 transition-colors"
+                        data-testid={`btn-preview-${report.id}`}
+                      >
+                        <Eye className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={() => handleDownload(report.id as ReportType, report.format)}
+                        disabled={downloadingId === report.id}
+                        className="flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors disabled:opacity-50"
+                        data-testid={`btn-download-${report.id}`}
+                      >
+                        {downloadingId === report.id
+                          ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Generating...</>
+                          : <><Download className="w-3.5 h-3.5" /> Download</>}
+                      </button>
+                    </div>
                   )}
-                  <button
-                    onClick={() => handleDownload(report.name, report.format)}
-                    disabled={downloadingReport === report.name}
-                    className="flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors disabled:opacity-50"
-                    data-testid={`btn-download-${report.name.toLowerCase().replace(/\s+/g, "-")}`}
-                  >
-                    {downloadingReport === report.name ? (
-                      <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Generating...</>
-                    ) : (
-                      <><Download className="w-3.5 h-3.5" /> Download</>
-                    )}
-                  </button>
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
 
         <div className="space-y-4">
+          {/* Scheduled Reports — config-only UI until email service is wired */}
           <div className="bg-white rounded-2xl border border-gray-100 p-6" data-testid="card-scheduled-reports">
             <div className="border-l-[3px] pl-3 mb-5" style={{ borderColor: "var(--admin-blue)" }}>
               <h3 className="text-[15px] font-semibold text-gray-800">Scheduled Reports</h3>
               <p className="text-[10px] text-gray-400 uppercase tracking-widest font-bold">Auto-generated & emailed</p>
             </div>
-            <div className="space-y-2.5">
-              {scheduledReports.map(s => (
-                <div key={s.name} className="flex items-center gap-3 p-3 rounded-xl border border-gray-100">
-                  <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${s.enabled ? "bg-emerald-400" : "bg-gray-300"}`} />
-                  <div className="flex-1 min-w-0">
-                    <span className="text-sm font-medium text-gray-800">{s.name}</span>
-                    <div className="flex gap-2 mt-0.5 text-[10px] text-gray-400">
-                      <span>Next: {s.nextRun}</span>
-                      <span>To: {s.recipients}</span>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => toggleScheduled(s.name)}
-                    className={`text-[10px] font-medium px-2.5 py-1 rounded-lg border transition-colors ${s.enabled ? "bg-emerald-50 text-emerald-700 border-emerald-100 hover:bg-emerald-100" : "bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100"}`}
-                    data-testid={`btn-toggle-schedule-${s.name.toLowerCase().replace(/\s+/g, "-")}`}
-                  >
-                    {s.enabled ? "Active" : "Paused"}
-                  </button>
-                </div>
-              ))}
+            <div className="flex flex-col items-center justify-center py-8 text-center text-muted-foreground gap-2">
+              <Clock className="w-6 h-6 opacity-30" />
+              <span className="text-sm">Email scheduling not yet configured</span>
+              <span className="text-xs text-gray-400">Connect an email service to enable auto-delivery of reports</span>
             </div>
           </div>
 
+          {/* Custom Report Builder */}
           <div className="bg-white rounded-2xl border border-gray-100 p-6" data-testid="card-custom-report">
             <div className="border-l-[3px] pl-3 mb-5" style={{ borderColor: "var(--admin-deep-purple)" }}>
               <h3 className="text-[15px] font-semibold text-gray-800">Custom Report Builder</h3>
@@ -203,52 +211,56 @@ export default function AdminReports() {
         </div>
       </div>
 
-      {previewReport && previewData && (
+      {/* Preview Modal */}
+      {previewType && (
         <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-6" data-testid="preview-modal">
           <div className="bg-white rounded-2xl border border-gray-100 shadow-2xl w-full max-w-2xl overflow-hidden">
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
               <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-xl bg-[var(--admin-teal-10)] flex items-center justify-center" style={{ backgroundColor: "rgba(245, 158, 11, 0.1)" }}>
-                  <Eye className="w-4 h-4" style={{ color: "var(--admin-teal)" }} />
+                <div className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ backgroundColor: "rgba(245,158,11,0.1)" }}>
+                  <Eye className="w-4 h-4 text-amber-500" />
                 </div>
                 <div>
                   <h3 className="text-sm font-semibold text-gray-800">Report Preview</h3>
-                  <p className="text-[10px] text-gray-400">{previewReport}</p>
+                  <p className="text-[10px] text-gray-400">{previewData?.title ?? "Loading…"}</p>
                 </div>
               </div>
-              <button onClick={() => setPreviewReport(null)} className="w-7 h-7 rounded-lg bg-gray-100 flex items-center justify-center hover:bg-gray-200" data-testid="btn-close-preview">
+              <button onClick={() => setPreviewType(null)} className="w-7 h-7 rounded-lg bg-gray-100 flex items-center justify-center hover:bg-gray-200" data-testid="btn-close-preview">
                 <X className="w-3.5 h-3.5 text-gray-500" />
               </button>
             </div>
-            <div className="px-6 py-5 overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-gray-100">
-                    {previewData[0].map((header, i) => (
-                      <th key={i} className="text-left py-2 px-3 text-xs uppercase tracking-wider text-gray-400 font-medium">{header}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {previewData.slice(1).map((row, i) => (
-                    <tr key={i} className="border-b border-gray-50">
-                      {row.map((cell, j) => (
-                        <td key={j} className="py-2.5 px-3 text-sm text-gray-700">{cell}</td>
+            <div className="px-6 py-5 overflow-x-auto min-h-[140px]">
+              {loadingPreview ? (
+                <div className="space-y-2">{[1,2,3,4].map(i => <Skeleton key={i} className="h-8 w-full" />)}</div>
+              ) : previewData ? (
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-100">
+                      {previewData.rows[0]?.map((header, i) => (
+                        <th key={i} className="text-left py-2 px-3 text-xs uppercase tracking-wider text-gray-400 font-medium">{header}</th>
                       ))}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {previewData.rows.slice(1).map((row, i) => (
+                      <tr key={i} className="border-b border-gray-50">
+                        {row.map((cell, j) => (
+                          <td key={j} className="py-2.5 px-3 text-sm text-gray-700">{cell}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : null}
             </div>
             <div className="flex items-center justify-between px-6 py-4 border-t border-gray-100 bg-gray-50">
-              <p className="text-[10px] text-gray-400">Showing sample data — full report contains complete dataset</p>
+              <p className="text-[10px] text-gray-400">
+                {previewData ? `Generated ${new Date(previewData.generatedAt).toLocaleString()} · live data` : ""}
+              </p>
               <button
-                onClick={() => {
-                  const report = AVAILABLE_REPORTS.find(r => r.name === previewReport);
-                  if (report) handleDownload(report.name, report.format);
-                  setPreviewReport(null);
-                }}
-                className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold bg-[var(--admin-blue)] text-white rounded-lg hover:opacity-90 transition-colors"
+                onClick={() => { handleDownload(previewType, "CSV"); setPreviewType(null); }}
+                className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white rounded-lg hover:opacity-90 transition-colors"
+                style={{ backgroundColor: "var(--admin-blue)" }}
                 data-testid="btn-preview-download"
               >
                 <Download className="w-3.5 h-3.5" /> Download Full Report

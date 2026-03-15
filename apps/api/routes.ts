@@ -2,11 +2,14 @@ import type { Express, Request, Response } from "express";
 import type { Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
+import { db } from "./db";
 import { api } from "@shared/routes";
 import { z } from "zod";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import express from "express";
 import bcrypt from "bcryptjs";
 import OpenAI from "openai";
@@ -23,15 +26,20 @@ import { queryGoogle } from "./services/places/providers/google";
 import { buildPersonalizedRecommendations } from "./services/recommendations/personalized";
 import { blendSnapshots, computePerMemberScores } from "./services/recommendations/groupBlend";
 import { blendPartnerSnapshots, buildPartnerMemberEntries, computeCompatibilityScore } from "./services/recommendations/partnerBlend";
-import { enqueueFeatureUpdate } from "./jobs/featureUpdateJob";
 import { getRecCache, setRecCache, invalidateRecCache, invalidateRecCacheByPrefix } from "./lib/recCache";
 import { getKey, getSource, setKey, ALLOWED_SERVICE_IDS, loadFromDb } from "./lib/apiKeyStore";
 import { persistAnalyticsQualityReport } from "./jobs/analyticsQuality";
 import { appendSecurityAudit } from "./lib/opsLog";
 import { checkSLOs } from "./lib/slo";
 import { sendAlert } from "./lib/alerting";
-import { deriveItemFeatureDelta, hasItemFeatureDelta } from "./lib/itemFeatureMetrics";
-import { reverseGeocodeDistrict } from "./lib/locationCluster";
+import { ingestBatchSchema } from "./lib/eventIngestSchema";
+import {
+  getEventIngestConfig,
+  getQueueStatus,
+  replayDlq,
+  shouldUseRedisIngest,
+} from "./lib/eventQueue";
+import { processEventIngestBatch } from "./lib/eventIngestBatch";
 import {
   DEFAULT_RECOMMENDATION_EXPERIMENT_KEY,
   parseExperimentConfigs,
@@ -49,8 +57,153 @@ import {
   parseOpenAIDishesResponse,
   type MenuTextCandidate,
 } from "./lib/menuGeneration";
+import { buildPredictiveIntelligenceOverview } from "./lib/predictiveIntelligence";
+import {
+  SUBSCRIPTION_TIERS,
+  type TierKey,
+  createStripeCustomer,
+  createStripeSetupIntent,
+  createStripeSubscription,
+  createStripePromptPayIntent,
+  createOmiseCustomer,
+  createOmiseTokenCharge,
+  createOmiseSource,
+  createOmiseSourceCharge,
+} from "./services/payment/paymentService";
+import { stripeWebhookHandler } from "./services/payment/stripeWebhook";
+import { omiseWebhookHandler } from "./services/payment/omiseWebhook";
+import { paymentTransactions, restaurantOwners, restaurants } from "@shared/schema";
+import { eq, desc, and, inArray } from "drizzle-orm";
 
 const isDev = process.env.NODE_ENV !== "production";
+const execFileAsync = promisify(execFile);
+
+type MlRunAction = "export" | "train" | "train-ranker" | "eval" | "build";
+type MlRunRecord = {
+  id: string;
+  action: MlRunAction;
+  startedAt: string;
+  finishedAt: string;
+  success: boolean;
+  durationMs: number;
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  requestedBy: string;
+};
+
+const ML_RUN_HISTORY_LIMIT = 40;
+const mlRunHistory: MlRunRecord[] = [];
+
+function resolveApiWorkingDir(): string {
+  const cwd = process.cwd();
+  const cwdPackage = path.join(cwd, "package.json");
+  if (fs.existsSync(cwdPackage)) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(cwdPackage, "utf8")) as { name?: string };
+      if (pkg.name === "@toast/api") return cwd;
+    } catch {}
+  }
+  const nestedApiDir = path.join(cwd, "apps", "api");
+  if (fs.existsSync(path.join(nestedApiDir, "package.json"))) return nestedApiDir;
+  return cwd;
+}
+
+type MlRunExecutionResult = {
+  success: boolean;
+  durationMs: number;
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+};
+
+async function runMlScript(action: MlRunAction): Promise<MlRunExecutionResult> {
+  const startedAtMs = Date.now();
+  const cwd = resolveApiWorkingDir();
+  const tsxCliPath = path.resolve(cwd, "..", "..", "node_modules", "tsx", "dist", "cli.mjs");
+  const envFilePath = path.resolve(cwd, "..", "..", ".env");
+  const command = process.execPath;
+
+  if (!fs.existsSync(tsxCliPath)) {
+    return {
+      success: false,
+      durationMs: Date.now() - startedAtMs,
+      stdout: "",
+      stderr: `tsx cli not found at ${tsxCliPath}`,
+      exitCode: null,
+    };
+  }
+
+  const actionToScripts: Record<Exclude<MlRunAction, "build">, string> = {
+    export: "scripts/ml/exportTrainingSet.ts",
+    train: "scripts/ml/trainRecommendationModel.ts",
+    "train-ranker": "scripts/ml/trainPairwiseRanker.ts",
+    eval: "scripts/ml/evaluateRanking.ts",
+  };
+
+  const runOne = async (scriptRelPath: string): Promise<{ ok: boolean; stdout: string; stderr: string; exitCode: number | null }> => {
+    try {
+      const { stdout, stderr } = await execFileAsync(
+        command,
+        [tsxCliPath, `--env-file=${envFilePath}`, scriptRelPath],
+        {
+          cwd,
+          timeout: 15 * 60 * 1000,
+          maxBuffer: 2 * 1024 * 1024,
+          env: process.env,
+        },
+      );
+      return { ok: true, stdout: stdout ?? "", stderr: stderr ?? "", exitCode: 0 };
+    } catch (error) {
+      const err = error as { stdout?: string; stderr?: string; code?: number | null };
+      return {
+        ok: false,
+        stdout: err.stdout ?? "",
+        stderr: err.stderr ?? String(error),
+        exitCode: typeof err.code === "number" ? err.code : null,
+      };
+    }
+  };
+
+  try {
+    const targets = action === "build"
+      ? (["export", "train"] as const)
+      : ([action] as const);
+
+    let allStdout = "";
+    let allStderr = "";
+    let finalExitCode: number | null = 0;
+    let success = true;
+
+    for (const target of targets) {
+      const step = await runOne(actionToScripts[target]);
+      allStdout += `\n[${target}] ${step.stdout}`;
+      allStderr += `\n[${target}] ${step.stderr}`;
+      if (!step.ok) {
+        success = false;
+        finalExitCode = step.exitCode;
+        break;
+      }
+    }
+
+    return {
+      success,
+      durationMs: Date.now() - startedAtMs,
+      stdout: allStdout.trim(),
+      stderr: allStderr.trim(),
+      exitCode: finalExitCode,
+    };
+  } catch (error) {
+    const err = error as { stdout?: string; stderr?: string; code?: number | null };
+    return {
+      success: false,
+      durationMs: Date.now() - startedAtMs,
+      stdout: err.stdout ?? "",
+      stderr: err.stderr ?? String(error),
+      exitCode: typeof err.code === "number" ? err.code : null,
+    };
+  }
+}
 
 function requireAdminSession(req: Request, res: Response): boolean {
   if (req.session?.isAdmin) return true;
@@ -107,10 +260,6 @@ async function getOwnerScope(req: Request): Promise<OwnerScope | null> {
   const approvedRestaurantIds = new Set<number>(
     claims.filter((claim) => claim.ownerId === owner.id).map((claim) => claim.restaurantId),
   );
-
-  if (owner.isVerified && owner.restaurantId) {
-    approvedRestaurantIds.add(owner.restaurantId);
-  }
 
   const sessionRestaurantId = req.session.ownerRestaurantId;
   const activeRestaurantId = sessionRestaurantId && approvedRestaurantIds.has(sessionRestaurantId)
@@ -2309,22 +2458,8 @@ export async function registerRoutes(
       ]);
 
       const blendInput = {
-        userSnapshot: userSnapshot
-          ? {
-              cuisineAffinity: userSnapshot.cuisineAffinity ?? {},
-              preferredPriceLevel: userSnapshot.preferredPriceLevel ?? 2,
-              dislikedItemIds: userSnapshot.dislikedItemIds ?? [],
-              activeHours: userSnapshot.activeHours ?? [],
-            }
-          : null,
-        partnerSnapshot: partnerSnapshot
-          ? {
-              cuisineAffinity: partnerSnapshot.cuisineAffinity ?? {},
-              preferredPriceLevel: partnerSnapshot.preferredPriceLevel ?? 2,
-              dislikedItemIds: partnerSnapshot.dislikedItemIds ?? [],
-              activeHours: partnerSnapshot.activeHours ?? [],
-            }
-          : null,
+        userSnapshot: userSnapshot ?? null,
+        partnerSnapshot: partnerSnapshot ?? null,
         userLineUserId: input.userId,
         partnerLineUserId,
         userDisplayName: userProfile.displayName,
@@ -2407,22 +2542,8 @@ export async function registerRoutes(
         resolvedUserId = dbAdmin.id;
         resolvedUsername = dbAdmin.username;
       } else {
-        // ── 2. Env-based fallback (backwards-compat) ────────────────────
-        console.log("[admin/login] No DB user found — falling back to env credentials");
-        const adminEmail = process.env.ADMIN_EMAIL ?? "";
-        if (loginId.toLowerCase() !== adminEmail.toLowerCase()) {
-          console.log("[admin/login] Email mismatch (env fallback)");
-          void appendSecurityAudit({ ts: new Date().toISOString(), level: "warn", source: "auth", message: "admin_login_failed", metadata: { loginId, ip: req.ip } });
-          return res.status(401).json({ message: "Invalid login or password" });
-        }
-        const hashEnv = process.env.ADMIN_PASSWORD_HASH;
-        const plainEnv = process.env.ADMIN_PASSWORD;
-        console.log("[admin/login] Password check - hasHash:", !!hashEnv, "hasPlain:", !!plainEnv);
-        passwordValid = hashEnv
-          ? await bcrypt.compare(password, hashEnv)
-          : (plainEnv ? password === plainEnv : false);
-        resolvedRole = "superadmin";
-        resolvedUsername = loginId;
+        void appendSecurityAudit({ ts: new Date().toISOString(), level: "warn", source: "auth", message: "admin_login_failed", metadata: { loginId, ip: req.ip } });
+        return res.status(401).json({ message: "Invalid login or password" });
       }
 
       console.log("[admin/login] Password valid:", passwordValid);
@@ -2548,12 +2669,26 @@ export async function registerRoutes(
     try {
       const input = z.object({
         restaurantId: z.number().int().positive(),
-        ownerId: z.number().int().positive(),
         requestedStartDate: z.string().optional(),
         requestedEndDate: z.string().optional(),
         notes: z.string().max(500).optional(),
       }).parse(req.body ?? {});
-      const created = await storage.createSponsoredRequest({ ...input, status: "pending" });
+
+      // Resolve ownerId from session — never trust client-supplied ownerId
+      let ownerId: number;
+      if (req.session?.ownerEmail) {
+        const dbOwner = await storage.getRestaurantOwnerByEmail(req.session.ownerEmail);
+        if (!dbOwner) return res.status(404).json({ message: "Owner not found" });
+        ownerId = dbOwner.id;
+      } else if (req.session?.isAdmin) {
+        const clientOwnerId = Number((req.body as any)?.ownerId);
+        if (!Number.isFinite(clientOwnerId)) return res.status(400).json({ message: "ownerId required for admin" });
+        ownerId = clientOwnerId;
+      } else {
+        return res.status(403).json({ message: "Owner session required" });
+      }
+
+      const created = await storage.createSponsoredRequest({ ...input, ownerId, status: "pending" });
       return res.status(201).json(created);
     } catch (err) {
       if (err instanceof z.ZodError) return res.status(400).json({ message: "Validation error", errors: err.errors });
@@ -2618,13 +2753,26 @@ export async function registerRoutes(
       }
 
       const dbOwner = await storage.getRestaurantOwnerByEmail(loginEmail);
-      const ownerEmail = (dbOwner?.email ?? process.env.OWNER_EMAIL ?? "owner@example.com").trim();
-      const ownerHashEnv = process.env.OWNER_PASSWORD_HASH;
-      const ownerPlainEnv = process.env.OWNER_PASSWORD ?? "change-me-owner";
-      const ownerPasswordValid = ownerHashEnv
-        ? await bcrypt.compare(password, ownerHashEnv)
-        : password === ownerPlainEnv;
-      if (loginEmail.toLowerCase() !== ownerEmail.toLowerCase() || !ownerPasswordValid) {
+
+      let passwordValid = false;
+      if (dbOwner?.passwordHash) {
+        // DB-backed auth
+        passwordValid = await bcrypt.compare(password, dbOwner.passwordHash);
+      } else {
+        // Env fallback (backwards-compat)
+        const ownerHashEnv = process.env.OWNER_PASSWORD_HASH;
+        const ownerPlainEnv = process.env.OWNER_PASSWORD ?? "change-me-owner";
+        const envEmail = (process.env.OWNER_EMAIL ?? "").trim();
+        if (loginEmail.toLowerCase() !== envEmail.toLowerCase()) {
+          passwordValid = false;
+        } else {
+          passwordValid = ownerHashEnv
+            ? await bcrypt.compare(password, ownerHashEnv)
+            : password === ownerPlainEnv;
+        }
+      }
+
+      if (!dbOwner || !passwordValid) {
         void appendSecurityAudit({
           ts: new Date().toISOString(),
           level: "warn",
@@ -2635,38 +2783,31 @@ export async function registerRoutes(
         return res.status(401).json({ message: "Invalid email or password" });
       }
 
-      const preferredRestaurantId = dbOwner?.restaurantId ?? Number(process.env.OWNER_RESTAURANT_ID ?? "");
-      const restaurants = await storage.getRestaurants("trending");
-      const restaurant =
-        (Number.isFinite(preferredRestaurantId)
-          ? restaurants.find((r) => r.id === preferredRestaurantId)
-          : undefined) ?? restaurants[0];
-
-      if (!restaurant) {
-        return res.status(404).json({ message: "No restaurant available for owner account" });
-      }
+      const restaurant = dbOwner.restaurantId
+        ? (await storage.getRestaurants("trending")).find((r) => r.id === dbOwner.restaurantId) ?? null
+        : null;
 
       if (req.session) {
         req.session.sessionType = "owner";
-        req.session.ownerEmail = ownerEmail;
-        req.session.ownerRestaurantId = restaurant.id;
+        req.session.ownerEmail = dbOwner.email;
+        req.session.ownerRestaurantId = restaurant?.id ?? undefined;
       }
       void appendSecurityAudit({
         ts: new Date().toISOString(),
         level: "info",
         source: "auth",
         message: "owner_login_success",
-        metadata: { ownerEmail, restaurantId: restaurant.id, ip: req.ip },
+        metadata: { ownerEmail: dbOwner.email, restaurantId: restaurant?.id ?? undefined, ip: req.ip },
       });
 
       return res.json({
-        id: dbOwner?.id ?? 1,
-        email: ownerEmail,
-        displayName: dbOwner?.displayName ?? process.env.OWNER_DISPLAY_NAME ?? "Restaurant Owner",
-        restaurantId: restaurant.id,
-        restaurantName: restaurant.name,
-        isVerified: dbOwner?.isVerified ?? true,
-        subscriptionTier: dbOwner?.subscriptionTier ?? process.env.OWNER_SUBSCRIPTION_TIER ?? "pro",
+        id: dbOwner.id,
+        email: dbOwner.email,
+        displayName: dbOwner.displayName,
+        restaurantId: restaurant?.id ?? undefined,
+        restaurantName: restaurant?.name ?? null,
+        isVerified: dbOwner.isVerified,
+        subscriptionTier: dbOwner.subscriptionTier,
       });
     } catch {
       return res.status(500).json({ message: "Internal server error" });
@@ -2679,10 +2820,8 @@ export async function registerRoutes(
         displayName: z.string().min(1),
         email: z.string().email(),
         phone: z.string().optional(),
+        password: z.string().min(6).optional(),
         lineUserId: z.string().optional(),
-        restaurantId: z.number().int().positive().optional(),
-        restaurantName: z.string().optional(),
-        ownershipType: z.string().optional().default("single_location"),
       }).parse(req.body ?? {});
 
       const existingOwner = await storage.getRestaurantOwnerByEmail(input.email);
@@ -2690,22 +2829,14 @@ export async function registerRoutes(
         return res.status(409).json({ message: "Owner with this email already exists", ownerId: existingOwner.id });
       }
 
-      let restaurantId = input.restaurantId;
-      if (!restaurantId) {
-        const restaurants = await storage.getRestaurants();
-        const byName = restaurants.find((r) =>
-          input.restaurantName ? r.name.toLowerCase().includes(input.restaurantName.toLowerCase()) : false,
-        );
-        if (!byName) return res.status(400).json({ message: "Restaurant not found. Provide a valid restaurant name or ID." });
-        restaurantId = byName.id;
-      }
+      const passwordHash = input.password ? await import("bcryptjs").then(m => m.hash(input.password!, 10)) : null;
 
       const owner = await storage.createRestaurantOwner({
-        restaurantId,
         lineUserId: input.lineUserId ?? null,
         displayName: input.displayName,
         email: input.email,
         phone: input.phone ?? null,
+        passwordHash,
         isVerified: false,
         verificationStatus: "pending",
         subscriptionTier: "free",
@@ -2714,17 +2845,7 @@ export async function registerRoutes(
         paymentMethod: null,
       });
 
-      const claim = await storage.createRestaurantClaim({
-        restaurantId,
-        ownerId: owner.id,
-        ownershipType: input.ownershipType,
-        status: "pending",
-        reviewNotes: null,
-        proofDocuments: [],
-        verificationChecklist: {},
-      });
-
-      res.status(201).json({ owner, claim });
+      res.status(201).json({ owner });
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid payload" });
@@ -3611,7 +3732,8 @@ export async function registerRoutes(
         pageSize,
         totalPages,
       });
-    } catch {
+    } catch (err) {
+      console.error("[GET /api/admin/restaurants]", err);
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -3688,7 +3810,36 @@ export async function registerRoutes(
   app.post("/api/admin/claims", async (req, res) => {
     try {
       if (!requireOwnerOrAdmin(req, res)) return;
-      const input = insertRestaurantClaimSchema.parse(req.body ?? {});
+      // Resolve ownerId from session (owners can't pass their own ownerId)
+      let ownerId: number | undefined;
+      if (req.session?.ownerEmail) {
+        const dbOwner = await storage.getRestaurantOwnerByEmail(req.session.ownerEmail);
+        if (!dbOwner) return res.status(404).json({ message: "Owner not found" });
+        ownerId = dbOwner.id;
+      } else if (req.session?.isAdmin) {
+        // Admins can pass ownerId directly
+        ownerId = (req.body as any)?.ownerId;
+      }
+      if (!ownerId) return res.status(400).json({ message: "Could not resolve owner" });
+
+      const restaurantId = Number((req.body as any)?.restaurantId);
+      if (!Number.isFinite(restaurantId)) return res.status(400).json({ message: "restaurantId is required" });
+
+      // Prevent duplicate pending/approved claims for same owner+restaurant
+      const existingClaims = await storage.listRestaurantClaims();
+      const duplicate = existingClaims.find(
+        (c) => c.ownerId === ownerId && c.restaurantId === restaurantId && (c.status === "pending" || c.status === "approved")
+      );
+      if (duplicate) {
+        return res.status(409).json({ message: `A ${duplicate.status} claim already exists for this restaurant` });
+      }
+
+      const input = insertRestaurantClaimSchema.parse({
+        ...req.body,
+        ownerId,
+        restaurantId,
+        status: "pending", // always force pending on creation
+      });
       const created = await storage.createRestaurantClaim(input);
       res.status(201).json(created);
     } catch (err) {
@@ -3860,23 +4011,36 @@ export async function registerRoutes(
       if (!requireOwnerOrAdmin(req, res)) return;
       const q = String(req.query.q ?? "").trim().toLowerCase();
       if (q.length < 2) return res.json([]);
-      const restaurants = await storage.getRestaurants();
-      const items = restaurants
+      const [allRestaurants, allClaims] = await Promise.all([
+        storage.getRestaurants(),
+        storage.listRestaurantClaims(),
+      ]);
+      const claimByRestaurant = new Map(allClaims.map((c) => [c.restaurantId, c]));
+      const items = allRestaurants
         .filter((r) => (
           r.name.toLowerCase().includes(q) ||
           r.category.toLowerCase().includes(q) ||
           r.address.toLowerCase().includes(q)
         ))
         .slice(0, 20)
-        .map((r) => ({
-          id: r.id,
-          name: r.name,
-          category: r.category,
-          address: r.address,
-          imageUrl: r.imageUrl,
-          rating: r.rating,
-          priceLevel: r.priceLevel,
-        }));
+        .map((r) => {
+          const claim = claimByRestaurant.get(r.id);
+          return {
+            id: r.id,
+            name: r.name,
+            category: r.category,
+            address: r.address,
+            imageUrl: r.imageUrl,
+            rating: r.rating,
+            priceLevel: r.priceLevel,
+            description: r.description,
+            district: r.district ?? null,
+            vibes: r.vibes ?? [],
+            trendingScore: r.trendingScore,
+            ownerClaimStatus: claim?.status ?? "unclaimed",
+            ownerId: claim?.ownerId ?? null,
+          };
+        });
       res.json(items);
     } catch {
       res.status(500).json({ message: "Internal server error" });
@@ -3886,45 +4050,137 @@ export async function registerRoutes(
   app.get("/api/admin/owner/dashboard", async (req, res) => {
     try {
       if (!requireOwnerOrAdmin(req, res)) return;
-      const ownerEmail = req.session?.ownerEmail ?? process.env.OWNER_EMAIL ?? "owner@example.com";
-      const [owners, claims, restaurants, campaigns, events] = await Promise.all([
-        getStoredOwners(),
-        getStoredClaims(),
+      const ownerEmail = req.session?.ownerEmail ?? "";
+      if (!ownerEmail) return res.status(401).json({ message: "Owner session required" });
+
+      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+      const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+
+      const [owner, allRestaurants, allClaims, campaigns, allRecentEvents, allSwipeEvents] = await Promise.all([
+        storage.getRestaurantOwnerByEmail(ownerEmail),
         storage.getRestaurants(),
+        storage.listRestaurantClaims(),
         storage.listCampaigns(),
-        storage.listEventLogs(2000),
+        storage.listEventLogs(10000, fourteenDaysAgo),
+        storage.listEventLogs(20000, sevenDaysAgo),
       ]);
 
-      let owner = owners.find((o) => o.email.toLowerCase() === ownerEmail.toLowerCase());
-      if (!owner) {
-        const nextId = owners.reduce((max, item) => Math.max(max, item.id), 0) + 1;
-        owner = {
-          id: nextId,
-          restaurantId: req.session?.ownerRestaurantId ?? 0,
-          displayName: process.env.OWNER_DISPLAY_NAME ?? "Restaurant Owner",
-          email: ownerEmail,
-          phone: null,
-          isVerified: false,
-          paymentConnected: false,
-          subscriptionTier: process.env.OWNER_SUBSCRIPTION_TIER ?? "free",
-          subscriptionExpiry: null,
-          verificationStatus: "pending",
-        };
-        await saveStoredOwners([owner, ...owners]);
+      if (!owner) return res.status(404).json({ message: "Owner not found" });
+
+      const ownerClaims = allClaims.filter((c) => c.ownerId === owner.id);
+      const restaurant = owner.restaurantId
+        ? allRestaurants.find((r) => r.id === owner.restaurantId) ?? null
+        : null;
+      const ownerCampaigns = campaigns.filter((c) =>
+        owner.restaurantId ? c.restaurantOwnerKey === `owner_${owner.restaurantId}` : false
+      );
+
+      const eventsThis = owner.restaurantId
+        ? allRecentEvents.filter((e) => e.itemId === owner.restaurantId && new Date(e.createdAt) >= sevenDaysAgo)
+        : [];
+      const eventsPrev = owner.restaurantId
+        ? allRecentEvents.filter((e) => e.itemId === owner.restaurantId && new Date(e.createdAt) < sevenDaysAgo)
+        : [];
+
+      function ownerStatCount(evs: typeof eventsThis, types: string[]) {
+        return evs.filter((e) => types.includes(e.eventType)).length;
+      }
+      function ownerTrendPct(curr: number, prev: number): string {
+        if (prev === 0) return curr > 0 ? "+∞" : "0%";
+        const pct = Math.round(((curr - prev) / prev) * 100);
+        return `${pct >= 0 ? "+" : ""}${pct}%`;
       }
 
-      const restaurant = owner.restaurantId ? restaurants.find((r) => r.id === owner?.restaurantId) ?? null : null;
-      const ownerClaims = claims.filter((c) => c.ownerId === owner?.id);
-      const ownerCampaigns = campaigns.filter((c) => (
-        owner?.restaurantId ? c.restaurantOwnerKey === `owner_${owner.restaurantId}` : false
-      ));
-      const relatedEvents = owner?.restaurantId ? events.filter((e) => e.itemId === owner?.restaurantId) : [];
+      const vTypes = ["view_card", "view_detail"];
+      const lTypes = ["favorite"];
+      const dTypes = ["order_click", "booking_click", "deeplink_click"];
+
+      const viewsNow = ownerStatCount(eventsThis, vTypes);
+      const likesNow = ownerStatCount(eventsThis, lTypes);
+      const deliveryNow = ownerStatCount(eventsThis, dTypes);
+      const viewsPrev = ownerStatCount(eventsPrev, vTypes);
+      const likesPrev = ownerStatCount(eventsPrev, lTypes);
+      const deliveryPrev = ownerStatCount(eventsPrev, dTypes);
+      const uniqueViewers = new Set(eventsThis.filter(e => vTypes.includes(e.eventType) && e.userId).map(e => e.userId)).size;
+
       const stats = {
-        views: relatedEvents.filter((e) => e.eventType === "view_card" || e.eventType === "view_detail").length,
-        likes: relatedEvents.filter((e) => e.eventType === "favorite").length,
-        saves: relatedEvents.filter((e) => e.eventType === "favorite").length,
-        deliveryTaps: relatedEvents.filter((e) => e.eventType === "order_click" || e.eventType === "booking_click" || e.eventType === "deeplink_click").length,
+        views: viewsNow,
+        uniqueViewers,
+        likes: likesNow,
+        saves: likesNow,
+        deliveryTaps: deliveryNow,
+        viewsTrend: ownerTrendPct(viewsNow, viewsPrev),
+        likesTrend: ownerTrendPct(likesNow, likesPrev),
+        savesTrend: ownerTrendPct(likesNow, likesPrev),
+        deliveryTapsTrend: ownerTrendPct(deliveryNow, deliveryPrev),
+        viewsUp: viewsNow >= viewsPrev,
+        likesUp: likesNow >= likesPrev,
+        savesUp: likesNow >= likesPrev,
+        deliveryTapsUp: deliveryNow >= deliveryPrev,
       };
+
+      // Real insights computed from event data
+      const insights: { title: string; why: string; action: string; href: string; accent: string }[] = [];
+      if (owner.restaurantId && allSwipeEvents.length > 0) {
+        const mySwipes = allSwipeEvents.filter(e => e.itemId === owner.restaurantId && e.eventType === "swipe");
+        const myRight = mySwipes.filter(e => (e.metadata as Record<string, unknown> | null)?.direction === "right").length;
+        const myWinRate = mySwipes.length >= 5 ? Math.round((myRight / mySwipes.length) * 100) : null;
+
+        if (myWinRate !== null && restaurant?.category) {
+          const catIds = allRestaurants.filter(r => r.category === restaurant.category).map(r => r.id);
+          const catSwipes = allSwipeEvents.filter(e => e.eventType === "swipe" && e.itemId && catIds.includes(e.itemId));
+          const catRight = catSwipes.filter(e => (e.metadata as Record<string, unknown> | null)?.direction === "right").length;
+          const catAvg = catSwipes.length >= 5 ? Math.round((catRight / catSwipes.length) * 100) : null;
+          if (catAvg !== null) {
+            if (myWinRate > catAvg) {
+              insights.push({ title: "Your swipe win rate is above average", why: `Users swipe right ${myWinRate}% of the time vs ${catAvg}% ${restaurant.category} average. You're actively preferred.`, action: "See full decision analytics", href: "/admin/owner/decision-intelligence", accent: "#00B14F" });
+            } else if (myWinRate < catAvg - 5) {
+              insights.push({ title: "Win rate below category average", why: `Users swipe right ${myWinRate}% vs ${catAvg}% ${restaurant.category} average. Better photos or description could help.`, action: "Update your profile", href: "/admin/owner/menu", accent: "#FFCC02" });
+            }
+          }
+        }
+
+        const lateNight = eventsThis.filter(e => { const h = new Date(e.createdAt).getHours(); return h >= 22 || h < 3; }).length;
+        const lateNightPct = eventsThis.length > 0 ? Math.round((lateNight / eventsThis.length) * 100) : 0;
+        if (lateNightPct >= 15) {
+          insights.push({ title: "Late-night traffic opportunity", why: `${lateNightPct}% of your views happen after 10PM. Confirm your opening hours capture this demand.`, action: "Update operating hours", href: "/admin/owner/menu", accent: "#FFCC02" });
+        }
+
+        if (viewsNow > 10 && deliveryNow === 0) {
+          insights.push({ title: "No delivery clicks this week", why: `You received ${viewsNow} views but 0 delivery taps. Check that your delivery partner links are configured.`, action: "Check delivery settings", href: "/admin/owner/menu", accent: "#FFCC02" });
+        }
+      }
+
+      const restaurantById = new Map(allRestaurants.map((r) => [r.id, r]));
+      const claimedRestaurants = ownerClaims.map((claim) => {
+        const r = restaurantById.get(claim.restaurantId);
+        return {
+          claimId: claim.id,
+          restaurantId: claim.restaurantId,
+          restaurantName: r?.name ?? `Restaurant #${claim.restaurantId}`,
+          restaurantImage: r?.imageUrl ?? "",
+          restaurantAddress: r?.address ?? "",
+          restaurantCategory: r?.category ?? "",
+          restaurantRating: r?.rating ?? "",
+          status: claim.status,
+          submittedAt: claim.submittedAt.toISOString(),
+          reviewedAt: null,
+        };
+      });
+      const ownedRestaurants = ownerClaims
+        .filter((c) => c.status === "approved")
+        .map((claim) => {
+          const r = restaurantById.get(claim.restaurantId);
+          return {
+            id: claim.restaurantId,
+            name: r?.name ?? `Restaurant #${claim.restaurantId}`,
+            category: r?.category ?? "",
+            address: r?.address ?? "",
+            imageUrl: r?.imageUrl ?? "",
+            rating: r?.rating ?? "",
+            ownerClaimStatus: claim.status,
+          };
+        });
 
       res.json({
         owner: {
@@ -3937,20 +4193,30 @@ export async function registerRoutes(
           verificationStatus: owner.verificationStatus ?? "pending",
           subscriptionTier: owner.subscriptionTier ?? "free",
           subscriptionExpiry: owner.subscriptionExpiry ?? null,
+          createdAt: owner.createdAt.toISOString(),
         },
         restaurant: restaurant ? {
           id: restaurant.id,
           name: restaurant.name,
+          description: restaurant.description,
           category: restaurant.category,
           address: restaurant.address,
           imageUrl: restaurant.imageUrl,
           rating: restaurant.rating,
           priceLevel: restaurant.priceLevel,
+          trendingScore: restaurant.trendingScore,
           ownerClaimStatus: ownerClaims[0]?.status ?? null,
+          vibes: restaurant.vibes ?? [],
+          district: restaurant.district ?? null,
+          operatingHours: restaurant.openingHours ? JSON.stringify(restaurant.openingHours) : null,
+          isNew: restaurant.isNew,
         } : null,
         campaigns: ownerCampaigns,
         claims: ownerClaims,
+        claimedRestaurants,
+        ownedRestaurants,
         stats,
+        insights,
       });
     } catch {
       res.status(500).json({ message: "Internal server error" });
@@ -5046,6 +5312,617 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/owner/customer-insights", async (req, res) => {
+    if (!requireOwnerOrAdmin(req, res)) return;
+    try {
+      const scope = await getOwnerScope(req);
+      const restaurantId = scope?.activeRestaurantId ?? (req.session as any)?.ownerRestaurantId ?? null;
+
+      const now = new Date();
+      const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      const twoWeeksAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
+
+      const [allEvents, profiles, restaurants] = await Promise.all([
+        storage.listEventLogs(20000),
+        storage.listProfiles(1000),
+        storage.getRestaurants(),
+      ]);
+
+      const myEvents = restaurantId
+        ? allEvents.filter(e => e.itemId === restaurantId)
+        : allEvents;
+
+      const thisWeek = myEvents.filter(e => new Date(e.createdAt) >= weekAgo);
+      const lastWeek = myEvents.filter(e => {
+        const t = new Date(e.createdAt);
+        return t >= twoWeeksAgo && t < weekAgo;
+      });
+
+      // ── Decision Times ────────────────────────────────────────────────────
+      const hourBuckets = [
+        { period: "Breakfast (6-10)", hours: [6, 7, 8, 9], color: "#FFCC02" },
+        { period: "Lunch (11-14)", hours: [11, 12, 13, 14], color: "#00B14F" },
+        { period: "Snack (15-17)", hours: [15, 16, 17], color: "#3B82F6" },
+        { period: "Dinner (18-21)", hours: [18, 19, 20, 21], color: "#F43F5E" },
+        { period: "Late Night (22+)", hours: [22, 23, 0, 1, 2, 3], color: "#8B5CF6" },
+      ];
+      const engageEvents = myEvents.filter(e =>
+        ["swipe_right", "favorite", "view_detail", "order_click", "booking_click"].includes(e.eventType)
+      );
+      const totalEngage = engageEvents.length || 1;
+      const decisionTimes = hourBuckets.map(b => {
+        const count = engageEvents.filter(e => b.hours.includes(new Date(e.createdAt).getHours())).length;
+        const pct = Math.round((count / totalEngage) * 100);
+        return { period: b.period, pct, label: `${pct}%`, color: b.color };
+      });
+      const peakBucket = decisionTimes.slice().sort((a, b) => b.pct - a.pct)[0];
+
+      // ── Weekday vs Weekend ─────────────────────────────────────────────────
+      const dayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+      const dayCounts = Array(7).fill(0);
+      for (const e of myEvents) dayCounts[new Date(e.createdAt).getDay()]++;
+      const maxDay = Math.max(...dayCounts, 1);
+      const weekdayWeekend = dayLabels.map((day, idx) => ({
+        day,
+        weekday: idx >= 1 && idx <= 5,
+        demand: Math.round((dayCounts[idx] / maxDay) * 100),
+      }));
+
+      // ── Solo vs Group demand ───────────────────────────────────────────────
+      type AnyEvent = (typeof allEvents)[number];
+      const isGroup = (e: AnyEvent) =>
+        !!(e.metadata as any)?.groupCode || !!(e.metadata as any)?.sessionId || !!(e.metadata as any)?.isGroup;
+      const groupCount = myEvents.filter(isGroup).length;
+      const totalEvents = myEvents.length || 1;
+      const groupPct = Math.round((groupCount / totalEvents) * 100);
+      const soloPct = 100 - groupPct;
+      const thisWeekGroup = thisWeek.filter(isGroup).length;
+      const lastWeekGroup = lastWeek.filter(isGroup).length;
+      const groupTrendPct = lastWeekGroup > 0
+        ? Math.round(((thisWeekGroup - lastWeekGroup) / lastWeekGroup) * 100)
+        : 0;
+      const thisWeekSolo = thisWeek.length - thisWeekGroup;
+      const lastWeekSolo = lastWeek.length - lastWeekGroup;
+      const soloTrendPct = lastWeekSolo > 0
+        ? Math.round(((thisWeekSolo - lastWeekSolo) / lastWeekSolo) * 100)
+        : 0;
+
+      // ── Cuisine overlaps (from user profiles of engaged users) ─────────────
+      const engagedUserIds = new Set<string>();
+      for (const e of myEvents) {
+        if (e.userId && ["swipe_right", "favorite", "view_detail"].includes(e.eventType)) {
+          engagedUserIds.add(e.userId);
+        }
+      }
+      const engagedProfiles = profiles.filter(p => engagedUserIds.has(p.lineUserId));
+      const totalEngaged = engagedProfiles.length || 1;
+      const cuisineCount: Record<string, number> = {};
+      for (const p of engagedProfiles) {
+        for (const c of p.cuisinePreferences ?? []) {
+          cuisineCount[c] = (cuisineCount[c] ?? 0) + 1;
+        }
+      }
+      // Compare to prior week engaged users
+      const lastWeekEngaged = new Set<string>();
+      for (const e of lastWeek) {
+        if (e.userId && ["swipe_right", "favorite", "view_detail"].includes(e.eventType)) lastWeekEngaged.add(e.userId);
+      }
+      const lastWeekCuisineCount: Record<string, number> = {};
+      for (const p of profiles.filter(p => lastWeekEngaged.has(p.lineUserId))) {
+        for (const c of p.cuisinePreferences ?? []) lastWeekCuisineCount[c] = (lastWeekCuisineCount[c] ?? 0) + 1;
+      }
+      const cuisineOverlaps = Object.entries(cuisineCount)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 6)
+        .map(([cuisine, count]) => {
+          const overlap = Math.round((count / totalEngaged) * 100);
+          const prev = lastWeekCuisineCount[cuisine] ?? 0;
+          const prevPct = lastWeekEngaged.size > 0 ? (prev / lastWeekEngaged.size) * 100 : 0;
+          const delta = Math.round(overlap - prevPct);
+          return {
+            cuisine: cuisine.charAt(0).toUpperCase() + cuisine.slice(1),
+            overlap,
+            trend: `${delta >= 0 ? "+" : ""}${delta}%`,
+            rising: delta >= 0,
+          };
+        });
+
+      // ── Top tags (from restaurant vibes + engaged user dietary prefs) ──────
+      const tagCounts: Record<string, number> = {};
+      const myRestaurant = restaurants.find(r => r.id === restaurantId);
+      if (myRestaurant?.category) {
+        tagCounts[myRestaurant.category.toLowerCase()] =
+          myEvents.filter(e => e.eventType === "swipe_right").length;
+      }
+      for (const p of engagedProfiles) {
+        for (const d of p.dietaryRestrictions ?? []) {
+          tagCounts[d] = (tagCounts[d] ?? 0) + 1;
+        }
+      }
+      const maxTag = Math.max(...Object.values(tagCounts), 1);
+      const topTags = Object.entries(tagCounts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 8)
+        .map(([tag, count]) => {
+          const score = Math.round((count / maxTag) * 100);
+          return {
+            tag,
+            score,
+            engagement: score >= 70 ? "high" : score >= 40 ? "medium" : "low",
+          };
+        });
+
+      // ── Local trend shifts (this week vs last week) ────────────────────────
+      const trendItem = (
+        label: string,
+        desc: (d: number) => string,
+        thisCount: number,
+        lastCount: number
+      ) => {
+        if (lastCount === 0 && thisCount === 0) return null;
+        const delta = lastCount > 0
+          ? Math.round(((thisCount - lastCount) / lastCount) * 100)
+          : thisCount > 0 ? 100 : 0;
+        return {
+          trend: label,
+          velocity: `${delta >= 0 ? "+" : ""}${delta}%`,
+          direction: delta >= 0 ? "up" : "down",
+          desc: desc(delta),
+        };
+      };
+      const localTrends = [
+        trendItem(
+          "Swipe rights on your listing",
+          d => `Swipe-right rate ${d >= 0 ? "up" : "down"} ${Math.abs(d)}% vs last week.`,
+          thisWeek.filter(e => e.eventType === "swipe_right").length,
+          lastWeek.filter(e => e.eventType === "swipe_right").length
+        ),
+        trendItem(
+          "Saves / favorites",
+          d => `Users saving your restaurant ${d >= 0 ? "increased" : "decreased"} ${Math.abs(d)}% this week.`,
+          thisWeek.filter(e => e.eventType === "favorite").length,
+          lastWeek.filter(e => e.eventType === "favorite").length
+        ),
+        trendItem(
+          "Delivery tap-throughs",
+          d => `Order clicks ${d >= 0 ? "up" : "down"} ${Math.abs(d)}% — ${d >= 0 ? "good momentum" : "may need a promotion"}.`,
+          thisWeek.filter(e => ["order_click", "booking_click"].includes(e.eventType)).length,
+          lastWeek.filter(e => ["order_click", "booking_click"].includes(e.eventType)).length
+        ),
+        trendItem(
+          "Detail page views",
+          d => `Users reading your full listing ${d >= 0 ? "up" : "down"} ${Math.abs(d)}%.`,
+          thisWeek.filter(e => e.eventType === "view_detail").length,
+          lastWeek.filter(e => e.eventType === "view_detail").length
+        ),
+      ].filter(Boolean) as { trend: string; velocity: string; direction: string; desc: string }[];
+
+      // ── Behavior insights (derived from real numbers) ──────────────────────
+      const swipeRightCount = myEvents.filter(e => e.eventType === "swipe_right").length;
+      const impressions = myEvents.filter(e => ["view_card", "view_detail"].includes(e.eventType)).length;
+      const swipeRate = impressions > 0 ? swipeRightCount / impressions : 0;
+      const returningUserIds = Array.from(
+        new Map(myEvents.reduce((m, e) => {
+          if (e.userId) m.set(e.userId, (m.get(e.userId) ?? 0) + 1);
+          return m;
+        }, new Map<string, number>()))
+      ).filter(([, c]) => c > 1).length;
+      const totalUniqueUsers = new Set(myEvents.map(e => e.userId).filter(Boolean)).size || 1;
+      const returningPct = Math.round((returningUserIds / totalUniqueUsers) * 100);
+
+      const behaviorInsights: { title: string; whyItMatters: string; action: string; icon: string }[] = [];
+      if (peakBucket && peakBucket.pct > 0) {
+        behaviorInsights.push({
+          title: `Most decisions happen during ${peakBucket.period}`,
+          whyItMatters: `${peakBucket.pct}% of your engagement comes during this window. Promotions or fresh content before this time could boost visibility.`,
+          action: "Plan promotions",
+          icon: "Clock",
+        });
+      }
+      if (groupPct > 30) {
+        behaviorInsights.push({
+          title: "Significant group traffic detected",
+          whyItMatters: `${groupPct}% of your events come from group sessions. Adding shareable or group-friendly options could increase conversions.`,
+          action: "Add group dishes",
+          icon: "Users",
+        });
+      } else {
+        behaviorInsights.push({
+          title: "Mostly solo diners discovering you",
+          whyItMatters: `${soloPct}% of your traffic is solo users. Individual portions, quick service, and solo-friendly seating are key selling points.`,
+          action: "Highlight solo value",
+          icon: "User",
+        });
+      }
+      if (swipeRate < 0.4 && impressions > 20) {
+        behaviorInsights.push({
+          title: "Low swipe rate vs impressions",
+          whyItMatters: `Only ${(swipeRate * 100).toFixed(0)}% of viewers swipe right. A better cover photo or tagline could significantly improve this.`,
+          action: "Update photos",
+          icon: "TrendingUp",
+        });
+      } else if (returningPct > 25) {
+        behaviorInsights.push({
+          title: `${returningPct}% of visitors return`,
+          whyItMatters: "Strong repeat interest suggests loyal potential customers. A loyalty promotion could convert them into regulars.",
+          action: "Create loyalty promo",
+          icon: "Heart",
+        });
+      }
+
+      // ── Comparison behavior (aggregated from all-events session patterns) ──
+      const userRestaurantSets = new Map<string, Set<number>>();
+      for (const e of allEvents) {
+        if (!e.userId || !e.itemId) continue;
+        if (!userRestaurantSets.has(e.userId)) userRestaurantSets.set(e.userId, new Set());
+        userRestaurantSets.get(e.userId)!.add(e.itemId);
+      }
+      const allUniqueUsers = userRestaurantSets.size || 1;
+      const compareThreePlus = Array.from(userRestaurantSets.values()).filter(s => s.size >= 3).length;
+      const quickDeciders = Array.from(userRestaurantSets.values()).filter(s => s.size === 1).length;
+      const comparisonBehavior = [
+        {
+          behavior: "Compare 3+ restaurants before deciding",
+          pct: Math.round((compareThreePlus / allUniqueUsers) * 100),
+        },
+        {
+          behavior: "Choose without comparing (single view)",
+          pct: Math.round((quickDeciders / allUniqueUsers) * 100),
+        },
+        {
+          behavior: "Return to same restaurant within 7 days",
+          pct: returningPct,
+        },
+        {
+          behavior: "Use group mode for decisions",
+          pct: groupPct,
+        },
+        {
+          behavior: "Engage during dinner window",
+          pct: decisionTimes.find(d => d.period.startsWith("Dinner"))?.pct ?? 0,
+        },
+      ];
+
+      res.json({
+        cuisineOverlaps,
+        decisionTimes,
+        demandSplit: {
+          solo: soloPct,
+          group: groupPct,
+          soloTrend: `${soloTrendPct >= 0 ? "+" : ""}${soloTrendPct}%`,
+          groupTrend: `${groupTrendPct >= 0 ? "+" : ""}${groupTrendPct}%`,
+        },
+        weekdayWeekend,
+        localTrends,
+        topTags,
+        behaviorInsights,
+        comparisonBehavior,
+      });
+    } catch (err) {
+      console.error("[owner/customer-insights] error:", err);
+      res.status(500).json({ message: "Internal server error", detail: String(err) });
+    }
+  });
+
+  // ── /api/owner/performance ────────────────────────────────────────────────
+  app.get("/api/owner/performance", async (req, res) => {
+    if (!requireOwnerOrAdmin(req, res)) return;
+    try {
+      const scope = await getOwnerScope(req);
+      const restaurantId = scope?.activeRestaurantId ?? (req.session as any)?.ownerRestaurantId ?? null;
+
+      const now = new Date();
+      const fourteenDaysAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
+      const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+      const allEvents = await storage.listEventLogs(20000, fourteenDaysAgo);
+      const myEvents = restaurantId ? allEvents.filter(e => e.itemId === restaurantId) : allEvents;
+
+      // Daily views — last 14 days
+      const dailyViews: number[] = [];
+      for (let i = 13; i >= 0; i--) {
+        const dayStart = new Date(now);
+        dayStart.setDate(now.getDate() - i);
+        dayStart.setHours(0, 0, 0, 0);
+        const dayEnd = new Date(dayStart);
+        dayEnd.setDate(dayStart.getDate() + 1);
+        dailyViews.push(
+          myEvents.filter(e => {
+            const t = new Date(e.createdAt);
+            return t >= dayStart && t < dayEnd && ["view_card", "view_detail"].includes(e.eventType);
+          }).length
+        );
+      }
+
+      // Peak hours — by hour of day
+      const hourCounts = Array(24).fill(0);
+      for (const e of myEvents) hourCounts[new Date(e.createdAt).getHours()]++;
+      const peakHours = [11, 12, 13, 14, 17, 18, 19, 20, 21].map(h => ({
+        hour: `${String(h).padStart(2, "0")}:00`,
+        visitors: hourCounts[h],
+      }));
+
+      // Traffic sources from metadata.source tags
+      const sourceCounts: Record<string, number> = { "Vibe Browse": 0, "Search": 0, "Recommendations": 0, "Direct": 0, "Other": 0 };
+      for (const e of myEvents) {
+        const src = (e.metadata as any)?.source as string | undefined;
+        if (src === "vibe") sourceCounts["Vibe Browse"]++;
+        else if (src === "search") sourceCounts["Search"]++;
+        else if (src === "recommendation") sourceCounts["Recommendations"]++;
+        else if (src === "direct") sourceCounts["Direct"]++;
+        else sourceCounts["Other"]++;
+      }
+      const totalSourced = Object.values(sourceCounts).reduce((a, b) => a + b, 1);
+      const topSources = Object.entries(sourceCounts)
+        .map(([source, count]) => ({
+          source,
+          pct: Math.round((count / totalSourced) * 100),
+          color: source === "Vibe Browse" ? "#FFCC02" : source === "Search" ? "var(--admin-blue)" : source === "Recommendations" ? "#00B14F" : "#94A3B8",
+        }))
+        .filter(s => s.pct > 0)
+        .sort((a, b) => b.pct - a.pct);
+
+      // Week-over-week change for stat cards
+      const thisWeekEvents = myEvents.filter(e => new Date(e.createdAt) >= weekAgo);
+      const lastWeekEvents = myEvents.filter(e => new Date(e.createdAt) < weekAgo);
+      const weekChange = (type: string) => {
+        const tw = thisWeekEvents.filter(e => e.eventType === type).length;
+        const lw = lastWeekEvents.filter(e => e.eventType === type).length;
+        return lw > 0 ? Math.round(((tw - lw) / lw) * 100) : 0;
+      };
+
+      const viewChange = weekChange("view_card");
+      const likeChange = weekChange("swipe_right");
+      const saveChange = weekChange("favorite");
+      const deliveryChange = (() => {
+        const tw = thisWeekEvents.filter(e => ["order_click", "booking_click"].includes(e.eventType)).length;
+        const lw = lastWeekEvents.filter(e => ["order_click", "booking_click"].includes(e.eventType)).length;
+        return lw > 0 ? Math.round(((tw - lw) / lw) * 100) : 0;
+      })();
+
+      res.json({ dailyViews, peakHours, topSources, weekChange: { viewChange, likeChange, saveChange, deliveryChange } });
+    } catch (err) {
+      console.error("[owner/performance] error:", err);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // ── /api/owner/decision-intelligence ──────────────────────────────────────
+  app.get("/api/owner/decision-intelligence", async (req, res) => {
+    if (!requireOwnerOrAdmin(req, res)) return;
+    try {
+      const scope = await getOwnerScope(req);
+      const restaurantId = scope?.activeRestaurantId ?? (req.session as any)?.ownerRestaurantId ?? null;
+
+      const allEvents = await storage.listEventLogs(20000);
+      const myEvents = restaurantId ? allEvents.filter(e => e.itemId === restaurantId) : allEvents;
+
+      // ── Decision funnel ──────────────────────────────────────────────────
+      const seen = myEvents.filter(e => ["view_card", "view_detail"].includes(e.eventType)).length;
+      const liked = myEvents.filter(e => e.eventType === "swipe_right").length;
+      const detailed = myEvents.filter(e => e.eventType === "view_detail").length;
+      const saved = myEvents.filter(e => e.eventType === "favorite").length;
+      const clicked = myEvents.filter(e => ["order_click", "booking_click"].includes(e.eventType)).length;
+
+      const totalSwipes = myEvents.filter(e => ["swipe_right", "swipe_left"].includes(e.eventType)).length || 1;
+      const winRate = Number(((liked / totalSwipes) * 100).toFixed(1));
+      const attractionRate = seen > 0 ? Number(((liked / seen) * 100).toFixed(1)) : 0;
+      const conversionRate = seen > 0 ? Number(((clicked / seen) * 100).toFixed(1)) : 0;
+
+      // Solo vs group win rates
+      type AnyEventDI = (typeof allEvents)[number];
+      const isGroupDI = (e: AnyEventDI) =>
+        !!(e.metadata as any)?.groupCode || !!(e.metadata as any)?.sessionId || !!(e.metadata as any)?.isGroup;
+      const soloSwipes = myEvents.filter(e => e.eventType === "swipe_right" && !isGroupDI(e)).length;
+      const soloViewed = myEvents.filter(e => ["view_card", "view_detail"].includes(e.eventType) && !isGroupDI(e)).length;
+      const groupSwipes = myEvents.filter(e => e.eventType === "swipe_right" && isGroupDI(e)).length;
+      const groupViewed = myEvents.filter(e => ["view_card", "view_detail"].includes(e.eventType) && isGroupDI(e)).length;
+      const soloWinRate = soloViewed > 0 ? Number(((soloSwipes / soloViewed) * 100).toFixed(1)) : 0;
+      const groupWinRate = groupViewed > 0 ? Number(((groupSwipes / groupViewed) * 100).toFixed(1)) : 0;
+
+      // ── Demand heatmap — events by hour × day of week ─────────────────────
+      const hours = ["11:00", "12:00", "13:00", "18:00", "19:00", "20:00", "21:00"];
+      const hourNums = [11, 12, 13, 18, 19, 20, 21];
+      const dayKeys = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
+      const heatData: Record<string, number>[] = hourNums.map((h, idx) => {
+        const row: Record<string, number> = { hour: h };
+        dayKeys.forEach((dk, di) => {
+          const dayOfWeek = di === 6 ? 0 : di + 1; // 0=Sun, 1=Mon...
+          row[dk] = myEvents.filter(e => {
+            const d = new Date(e.createdAt);
+            return d.getHours() === h && d.getDay() === dayOfWeek;
+          }).length;
+        });
+        return row;
+      });
+      const timeHeatmap = heatData.map((row, idx) => ({ hour: hours[idx], ...row }));
+
+      // ── Competitor matrix — restaurants appearing in same sessions ────────
+      const restaurants = await storage.getRestaurants();
+      const myRestaurant = restaurants.find(r => r.id === restaurantId);
+      const peerCounts = new Map<number, { wins: number; losses: number; total: number }>();
+      if (restaurantId) {
+        const mySessions = new Set<string>();
+        for (const e of myEvents) {
+          const sid = (e.metadata as any)?.sessionId || (e.metadata as any)?.groupCode;
+          if (sid) mySessions.add(String(sid));
+        }
+        for (const e of allEvents) {
+          if (!e.itemId || e.itemId === restaurantId) continue;
+          const sid = (e.metadata as any)?.sessionId || (e.metadata as any)?.groupCode;
+          if (sid && mySessions.has(String(sid))) {
+            const cur = peerCounts.get(e.itemId) ?? { wins: 0, losses: 0, total: 0 };
+            cur.total++;
+            if (e.eventType === "swipe_right") cur.losses++;
+            peerCounts.set(e.itemId, cur);
+          }
+        }
+      }
+      const competitorMatrix = Array.from(peerCounts.entries())
+        .sort((a, b) => b[1].total - a[1].total)
+        .slice(0, 5)
+        .map(([rid, counts]) => {
+          const r = restaurants.find(x => x.id === rid);
+          const winRate = counts.total > 0 ? Math.round(((counts.total - counts.losses) / counts.total) * 100) : 50;
+          const prevWinRate = 50; // no prior data for trend
+          return {
+            name: r?.name ?? `Restaurant #${rid}`,
+            category: r?.category ?? "—",
+            comparisons: counts.total,
+            winRate,
+            lossRate: 100 - winRate,
+            trend: winRate >= prevWinRate ? "up" : "down",
+          };
+        });
+
+      // ── Opportunity gaps ─────────────────────────────────────────────────
+      const opportunityGaps: { title: string; insight: string; whyItMatters: string; action: string; impact: "high" | "medium" | "low"; expectedLift: string }[] = [];
+      if (attractionRate < 40 && seen > 20) {
+        opportunityGaps.push({
+          title: "Low first-impression rate",
+          insight: `Only ${attractionRate}% of viewers engage with your listing. The category average is 55%+.`,
+          whyItMatters: "First impressions drive all downstream conversions. A better cover photo and tagline can double attraction.",
+          action: "Upgrade cover photo",
+          impact: "high",
+          expectedLift: `+${Math.round((55 - attractionRate))}% attraction rate`,
+        });
+      }
+      if (groupWinRate < soloWinRate - 10 && groupViewed > 5) {
+        opportunityGaps.push({
+          title: "Underperforming in group sessions",
+          insight: `You win ${soloWinRate}% of solo decisions but only ${groupWinRate}% in group sessions.`,
+          whyItMatters: "Group sessions have higher delivery conversion. Missing group-friendly positioning costs clicks.",
+          action: "Add group-friendly tag",
+          impact: "high",
+          expectedLift: `+${Math.round((soloWinRate - groupWinRate) * 0.5)}% group win rate`,
+        });
+      }
+      if (conversionRate < 5 && seen > 20) {
+        opportunityGaps.push({
+          title: "Low delivery click-through",
+          insight: `Only ${conversionRate}% of viewers click to order. Top restaurants average 8–12%.`,
+          whyItMatters: "Adding Grab or LINE MAN links directly on your listing increases click-through significantly.",
+          action: "Add delivery links",
+          impact: "high",
+          expectedLift: "+5–8% conversion rate",
+        });
+      }
+      if (opportunityGaps.length < 2) {
+        opportunityGaps.push({
+          title: "Add more dish photos",
+          insight: "Listings with 5+ photos get 42% more clickouts on average.",
+          whyItMatters: "Visual content is the #1 decision factor for food choices. Each additional photo improves swipe rate.",
+          action: "Upload dish photos",
+          impact: "medium",
+          expectedLift: "+10% swipe rate",
+        });
+      }
+
+      res.json({
+        decisionMetrics: {
+          winRate,
+          attractionRate,
+          conversionRate,
+          dropOff: { seen, liked, detailed, saved, clicked },
+          soloWinRate,
+          groupWinRate,
+        },
+        timeHeatmap,
+        competitorMatrix,
+        opportunityGaps,
+      });
+    } catch (err) {
+      console.error("[owner/decision-intelligence] error:", err);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // ── /api/owner/onboarding ─────────────────────────────────────────────────
+  app.get("/api/owner/onboarding", async (req, res) => {
+    if (!requireOwnerOrAdmin(req, res)) return;
+    try {
+      const scope = await getOwnerScope(req);
+      const restaurantId = scope?.activeRestaurantId ?? (req.session as any)?.ownerRestaurantId ?? null;
+      const restaurant = restaurantId ? (await storage.getRestaurants()).find(r => r.id === restaurantId) : null;
+      const menus = restaurantId ? await storage.listMenusByRestaurant(restaurantId) : [];
+      const promotions = restaurantId ? await storage.listPromotionsByRestaurant(restaurantId) : [];
+
+      const steps = [
+        { label: "Create account", done: true },
+        { label: "Verify ownership", done: !!(scope?.activeRestaurantId) },
+        { label: "Add restaurant photos", done: !!(restaurant?.imageUrl) },
+        { label: "Set operating hours", done: !!(restaurant?.openingHours && Array.isArray(restaurant.openingHours) && (restaurant.openingHours as any[]).length > 0) },
+        { label: "Add menu items", done: menus.length > 0 },
+        { label: "Create first promotion", done: promotions.length > 0 },
+        { label: "Add delivery links", done: !!(restaurant?.phone) }, // proxy: has contact info
+      ];
+
+      res.json({ steps });
+    } catch (err) {
+      console.error("[owner/onboarding] error:", err);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // ── /api/owner/support/tickets ────────────────────────────────────────────
+  app.get("/api/owner/support/tickets", async (req, res) => {
+    if (!requireOwnerOrAdmin(req, res)) return;
+    try {
+      const scope = await getOwnerScope(req);
+      if (!scope) return res.status(403).json({ message: "Owner access required" });
+      const tickets = await storage.listSupportTickets(scope.ownerId);
+      res.json(tickets);
+    } catch (err) {
+      console.error("[owner/support/tickets] GET error:", err);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.post("/api/owner/support/tickets", async (req, res) => {
+    if (!requireOwnerOrAdmin(req, res)) return;
+    try {
+      const scope = await getOwnerScope(req);
+      if (!scope) return res.status(403).json({ message: "Owner access required" });
+      const { subject, priority, message } = req.body as { subject: string; priority: string; message: string };
+      if (!subject?.trim() || !message?.trim()) {
+        return res.status(400).json({ message: "subject and message are required" });
+      }
+      const ticket = await storage.createSupportTicket({
+        ownerId: scope.ownerId,
+        subject: subject.trim(),
+        status: "open",
+        priority: (priority as any) ?? "medium",
+        messages: [{ from: "you", text: message.trim(), time: new Date().toLocaleString() }],
+      });
+      res.status(201).json(ticket);
+    } catch (err) {
+      console.error("[owner/support/tickets] POST error:", err);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.post("/api/owner/support/tickets/:id/reply", async (req, res) => {
+    if (!requireOwnerOrAdmin(req, res)) return;
+    try {
+      const scope = await getOwnerScope(req);
+      if (!scope) return res.status(403).json({ message: "Owner access required" });
+      const ticketId = parseInt(req.params.id, 10);
+      const { text } = req.body as { text: string };
+      if (!text?.trim()) return res.status(400).json({ message: "text is required" });
+      const existing = await storage.getSupportTicket(ticketId, scope.ownerId);
+      if (!existing) return res.status(404).json({ message: "Ticket not found" });
+      const updatedMessages = [
+        ...(existing.messages as any[]),
+        { from: "you", text: text.trim(), time: new Date().toLocaleString() },
+      ];
+      const updated = await storage.updateSupportTicket(ticketId, scope.ownerId, { messages: updatedMessages });
+      res.json(updated);
+    } catch (err) {
+      console.error("[owner/support/tickets/:id/reply] error:", err);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
   app.get("/api/owner/delivery-conversions", async (req, res) => {
     if (!requireOwnerOrAdmin(req, res)) return;
     try {
@@ -5144,37 +6021,67 @@ export async function registerRoutes(
   app.get("/api/owner/notifications", async (req, res) => {
     if (!requireOwnerOrAdmin(req, res)) return;
     try {
-      const restaurantId = (req.session as any)?.ownerRestaurantId ?? parseInt(String(req.query.restaurantId ?? "0"), 10);
-      const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-      const logs = await storage.listEventLogs(20000, since);
-      const myLogs = restaurantId ? logs.filter(e => e.itemId === restaurantId) : logs;
-
-      const saves = myLogs.filter(e => e.eventType === "favorite").length;
-      const deliveryClicks = myLogs.filter(e => e.eventType === "deeplink_click").length;
-      const swipeRights = myLogs.filter(e => e.eventType === "swipe" && (e.metadata as any)?.direction === "right").length;
-      const impressions = myLogs.filter(e => e.eventType === "view_card").length;
-
-      const notifications: { id: number; type: string; title: string; message: string; time: string; read: boolean }[] = [];
-      let id = 1;
-
-      if (saves >= 5) {
-        notifications.push({ id: id++, type: "milestone", title: "Milestone Reached", message: `Your restaurant has been saved by ${saves} users this month!`, time: "recently", read: false });
+      const ownerId = (req.session as any)?.ownerId;
+      if (!ownerId) {
+        res.status(400).json({ message: "Owner ID not found in session" });
+        return;
       }
-      if (deliveryClicks > 0) {
-        notifications.push({ id: id++, type: "campaign", title: "Delivery Activity", message: `You received ${deliveryClicks} delivery click${deliveryClicks !== 1 ? "s" : ""} in the past 30 days.`, time: "this month", read: false });
-      }
-      if (swipeRights >= 20) {
-        notifications.push({ id: id++, type: "milestone", title: "Popular Restaurant", message: `${swipeRights} users swiped right on your restaurant this month!`, time: "this month", read: false });
-      }
-      if (impressions >= 50) {
-        notifications.push({ id: id++, type: "tip", title: "Great Visibility", message: `Your restaurant appeared in ${impressions} feeds this month — keep your listing updated!`, time: "this month", read: true });
-      }
-      notifications.push(
-        { id: id++, type: "tip", title: "Performance Tip", message: "Add more photos to your listing — restaurants with 5+ photos get 40% more views.", time: "2 days ago", read: true },
-        { id: id++, type: "verification", title: "Verification Reminder", message: "Complete your business verification to unlock premium features and the Verified badge.", time: "3 days ago", read: true },
-      );
-
+      const unreadOnly = req.query.unread === "true";
+      const limit = parseInt(String(req.query.limit ?? "50"), 10);
+      const notifications = await storage.listNotificationsByOwner(ownerId, unreadOnly, limit);
       res.json({ notifications });
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.post("/api/owner/notifications/:id/read", async (req, res) => {
+    if (!requireOwnerOrAdmin(req, res)) return;
+    try {
+      const notificationId = parseInt(req.params.id, 10);
+      const ownerId = (req.session as any)?.ownerId;
+      if (!ownerId) {
+        res.status(400).json({ message: "Owner ID not found in session" });
+        return;
+      }
+      // Verify the notification belongs to this owner
+      const notification = await storage.getNotificationById(notificationId);
+      if (!notification || notification.ownerId !== ownerId) {
+        res.status(404).json({ message: "Notification not found" });
+        return;
+      }
+      const updated = await storage.markNotificationRead(notificationId);
+      res.json({ success: true, notification: updated });
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.post("/api/owner/notifications/mark-all-read", async (req, res) => {
+    if (!requireOwnerOrAdmin(req, res)) return;
+    try {
+      const ownerId = (req.session as any)?.ownerId;
+      if (!ownerId) {
+        res.status(400).json({ message: "Owner ID not found in session" });
+        return;
+      }
+      const count = await storage.markAllNotificationsRead(ownerId);
+      res.json({ success: true, markedRead: count });
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.get("/api/owner/notifications/unread-count", async (req, res) => {
+    if (!requireOwnerOrAdmin(req, res)) return;
+    try {
+      const ownerId = (req.session as any)?.ownerId;
+      if (!ownerId) {
+        res.status(400).json({ message: "Owner ID not found in session" });
+        return;
+      }
+      const count = await storage.getUnreadNotificationCount(ownerId);
+      res.json({ count });
     } catch {
       res.status(500).json({ message: "Internal server error" });
     }
@@ -6064,138 +6971,37 @@ export async function registerRoutes(
 
   app.post("/api/events/batch", async (req, res) => {
     try {
-      const input = z.object({
-        events: z.array(z.object({
-          eventId: z.string().min(8),
-          eventVersion: z.string().min(1).default("v1"),
-          idempotencyKey: z.string().min(8),
-          eventType: z.enum([
-            "view_card",
-            "swipe",
-            "session_join",
-            "session_result_click_map",
-            "favorite",
-            "dismiss",
-            "search",
-            "filter",
-            "order_click",
-            "booking_click",
-            "deeplink_click",
-            "view_menu_item",
-            "click_menu_item",
-          ]),
-          eventName: z.string().optional(),
-          timestamp: z.string().datetime(),
-          platform: z.string().min(1),
-          context: z.string().min(1),
-          userId: z.string().optional(),
-          sessionId: z.string().optional(),
-          itemId: z.number().int().optional(),
-          menuItemId: z.number().int().positive().optional(),
-          metadata: z.record(z.string(), z.unknown()).optional().default({}),
-        })).min(1).max(200),
-      }).parse(req.body ?? {});
-
-      let accepted = 0;
-      let skipped = 0;
-      const reasonCounts: Record<string, number> = {};
-      const qualityCounts: Record<string, number> = {};
-      for (const event of input.events) {
-        const eventTs = Date.parse(event.timestamp);
-        if (!Number.isFinite(eventTs)) {
-          skipped += 1;
-          reasonCounts.invalid_timestamp = (reasonCounts.invalid_timestamp ?? 0) + 1;
-          continue;
-        }
-        const now = Date.now();
-        if (eventTs < now - 120 * 24 * 60 * 60 * 1000) {
-          skipped += 1;
-          reasonCounts.too_old = (reasonCounts.too_old ?? 0) + 1;
-          continue;
-        }
-        if (eventTs > now + 10 * 60 * 1000) {
-          skipped += 1;
-          reasonCounts.future_timestamp = (reasonCounts.future_timestamp ?? 0) + 1;
-          continue;
-        }
-
-        if (!event.userId) qualityCounts.missing_user = (qualityCounts.missing_user ?? 0) + 1;
-        if (!event.sessionId) qualityCounts.missing_session = (qualityCounts.missing_session ?? 0) + 1;
-        if (!event.itemId) qualityCounts.missing_item = (qualityCounts.missing_item ?? 0) + 1;
-        if (!event.context) qualityCounts.missing_context = (qualityCounts.missing_context ?? 0) + 1;
-        if (!event.platform) qualityCounts.missing_platform = (qualityCounts.missing_platform ?? 0) + 1;
-
-        if (event.userId) {
-          const latestConsent = await storage.getLatestConsent(event.userId, "behavior_tracking");
-          if (!latestConsent?.granted) {
-            skipped += 1;
-            reasonCounts.no_consent = (reasonCounts.no_consent ?? 0) + 1;
-            continue;
-          }
-        }
-
-        const enrichedMetadata: Record<string, unknown> = {
-          ...(event.metadata ?? {}),
-          eventId: event.eventId,
-          eventVersion: event.eventVersion,
-          eventName: event.eventName ?? event.eventType,
-          timestamp: event.timestamp,
-          platform: event.platform,
-          context: event.context,
-        };
-
-        if (event.eventType === "view_card" && !enrichedMetadata.district) {
-          const lat = Number((event.metadata as Record<string, unknown> | undefined)?.lat);
-          const lng = Number((event.metadata as Record<string, unknown> | undefined)?.lng);
-          if (Number.isFinite(lat) && Number.isFinite(lng)) {
-            const district = await reverseGeocodeDistrict(lat, lng);
-            if (district) enrichedMetadata.district = district;
-          }
-        }
-
-        const created = await storage.createEventLog({
-          idempotencyKey: event.idempotencyKey,
-          eventType: event.eventType,
-          userId: event.userId ?? null,
-          sessionId: event.sessionId ?? null,
-          itemId: event.itemId ?? null,
-          menuItemId: event.menuItemId ?? null,
-          metadata: enrichedMetadata,
+      const input = ingestBatchSchema.parse(req.body ?? {});
+      const result = await processEventIngestBatch(input.events, (err) => {
+        void sendAlert({
+          source: "event-ingest",
+          severity: "warn",
+          message: "Redis enqueue failed; used direct fallback",
+          metadata: { error: String(err) },
         });
-        if (created) accepted += 1;
-        else {
-          skipped += 1;
-          reasonCounts.duplicate_or_idempotent = (reasonCounts.duplicate_or_idempotent ?? 0) + 1;
-        }
-
-        if (created && event.userId) {
-          // Async: enqueue for the feature-update job (runs every 60s).
-          // This removes 2 blocking DB round-trips from the hot event-ingestion path.
-          enqueueFeatureUpdate(event.userId);
-        }
-
-        if (created && event.itemId) {
-          const delta = deriveItemFeatureDelta(event.eventType, event.metadata);
-          if (hasItemFeatureDelta(delta)) {
-            await storage.upsertItemFeatureSnapshot(event.itemId, delta);
-          }
-        }
+      });
+      if (result.queueUnavailable) {
+        return res.status(503).json({ message: "Event queue unavailable" });
       }
 
       appendEventAudit({
         ts: new Date().toISOString(),
-        level: skipped > 0 ? "warn" : "info",
+        level: result.skipped > 0 ? "warn" : "info",
         kind: "ingest_summary",
-        accepted,
-        skipped,
+        accepted: result.accepted,
+        skipped: result.skipped,
         reasons: [
-          ...Object.entries(reasonCounts).map(([key, value]) => `${key}:${value}`),
-          ...Object.entries(qualityCounts).map(([key, value]) => `quality_${key}:${value}`),
+          ...Object.entries(result.reasonCounts).map(([key, value]) => `${key}:${value}`),
+          ...Object.entries(result.qualityCounts).map(([key, value]) => `quality_${key}:${value}`),
         ],
         ip: req.ip,
       });
 
-      res.json({ accepted, skipped });
+      res.json({
+        accepted: result.accepted,
+        skipped: result.skipped,
+        ingestion: result.ingestion,
+      });
     } catch (err) {
       if (err instanceof z.ZodError) {
         appendEventAudit({
@@ -6469,6 +7275,793 @@ export async function registerRoutes(
         .slice(0, 5);
 
       return res.json({ funnel: { impressions, swipeViews, rightSwipes, orderIntent }, topRestaurants, cuisineTrend, dayPatterns, heatmap, deliveryTotal, geoHotspots });
+    } catch {
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.get("/api/admin/predictive-intelligence/overview", async (req, res) => {
+    if (!requireAdminSession(req, res)) return;
+    try {
+      const requestedDays = parseInt(String(req.query.days ?? "30"), 10) || 30;
+      const data = await buildPredictiveIntelligenceOverview(storage, requestedDays);
+      return res.json(data);
+    } catch (error) {
+      console.error("[predictive-intelligence]", error);
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // ── Food Trends: cuisine growth, daypart, segment preferences ────────────────
+  app.get("/api/admin/food-trends", async (req, res) => {
+    if (!requireAdminSession(req, res)) return;
+    try {
+      const daysParam = Math.min(parseInt(String(req.query.days ?? "30"), 10) || 30, 365);
+      const now = Date.now();
+      const currentStart = new Date(now - daysParam * 24 * 60 * 60 * 1000);
+      const prevStart = new Date(now - daysParam * 2 * 24 * 60 * 60 * 1000);
+
+      const [logs, allRestaurants, snapshots] = await Promise.all([
+        storage.listEventLogs(50000, prevStart),
+        storage.getRestaurants(),
+        storage.listUserFeatureSnapshots?.() ?? Promise.resolve([]),
+      ]);
+
+      const restaurantMap: Record<number, { name: string; category: string; district: string | null }> = {};
+      for (const r of allRestaurants) restaurantMap[r.id] = { name: r.name, category: r.category ?? "Other", district: r.district ?? null };
+
+      const currentLogs = logs.filter(e => new Date(e.createdAt) >= currentStart);
+      const prevLogs = logs.filter(e => new Date(e.createdAt) < currentStart);
+
+      const swipeLogs = (arr: typeof logs) => arr.filter(e => e.eventType === "swipe" && (e.metadata as any)?.direction === "right");
+
+      // ── Cuisine Trends (current vs prev period) ──────────────────────────────
+      const countByCuisine = (arr: typeof logs) => {
+        const map: Record<string, number> = {};
+        for (const e of swipeLogs(arr)) {
+          const cat = e.itemId ? (restaurantMap[e.itemId]?.category ?? "Other") : "Other";
+          map[cat] = (map[cat] ?? 0) + 1;
+        }
+        return map;
+      };
+      const currentCuisine = countByCuisine(currentLogs);
+      const prevCuisine = countByCuisine(prevLogs);
+
+      // top area per cuisine (district with most swipes)
+      const areaByC: Record<string, Record<string, number>> = {};
+      for (const e of swipeLogs(currentLogs)) {
+        if (!e.itemId) continue;
+        const cat = restaurantMap[e.itemId]?.category ?? "Other";
+        const dist = restaurantMap[e.itemId]?.district ?? "Unknown";
+        if (!areaByC[cat]) areaByC[cat] = {};
+        areaByC[cat][dist] = (areaByC[cat][dist] ?? 0) + 1;
+      }
+      const topAreaFor = (cat: string) => {
+        const m = areaByC[cat] ?? {};
+        const top = Object.entries(m).sort((a, b) => b[1] - a[1])[0];
+        return top ? top[0] : "Bangkok";
+      };
+
+      const allCuisines = new Set([...Object.keys(currentCuisine), ...Object.keys(prevCuisine)]);
+      const cuisineTrends = [...allCuisines].map(name => {
+        const curr = currentCuisine[name] ?? 0;
+        const prev = prevCuisine[name] ?? 0;
+        const growth = prev > 0 ? Math.round(((curr - prev) / prev) * 100) : (curr > 0 ? 100 : 0);
+        return { name, volume: curr, growth, direction: growth >= 0 ? "up" : "down", topArea: topAreaFor(name) };
+      }).sort((a, b) => b.volume - a.volume).slice(0, 10);
+
+      // ── Top Rising Venues (restaurant-level, current vs prev) ─────────────────
+      const countByR = (arr: typeof logs) => {
+        const map: Record<number, number> = {};
+        for (const e of swipeLogs(arr)) { if (e.itemId) map[e.itemId] = (map[e.itemId] ?? 0) + 1; }
+        return map;
+      };
+      const currR = countByR(currentLogs);
+      const prevR = countByR(prevLogs);
+      const allRIds = new Set([...Object.keys(currR), ...Object.keys(prevR)].map(Number));
+      const venueTrends = [...allRIds].map(id => {
+        const curr = currR[id] ?? 0;
+        const prev = prevR[id] ?? 0;
+        const growth = prev > 0 ? Math.round(((curr - prev) / prev) * 100) : (curr > 0 ? 100 : 0);
+        return { id, prev, name: restaurantMap[id]?.name ?? `#${id}`, growth, category: restaurantMap[id]?.category ?? "Other" };
+      }).filter(v => v.growth > 0 || v.prev === 0)
+        .sort((a, b) => b.growth - a.growth).slice(0, 8);
+
+      // ── Daypart Trends ────────────────────────────────────────────────────────
+      const DAYPARTS: { label: string; from: number; to: number }[] = [
+        { label: "Breakfast", from: 6, to: 10 },
+        { label: "Brunch", from: 10, to: 12 },
+        { label: "Lunch", from: 12, to: 15 },
+        { label: "Dinner", from: 17, to: 22 },
+        { label: "Late Night", from: 22, to: 30 },
+      ];
+      const daypartTrends = DAYPARTS.map(({ label, from, to }) => {
+        const bucket = currentLogs.filter(e => {
+          const h = new Date(e.createdAt).getHours();
+          return h >= from && h < (to > 24 ? 24 : to);
+        });
+        const topC: Record<string, number> = {};
+        for (const e of swipeLogs(bucket)) {
+          const cat = e.itemId ? (restaurantMap[e.itemId]?.category ?? "Other") : "Other";
+          topC[cat] = (topC[cat] ?? 0) + 1;
+        }
+        const prevBucket = prevLogs.filter(e => {
+          const h = new Date(e.createdAt).getHours();
+          return h >= from && h < (to > 24 ? 24 : to);
+        });
+        const top = Object.entries(topC).sort((a, b) => b[1] - a[1])[0];
+        const currCount = bucket.length;
+        const prevCount = prevBucket.length;
+        const growth = prevCount > 0 ? Math.round(((currCount - prevCount) / prevCount) * 100) : (currCount > 0 ? 100 : 0);
+        return { daypart: label, trending: top ? top[0] : "—", count: currCount, growth };
+      });
+
+      // ── Segment Preferences (from user_feature_snapshots) ─────────────────────
+      const PRICE_SEGMENTS: { segment: string; min: number; max: number; label: string }[] = [
+        { segment: "Budget Diners", min: 1, max: 1, label: "฿" },
+        { segment: "Mid-Range", min: 2, max: 2, label: "฿฿" },
+        { segment: "Premium", min: 3, max: 3, label: "฿฿฿" },
+        { segment: "Fine Dining", min: 4, max: 4, label: "฿฿฿฿" },
+      ];
+      const segmentPreferences = PRICE_SEGMENTS.map(({ segment, min, max, label }) => {
+        const group = (snapshots as any[]).filter((s: any) => {
+          const pl = s.preferredPriceLevel ?? 2;
+          return pl >= min && pl <= max;
+        });
+        const cuisineAgg: Record<string, number> = {};
+        for (const s of group) {
+          for (const [c, v] of Object.entries((s as any).cuisineAffinity ?? {})) {
+            cuisineAgg[c] = (cuisineAgg[c] ?? 0) + Number(v);
+          }
+        }
+        const top = Object.entries(cuisineAgg).sort((a, b) => b[1] - a[1])[0];
+        return { segment, topCuisine: top ? top[0] : "—", avgBudget: label, count: group.length };
+      });
+
+      res.json({ cuisineTrends, venueTrends, daypartTrends, segmentPreferences });
+    } catch (err) {
+      console.error("[food-trends]", err);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // ── Geography: district demand, clickouts, daypart heatmap ──────────────────
+  app.get("/api/admin/geography", async (req, res) => {
+    if (!requireAdminSession(req, res)) return;
+    try {
+      const daysParam = Math.min(parseInt(String(req.query.days ?? "30"), 10) || 30, 365);
+      const now = Date.now();
+      const currentStart = new Date(now - daysParam * 24 * 60 * 60 * 1000);
+      const prevStart = new Date(now - daysParam * 2 * 24 * 60 * 60 * 1000);
+
+      const [logs, allRestaurants] = await Promise.all([
+        storage.listEventLogs(50000, prevStart),
+        storage.getRestaurants(),
+      ]);
+
+      const restaurantMap: Record<number, { category: string; district: string | null }> = {};
+      for (const r of allRestaurants) restaurantMap[r.id] = { category: r.category ?? "Other", district: r.district?.toLowerCase() ?? null };
+
+      const currentLogs = logs.filter(e => new Date(e.createdAt) >= currentStart);
+      const prevLogs = logs.filter(e => new Date(e.createdAt) < currentStart);
+
+      const normalise = (s: string) => s.trim().toLowerCase();
+
+      // Restaurant count per district
+      const restaurantsByDistrict: Record<string, number> = {};
+      for (const r of allRestaurants) {
+        if (r.district) {
+          const d = normalise(r.district);
+          restaurantsByDistrict[d] = (restaurantsByDistrict[d] ?? 0) + 1;
+        }
+      }
+
+      // Demand (swipe_right) and clickouts per district — current & previous period
+      const tally = (arr: typeof logs, field: "demand" | "clickout") => {
+        const map: Record<string, number> = {};
+        for (const e of arr) {
+          if (!e.itemId) continue;
+          const dist = restaurantMap[e.itemId]?.district;
+          if (!dist) continue;
+          const isSwipe = field === "demand" && e.eventType === "swipe" && (e.metadata as any)?.direction === "right";
+          const isClick = field === "clickout" && (e.eventType === "deeplink_click" || e.eventType === "delivery_click");
+          if (isSwipe || isClick) map[dist] = (map[dist] ?? 0) + 1;
+        }
+        return map;
+      };
+
+      const currentDemand = tally(currentLogs, "demand");
+      const prevDemand = tally(prevLogs, "demand");
+      const currentClickouts = tally(currentLogs, "clickout");
+
+      const allDistricts = new Set([
+        ...Object.keys(currentDemand),
+        ...Object.keys(prevDemand),
+        ...Object.keys(restaurantsByDistrict),
+      ]);
+
+      const maxDemand = Math.max(...Object.values(currentDemand), 1);
+
+      const districts = [...allDistricts].map(dist => {
+        const demand = currentDemand[dist] ?? 0;
+        const prev = prevDemand[dist] ?? 0;
+        const restaurants = restaurantsByDistrict[dist] ?? 0;
+        const clickouts = currentClickouts[dist] ?? 0;
+        const growth = prev > 0 ? Math.round(((demand - prev) / prev) * 100) : (demand > 0 ? 100 : 0);
+        const demandScore = Math.round((demand / maxDemand) * 100);
+        const displayName = dist.charAt(0).toUpperCase() + dist.slice(1);
+        let status: "strong" | "growing" | "underserved" | "stable";
+        if (demandScore >= 60 && restaurants >= 5) status = "strong";
+        else if (demandScore >= 40 && growth > 20) status = "growing";
+        else if (demandScore >= 40 && restaurants < 4) status = "underserved";
+        else status = "stable";
+        return { name: displayName, demand: demandScore, restaurants, clickouts, growth, status };
+      }).sort((a, b) => b.demand - a.demand).slice(0, 10);
+
+      // Daypart × District heatmap (pct of area's total events per bucket)
+      const DAYPARTS = [
+        { key: "breakfast", from: 6, to: 10 },
+        { key: "lunch", from: 12, to: 15 },
+        { key: "dinner", from: 17, to: 22 },
+        { key: "lateNight", from: 22, to: 30 },
+      ];
+      const topDistricts = districts.slice(0, 5).map(d => d.name.toLowerCase());
+      const daypartGeo = topDistricts.map(dist => {
+        const areaLogs = currentLogs.filter(e => e.itemId && restaurantMap[e.itemId]?.district === dist);
+        const total = areaLogs.length || 1;
+        const row: Record<string, number | string> = { area: dist.charAt(0).toUpperCase() + dist.slice(1) };
+        for (const { key, from, to } of DAYPARTS) {
+          const count = areaLogs.filter(e => {
+            const h = new Date(e.createdAt).getHours();
+            return h >= from && h < (to > 24 ? 24 : to);
+          }).length;
+          row[key] = Math.round((count / total) * 100);
+        }
+        return row;
+      });
+
+      res.json({ districts, daypartGeo });
+    } catch (err) {
+      console.error("[geography]", err);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // ── User engagement metrics (activeThisWeek, avgSession, retentionRate) ──────
+  app.get("/api/admin/analytics/user-metrics", async (req, res) => {
+    if (!requireAdminSession(req, res)) return;
+    try {
+      const SESSION_GAP_MS = 30 * 60 * 1000; // 30-min inactivity = new session
+
+      const now = Date.now();
+      const weekAgo = new Date(now - 7 * 24 * 60 * 60 * 1000);
+      const twoWeeksAgo = new Date(now - 14 * 24 * 60 * 60 * 1000);
+
+      // Fetch last 14 days of events with userId
+      const logs = await storage.listEventLogs(30000, twoWeeksAgo);
+      const logsWithUser = logs.filter((e) => !!e.userId);
+
+      // Split into current week and previous week
+      const currentWeekLogs = logsWithUser.filter((e) => new Date(e.createdAt) >= weekAgo);
+      const prevWeekLogs = logsWithUser.filter((e) => new Date(e.createdAt) < weekAgo);
+
+      // Active this week
+      const activeThisWeek = new Set(currentWeekLogs.map((e) => e.userId!)).size;
+
+      // Session computation helper: given sorted timestamps per user → sessions
+      function computeSessions(evsByUser: Map<string, number[]>): { totalSessions: number; totalDurationMs: number } {
+        let totalSessions = 0;
+        let totalDurationMs = 0;
+        for (const [, times] of evsByUser) {
+          times.sort((a, b) => a - b);
+          let sessionStart = times[0];
+          let sessionLast = times[0];
+          for (let i = 1; i < times.length; i++) {
+            if (times[i] - sessionLast > SESSION_GAP_MS) {
+              totalSessions++;
+              totalDurationMs += sessionLast - sessionStart;
+              sessionStart = times[i];
+            }
+            sessionLast = times[i];
+          }
+          totalSessions++;
+          totalDurationMs += sessionLast - sessionStart;
+        }
+        return { totalSessions, totalDurationMs };
+      }
+
+      // Build events-by-user map for current week
+      const currentByUser = new Map<string, number[]>();
+      for (const e of currentWeekLogs) {
+        const ts = new Date(e.createdAt).getTime();
+        if (!currentByUser.has(e.userId!)) currentByUser.set(e.userId!, []);
+        currentByUser.get(e.userId!)!.push(ts);
+      }
+
+      const { totalSessions, totalDurationMs } = computeSessions(currentByUser);
+      const activeUsers = currentByUser.size;
+      const avgSessionsPerUser = activeUsers > 0 ? Math.round((totalSessions / activeUsers) * 10) / 10 : 0;
+      const avgSessionMinutes =
+        totalSessions > 0 ? Math.round((totalDurationMs / totalSessions / 60000) * 10) / 10 : 0;
+
+      // Retention: % of prev-week users who were also active this week
+      const prevWeekUsers = new Set(prevWeekLogs.map((e) => e.userId!));
+      const currentWeekUsers = new Set(currentWeekLogs.map((e) => e.userId!));
+      const retained = [...prevWeekUsers].filter((u) => currentWeekUsers.has(u)).length;
+      const retentionRate = prevWeekUsers.size > 0 ? Math.round((retained / prevWeekUsers.size) * 100) : 0;
+
+      return res.json({ activeThisWeek, avgSessionsPerUser, avgSessionMinutes, retentionRate, totalSessions });
+    } catch {
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // ── Demographics: gender + age distribution from user_profiles ──────────────
+  app.get("/api/admin/analytics/demographics", async (req, res) => {
+    if (!requireAdminSession(req, res)) return;
+    try {
+      const profiles = await storage.listProfiles(5000);
+
+      const gender: Record<string, number> = { male: 0, female: 0, other: 0, prefer_not_to_say: 0 };
+      const ageGroup: Record<string, number> = { "18-24": 0, "25-34": 0, "35-44": 0, "45-54": 0, "55+": 0 };
+      let genderTotal = 0;
+      let ageTotal = 0;
+
+      for (const p of profiles) {
+        const g = (p as { gender?: string | null }).gender;
+        if (g && g in gender) { gender[g]++; genderTotal++; }
+
+        const a = (p as { ageGroup?: string | null }).ageGroup;
+        if (a && a in ageGroup) { ageGroup[a]++; ageTotal++; }
+      }
+
+      return res.json({ gender, ageGroup, genderTotal, ageTotal, totalProfiles: profiles.length });
+    } catch {
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // ── Behavioral cohorts derived from event patterns ──────────────────────────
+  app.get("/api/admin/analytics/behavioral-cohorts", async (req, res) => {
+    if (!requireAdminSession(req, res)) return;
+    try {
+      const daysParam = Math.min(parseInt(String(req.query.days ?? "30"), 10) || 30, 90);
+      const since = new Date(Date.now() - daysParam * 24 * 60 * 60 * 1000);
+      const logs = await storage.listEventLogs(30000, since);
+      const withUser = logs.filter((e) => !!e.userId);
+
+      // Per-user aggregates
+      const swipeCount = new Map<string, number>();
+      const restaurantsSeen = new Map<string, Set<number>>();
+      const deliveryClicks = new Map<string, number>();
+      const groupEvents = new Map<string, number>();
+
+      for (const e of withUser) {
+        const uid = e.userId!;
+        if (e.eventType === "swipe") swipeCount.set(uid, (swipeCount.get(uid) ?? 0) + 1);
+        if (e.eventType === "view_card" && e.itemId) {
+          if (!restaurantsSeen.has(uid)) restaurantsSeen.set(uid, new Set());
+          restaurantsSeen.get(uid)!.add(e.itemId);
+        }
+        if (e.eventType === "deeplink_click") deliveryClicks.set(uid, (deliveryClicks.get(uid) ?? 0) + 1);
+        if (e.eventType === "session_join" || e.eventType === "session_result_click_map")
+          groupEvents.set(uid, (groupEvents.get(uid) ?? 0) + 1);
+      }
+
+      const allUsers = new Set([
+        ...swipeCount.keys(),
+        ...restaurantsSeen.keys(),
+        ...deliveryClicks.keys(),
+        ...groupEvents.keys(),
+      ]);
+      const total = allUsers.size || 1;
+
+      // Classify — users can appear in multiple cohorts
+      let powerSwipers = 0, explorers = 0, deliveryFocused = 0, social = 0, casualBrowsers = 0;
+      for (const uid of allUsers) {
+        const swipes = swipeCount.get(uid) ?? 0;
+        const restaurants = restaurantsSeen.get(uid)?.size ?? 0;
+        const delivery = deliveryClicks.get(uid) ?? 0;
+        const group = groupEvents.get(uid) ?? 0;
+        let classified = false;
+        if (swipes >= 50) { powerSwipers++; classified = true; }
+        if (restaurants >= 15) { explorers++; classified = true; }
+        if (delivery >= 5) { deliveryFocused++; classified = true; }
+        if (group >= 1) { social++; classified = true; }
+        if (!classified) casualBrowsers++;
+      }
+
+      return res.json([
+        { id: "power_swiper", name: "Power Swipers", description: "50+ swipes in period", count: powerSwipers, pct: Math.round((powerSwipers / total) * 100) },
+        { id: "explorer", name: "Explorers", description: "Viewed 15+ distinct restaurants", count: explorers, pct: Math.round((explorers / total) * 100) },
+        { id: "delivery_focused", name: "Delivery Focused", description: "5+ delivery platform clicks", count: deliveryFocused, pct: Math.round((deliveryFocused / total) * 100) },
+        { id: "social", name: "Social Diners", description: "Used group session feature", count: social, pct: Math.round((social / total) * 100) },
+        { id: "casual", name: "Casual Browsers", description: "Light activity, no strong pattern", count: casualBrowsers, pct: Math.round((casualBrowsers / total) * 100) },
+      ]);
+    } catch {
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // ── Swipe Sessions analytics ────────────────────────────────────────────────
+  app.get("/api/admin/analytics/swipe-sessions", async (req, res) => {
+    if (!requireAdminSession(req, res)) return;
+    try {
+      const SESSION_GAP_MS = 30 * 60 * 1000;
+      const daysParam = Math.min(parseInt(String(req.query.days ?? "7"), 10) || 7, 90);
+      const since = new Date(Date.now() - daysParam * 24 * 60 * 60 * 1000);
+      const prevSince = new Date(Date.now() - daysParam * 2 * 24 * 60 * 60 * 1000);
+
+      const allLogs = await storage.listEventLogs(50000, prevSince);
+      const currentLogs = allLogs.filter(e => new Date(e.createdAt) >= since);
+      const prevLogs = allLogs.filter(e => new Date(e.createdAt) < since);
+
+      // Build sessions from an array of event logs
+      function buildSessions(logs: typeof allLogs) {
+        // Group by userId (skip anonymous)
+        const byUser = new Map<string, typeof logs>();
+        for (const e of logs) {
+          if (!e.userId) continue;
+          if (!byUser.has(e.userId)) byUser.set(e.userId, []);
+          byUser.get(e.userId)!.push(e);
+        }
+
+        type Session = {
+          userId: string;
+          startMs: number;
+          endMs: number;
+          events: typeof logs;
+          swipes: number;
+          rightSwipes: number;
+          matched: boolean;
+          hadDetailView: boolean;
+          hadClickout: boolean;
+          isGroup: boolean;
+          swipesToMatch: number | null;
+          msToMatch: number | null;
+        };
+
+        const sessions: Session[] = [];
+        for (const [userId, userEvents] of byUser) {
+          userEvents.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+          let sessionEvents: typeof logs = [];
+          for (const e of userEvents) {
+            const ts = new Date(e.createdAt).getTime();
+            if (sessionEvents.length > 0) {
+              const lastTs = new Date(sessionEvents[sessionEvents.length - 1].createdAt).getTime();
+              if (ts - lastTs > SESSION_GAP_MS) {
+                sessions.push(processSession(userId, sessionEvents));
+                sessionEvents = [];
+              }
+            }
+            sessionEvents.push(e);
+          }
+          if (sessionEvents.length > 0) sessions.push(processSession(userId, sessionEvents));
+        }
+        return sessions;
+      }
+
+      function processSession(userId: string, events: typeof allLogs) {
+        const startMs = new Date(events[0].createdAt).getTime();
+        const endMs = new Date(events[events.length - 1].createdAt).getTime();
+        let swipes = 0, rightSwipes = 0, matched = false, hadDetailView = false, hadClickout = false, isGroup = false;
+        let matchMs: number | null = null;
+        let swipesSoFar = 0;
+        let swipesToMatch: number | null = null;
+
+        for (const e of events) {
+          if (e.eventType === "swipe") {
+            swipes++;
+            swipesSoFar++;
+            const dir = (e.metadata as Record<string, unknown> | null)?.direction;
+            if (dir === "right") rightSwipes++;
+          }
+          if (e.eventType === "favorite" && !matched) {
+            matched = true;
+            matchMs = new Date(e.createdAt).getTime();
+            swipesToMatch = swipesSoFar;
+          }
+          if (e.eventType === "view_detail" || e.eventType === "view_card") hadDetailView = true;
+          if (e.eventType === "deeplink_click" || e.eventType === "order_click" || e.eventType === "booking_click") hadClickout = true;
+          if (e.eventType === "session_join") isGroup = true;
+        }
+
+        return {
+          userId, startMs, endMs, events,
+          swipes, rightSwipes, matched, hadDetailView, hadClickout, isGroup,
+          swipesToMatch,
+          msToMatch: matched && matchMs ? matchMs - startMs : null,
+        };
+      }
+
+      const currentSessions = buildSessions(currentLogs);
+      const prevSessions = buildSessions(prevLogs);
+
+      function computeKpis(sessions: ReturnType<typeof buildSessions>) {
+        const total = sessions.length;
+        if (total === 0) return { total, completionRate: 0, avgSwipesToMatch: 0, avgTimeToMatchSecs: 0, clickoutAfterMatchRate: 0, abandonmentRate: 0 };
+        const withSwipes = sessions.filter(s => s.swipes > 0);
+        const matched = sessions.filter(s => s.matched);
+        const matchedWithClickout = matched.filter(s => s.hadClickout);
+        const swipesToMatchArr = sessions.filter(s => s.swipesToMatch !== null).map(s => s.swipesToMatch!);
+        const msTomatchArr = sessions.filter(s => s.msToMatch !== null).map(s => s.msToMatch!);
+        const completionRate = withSwipes.length > 0 ? Math.round((matched.length / withSwipes.length) * 100) : 0;
+        const avgSwipesToMatch = swipesToMatchArr.length > 0 ? Math.round(swipesToMatchArr.reduce((a, b) => a + b, 0) / swipesToMatchArr.length) : 0;
+        const avgTimeToMatchSecs = msTomatchArr.length > 0 ? Math.round(msTomatchArr.reduce((a, b) => a + b, 0) / msTomatchArr.length / 1000) : 0;
+        const clickoutAfterMatchRate = matched.length > 0 ? Math.round((matchedWithClickout.length / matched.length) * 100) : 0;
+        const abandonmentRate = withSwipes.length > 0 ? Math.round(((withSwipes.length - matched.length) / withSwipes.length) * 100) : 0;
+        return { total, completionRate, avgSwipesToMatch, avgTimeToMatchSecs, clickoutAfterMatchRate, abandonmentRate };
+      }
+
+      const kpisCurrent = computeKpis(currentSessions);
+      const kpisPrev = computeKpis(prevSessions);
+
+      // Funnel (from current period, based on distinct sessions)
+      const sessionsWithSwipes = currentSessions.filter(s => s.swipes > 0).length;
+      const sessionsMatched = currentSessions.filter(s => s.matched).length;
+      const sessionsWithDetail = currentSessions.filter(s => s.hadDetailView).length;
+      const sessionsWithClickout = currentSessions.filter(s => s.hadClickout).length;
+      const totalSessions = currentSessions.length;
+      const baseVal = totalSessions || 1;
+      const funnel = [
+        { label: "App Opens", value: totalSessions, pct: 100 },
+        { label: "Swipe Session Started", value: sessionsWithSwipes, pct: Math.round((sessionsWithSwipes / baseVal) * 100) },
+        { label: "Match Reached", value: sessionsMatched, pct: Math.round((sessionsMatched / baseVal) * 100) },
+        { label: "Restaurant Detail Viewed", value: sessionsWithDetail, pct: Math.round((sessionsWithDetail / baseVal) * 100) },
+        { label: "Outbound Click to Partner", value: sessionsWithClickout, pct: Math.round((sessionsWithClickout / baseVal) * 100) },
+      ];
+
+      // Daily volume by day-of-week
+      const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+      const dayCount = [0, 0, 0, 0, 0, 0, 0];
+      for (const s of currentSessions) {
+        const d = new Date(s.startMs).getDay();
+        const idx = d === 0 ? 6 : d - 1;
+        dayCount[idx]++;
+      }
+      const dailyVolume = DAY_NAMES.map((day, i) => ({ day, sessions: dayCount[i] }));
+
+      // Entry sources: check metadata.source or classify by first event type
+      const sourceCount: Record<string, number> = {};
+      for (const s of currentSessions) {
+        const metaSource = (s.events[0]?.metadata as Record<string, unknown> | null)?.source as string | undefined;
+        let source: string;
+        if (metaSource) {
+          source = metaSource;
+        } else if (s.isGroup) {
+          source = "Group Invite";
+        } else if (s.events.some(e => e.eventType === "search")) {
+          source = "Search";
+        } else {
+          source = "Home Feed";
+        }
+        sourceCount[source] = (sourceCount[source] ?? 0) + 1;
+      }
+      const sourceTotal = Object.values(sourceCount).reduce((a, b) => a + b, 0) || 1;
+      const SOURCE_COLORS: Record<string, string> = {
+        "Home Feed": "var(--admin-deep-purple)",
+        "Search": "var(--admin-blue)",
+        "Group Invite": "var(--admin-cyan)",
+        "Trending": "var(--admin-pink)",
+        "Push Notification": "var(--admin-teal)",
+      };
+      const entrySources = Object.entries(sourceCount)
+        .sort((a, b) => b[1] - a[1])
+        .map(([source, count]) => ({
+          source,
+          pct: Math.round((count / sourceTotal) * 100),
+          color: SOURCE_COLORS[source] ?? "var(--admin-deep-purple)",
+        }));
+
+      // Segment comparison: solo vs group
+      const soloSessions = currentSessions.filter(s => !s.isGroup);
+      const groupSessions = currentSessions.filter(s => s.isGroup);
+      function segmentStats(segs: typeof currentSessions) {
+        if (segs.length === 0) return { pct: 0, avgSwipes: 0, matchRate: "0%", avgTime: "0m 0s", clickoutRate: "0%" };
+        const withSwipes = segs.filter(s => s.swipes > 0);
+        const matched = segs.filter(s => s.matched);
+        const withClickout = segs.filter(s => s.hadClickout);
+        const avgSwipes = segs.length > 0 ? Math.round(segs.reduce((a, s) => a + s.swipes, 0) / segs.length) : 0;
+        const msArr = segs.filter(s => s.msToMatch !== null).map(s => s.msToMatch!);
+        const avgMs = msArr.length > 0 ? msArr.reduce((a, b) => a + b, 0) / msArr.length : 0;
+        const mins = Math.floor(avgMs / 60000);
+        const secs = Math.round((avgMs % 60000) / 1000);
+        const matchRate = withSwipes.length > 0 ? `${Math.round((matched.length / withSwipes.length) * 100)}%` : "0%";
+        const clickoutRate = segs.length > 0 ? `${Math.round((withClickout.length / segs.length) * 100)}%` : "0%";
+        return { avgSwipes, matchRate, avgTime: `${mins}m ${secs}s`, clickoutRate };
+      }
+      const total = currentSessions.length || 1;
+      const segments = {
+        solo: { pct: Math.round((soloSessions.length / total) * 100), ...segmentStats(soloSessions) },
+        group: { pct: Math.round((groupSessions.length / total) * 100), ...segmentStats(groupSessions) },
+      };
+
+      // Recent sessions (last 30)
+      const sorted = [...currentSessions].sort((a, b) => b.startMs - a.startMs).slice(0, 30);
+      const recentSessions = sorted.map(s => {
+        const durationMs = s.endMs - s.startMs;
+        const dMins = Math.floor(durationMs / 60000);
+        const dSecs = Math.round((durationMs % 60000) / 1000);
+        const timeAgo = (() => {
+          const diff = Date.now() - s.startMs;
+          const m = Math.floor(diff / 60000);
+          if (m < 1) return "just now";
+          if (m < 60) return `${m}m ago`;
+          const h = Math.floor(m / 60);
+          if (h < 24) return `${h}h ago`;
+          return `${Math.floor(h / 24)}d ago`;
+        })();
+        return {
+          id: `S-${s.startMs.toString(36).toUpperCase().slice(-6)}`,
+          user: s.userId.slice(0, 8) + "…",
+          type: s.isGroup ? "Group" : "Solo",
+          swipes: s.swipes,
+          matched: s.matched,
+          duration: `${dMins}m ${dSecs}s`,
+          clickout: s.hadClickout,
+          time: timeAgo,
+        };
+      });
+
+      return res.json({
+        kpis: {
+          ...kpisCurrent,
+          prevTotal: kpisPrev.total,
+          prevCompletionRate: kpisPrev.completionRate,
+          prevAvgSwipesToMatch: kpisPrev.avgSwipesToMatch,
+          prevAvgTimeToMatchSecs: kpisPrev.avgTimeToMatchSecs,
+          prevClickoutAfterMatchRate: kpisPrev.clickoutAfterMatchRate,
+          prevAbandonmentRate: kpisPrev.abandonmentRate,
+        },
+        funnel,
+        dailyVolume,
+        entrySources,
+        segments,
+        recentSessions,
+      });
+    } catch {
+      return res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // ── Report generation — real data for each report type ──────────────────────
+  app.get("/api/admin/reports/generate", async (req, res) => {
+    if (!requireAdminSession(req, res)) return;
+    try {
+      const type = String(req.query.type ?? "");
+      const days = Math.min(parseInt(String(req.query.days ?? "7"), 10) || 7, 90);
+      const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+      const prevSince = new Date(Date.now() - days * 2 * 24 * 60 * 60 * 1000);
+
+      if (type === "weekly-performance") {
+        const [logsNow, logsPrev, profiles, campaigns] = await Promise.all([
+          storage.listEventLogs(30000, since),
+          storage.listEventLogs(30000, prevSince),
+          storage.listProfiles(5000),
+          storage.listCampaigns(),
+        ]);
+        const logsPrevOnly = logsPrev.filter(e => new Date(e.createdAt) < since);
+
+        const count = (logs: typeof logsNow, type: string) => logs.filter(e => e.eventType === type).length;
+        const countMulti = (logs: typeof logsNow, types: string[]) => logs.filter(e => types.includes(e.eventType)).length;
+
+        // Active users
+        const activeNow = new Set(logsNow.filter(e => e.userId).map(e => e.userId!)).size;
+        const activePrev = new Set(logsPrevOnly.filter(e => e.userId).map(e => e.userId!)).size;
+
+        // Swipe sessions (distinct user-day combos with swipe events)
+        const sessionNow = new Set(logsNow.filter(e => e.eventType === "swipe" && e.userId).map(e => `${e.userId}-${new Date(e.createdAt).toDateString()}`)).size;
+        const sessionPrev = new Set(logsPrevOnly.filter(e => e.eventType === "swipe" && e.userId).map(e => `${e.userId}-${new Date(e.createdAt).toDateString()}`)).size;
+
+        const clickNow = countMulti(logsNow, ["deeplink_click", "order_click", "booking_click"]);
+        const clickPrev = countMulti(logsPrevOnly, ["deeplink_click", "order_click", "booking_click"]);
+
+        // Avg session length (reuse 30-min gap logic simplified)
+        const swipeLogs = logsNow.filter(e => e.eventType === "swipe" && e.userId);
+        const byUser = new Map<string, number[]>();
+        for (const e of swipeLogs) {
+          if (!byUser.has(e.userId!)) byUser.set(e.userId!, []);
+          byUser.get(e.userId!)!.push(new Date(e.createdAt).getTime());
+        }
+        const durations: number[] = [];
+        for (const [, times] of byUser) {
+          times.sort((a, b) => a - b);
+          durations.push(times[times.length - 1] - times[0]);
+        }
+        const avgMs = durations.length ? durations.reduce((a, b) => a + b, 0) / durations.length : 0;
+        const avgMins = Math.floor(avgMs / 60000);
+        const avgSecs = Math.round((avgMs % 60000) / 1000);
+
+        // Top restaurant by right swipes
+        const swipeRight = logsNow.filter(e => e.eventType === "swipe" && (e.metadata as Record<string, unknown> | null)?.direction === "right" && e.itemId);
+        const countByR: Record<number, number> = {};
+        for (const e of swipeRight) { if (e.itemId) countByR[e.itemId] = (countByR[e.itemId] ?? 0) + 1; }
+        const topId = Object.entries(countByR).sort((a, b) => Number(b[1]) - Number(a[1]))[0]?.[0];
+        const allR = await storage.getRestaurants();
+        const topName = topId ? (allR.find(r => r.id === Number(topId))?.name ?? `#${topId}`) : "—";
+
+        const fmtChange = (a: number, b: number) => b === 0 ? (a > 0 ? "+∞" : "0%") : `${a >= b ? "+" : ""}${Math.round(((a - b) / b) * 100)}%`;
+
+        const rows = [
+          ["Metric", `This ${days}d`, `Prev ${days}d`, "Change"],
+          ["Active Users", String(activeNow), String(activePrev), fmtChange(activeNow, activePrev)],
+          ["Swipe Sessions", String(sessionNow), String(sessionPrev), fmtChange(sessionNow, sessionPrev)],
+          ["Clickouts", String(clickNow), String(clickPrev), fmtChange(clickNow, clickPrev)],
+          ["Avg Session Length", `${avgMins}m ${avgSecs}s`, "—", "—"],
+          ["Total Users", String(profiles.length), "—", "—"],
+          ["Active Campaigns", String(campaigns.filter(c => c.status === "active").length), "—", "—"],
+          ["Top Restaurant", topName, "—", "—"],
+        ];
+        return res.json({ title: "Weekly Performance Summary", rows, generatedAt: new Date().toISOString() });
+      }
+
+      if (type === "partner-attribution") {
+        const logs = await storage.listEventLogs(30000, since);
+        const clickouts = logs.filter(e => e.eventType === "deeplink_click");
+        const total = clickouts.length || 1;
+        const byPlatform: Record<string, number> = {};
+        for (const e of clickouts) {
+          const p = ((e.metadata as Record<string, unknown> | null)?.platform as string) ?? "unknown";
+          byPlatform[p] = (byPlatform[p] ?? 0) + 1;
+        }
+        const PLAT_LABELS: Record<string, string> = { grab: "Grab", lineman: "LINE MAN", robinhood: "Robinhood", unknown: "Other" };
+        const rows = [
+          ["Partner", "Clickouts", "Share %"],
+          ...Object.entries(byPlatform).sort((a, b) => b[1] - a[1]).map(([k, v]) => [
+            PLAT_LABELS[k] ?? k,
+            String(v),
+            `${Math.round((v / total) * 100)}%`,
+          ]),
+        ];
+        return res.json({ title: "Partner Attribution Report", rows, generatedAt: new Date().toISOString() });
+      }
+
+      if (type === "owner-activity") {
+        const logs = await storage.listEventLogs(30000, since);
+        const ownerEvents = logs.filter(e => e.userId && e.eventType.startsWith("owner_"));
+        const byOwner: Record<string, { logins: number; updates: number }> = {};
+        for (const e of ownerEvents) {
+          const uid = e.userId!;
+          if (!byOwner[uid]) byOwner[uid] = { logins: 0, updates: 0 };
+          if (e.eventType === "owner_login") byOwner[uid].logins++;
+          if (e.eventType === "owner_menu_update" || e.eventType === "owner_profile_update") byOwner[uid].updates++;
+        }
+        const profiles = await storage.listProfiles(5000);
+        const profileMap = new Map(profiles.map(p => [p.lineUserId, p.displayName]));
+        const rows = [
+          ["Owner ID", "Display Name", "Logins", "Menu Updates"],
+          ...Object.entries(byOwner).sort((a, b) => b[1].logins - a[1].logins).slice(0, 20).map(([uid, s]) => [
+            uid.slice(0, 12) + "…",
+            profileMap.get(uid) ?? "Unknown",
+            String(s.logins),
+            String(s.updates),
+          ]),
+        ];
+        if (rows.length === 1) rows.push(["—", "No owner activity tracked yet", "—", "—"]);
+        return res.json({ title: "Owner Activity Report", rows, generatedAt: new Date().toISOString() });
+      }
+
+      if (type === "data-quality") {
+        const restaurants = await storage.getRestaurants();
+        const total = restaurants.length || 1;
+        const missingImage = restaurants.filter(r => !r.imageUrl || r.imageUrl.includes("placeholder")).length;
+        const missingPhone = restaurants.filter(r => !r.phone).length;
+        const missingHours = restaurants.filter(r => !r.openingHours || (r.openingHours as unknown[]).length === 0).length;
+        const missingCategory = restaurants.filter(r => !r.category).length;
+        const noReviews = restaurants.filter(r => r.reviewCount === 0).length;
+        const rows = [
+          ["Issue", "Count", "% of Total", "Severity"],
+          ["Missing/Placeholder Image", String(missingImage), `${Math.round((missingImage / total) * 100)}%`, missingImage > 50 ? "High" : "Medium"],
+          ["Missing Phone Number", String(missingPhone), `${Math.round((missingPhone / total) * 100)}%`, "Medium"],
+          ["Missing Opening Hours", String(missingHours), `${Math.round((missingHours / total) * 100)}%`, "Medium"],
+          ["Missing Category", String(missingCategory), `${Math.round((missingCategory / total) * 100)}%`, "High"],
+          ["No Reviews", String(noReviews), `${Math.round((noReviews / total) * 100)}%`, "Low"],
+          ["Total Restaurants", String(restaurants.length), "100%", "—"],
+        ];
+        return res.json({ title: "Data Quality Report", rows, generatedAt: new Date().toISOString() });
+      }
+
+      return res.status(400).json({ message: "Unknown report type" });
     } catch {
       return res.status(500).json({ message: "Internal server error" });
     }
@@ -6808,6 +8401,251 @@ export async function registerRoutes(
         })),
       });
     } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.get("/api/admin/ml/status", async (req, res) => {
+    try {
+      if (!requirePermission("manage_config")(req, res)) return;
+
+      const toBool = (value: string | undefined): boolean => {
+        if (!value) return false;
+        return ["1", "true", "yes", "on"].includes(value.toLowerCase());
+      };
+
+      const cwd = process.cwd();
+      const resolvePath = (rawPath: string | undefined, fallback: string): string => {
+        const source = rawPath?.trim() ? rawPath : fallback;
+        return path.resolve(cwd, source);
+      };
+
+      const modelPath = resolvePath(process.env.ML_MODEL_PATH, "models/recommendation-model.json");
+      const rankerPath = resolvePath(process.env.ML_RANKER_MODEL_PATH, "models/recommendation-ranker-v1.json");
+      const manifestPath = resolvePath(
+        process.env.ML_DATASET_MANIFEST_PATH,
+        "models/recommendation-training.manifest.json",
+      );
+
+      const readArtifact = (artifactPath: string) => {
+        if (!fs.existsSync(artifactPath)) {
+          return { exists: false, path: artifactPath };
+        }
+
+        try {
+          const stat = fs.statSync(artifactPath);
+          const parsed = JSON.parse(fs.readFileSync(artifactPath, "utf8")) as Record<string, unknown>;
+          return {
+            exists: true,
+            path: artifactPath,
+            sizeBytes: stat.size,
+            updatedAt: stat.mtime.toISOString(),
+            modelType: typeof parsed.modelType === "string" ? parsed.modelType : null,
+            version: typeof parsed.version === "string" ? parsed.version : null,
+            trainedAt: typeof parsed.trainedAt === "string" ? parsed.trainedAt : null,
+            featuresCount: Array.isArray(parsed.features) ? parsed.features.length : 0,
+            metrics: typeof parsed.metrics === "object" && parsed.metrics != null ? parsed.metrics : {},
+          };
+        } catch (error) {
+          return {
+            exists: true,
+            path: artifactPath,
+            parseError: error instanceof Error ? error.message : "Unknown parse error",
+          };
+        }
+      };
+
+      const readManifest = (filePath: string) => {
+        if (!fs.existsSync(filePath)) return { exists: false, path: filePath };
+        try {
+          const stat = fs.statSync(filePath);
+          const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
+          return {
+            exists: true,
+            path: filePath,
+            sizeBytes: stat.size,
+            updatedAt: stat.mtime.toISOString(),
+            totalRows: Number(parsed.totalRows ?? 0),
+            positives: Number(parsed.positives ?? 0),
+            positiveRate: Number(parsed.positiveRate ?? 0),
+            generatedAt: typeof parsed.generatedAt === "string" ? parsed.generatedAt : null,
+            missingByColumn:
+              typeof parsed.missingByColumn === "object" && parsed.missingByColumn != null
+                ? parsed.missingByColumn
+                : {},
+          };
+        } catch (error) {
+          return {
+            exists: true,
+            path: filePath,
+            parseError: error instanceof Error ? error.message : "Unknown parse error",
+          };
+        }
+      };
+
+      const modelsDir = path.resolve(cwd, "models");
+      const availableArtifacts = fs.existsSync(modelsDir)
+        ? fs.readdirSync(modelsDir).filter((name) => name.endsWith(".json") || name.endsWith(".csv"))
+        : [];
+      const promotions = await storage.getAdminConfig("ml_promotions");
+
+      res.json({
+        env: {
+          mlRankingEnabled: toBool(process.env.ML_RANKING_ENABLED),
+          mlBlendAlpha: Number(process.env.ML_BLEND_ALPHA ?? 0.7),
+          mlModelPath: modelPath,
+          mlRankerPath: rankerPath,
+          manifestPath,
+        },
+        artifacts: {
+          recommendationModel: readArtifact(modelPath),
+          rankerModel: readArtifact(rankerPath),
+          trainingManifest: readManifest(manifestPath),
+          availableArtifacts,
+        },
+        promotions: typeof promotions?.value === "object" && promotions?.value != null ? promotions.value : {},
+      });
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.get("/api/admin/events/queue-status", async (req, res) => {
+    try {
+      if (!requireAdminSession(req, res)) return;
+      const status = shouldUseRedisIngest()
+        ? await getQueueStatus()
+        : { streamLength: 0, pending: 0, lag: 0, dlqLength: 0 };
+      res.json({
+        ...status,
+        config: getEventIngestConfig(),
+      });
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.post("/api/admin/events/replay-dlq", async (req, res) => {
+    try {
+      if (!requireAdminSession(req, res)) return;
+      if (!shouldUseRedisIngest()) {
+        return res.status(400).json({ message: "Redis ingest mode is disabled" });
+      }
+      const limitRaw = Number(req.body?.limit ?? 100);
+      const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(Math.floor(limitRaw), 1000)) : 100;
+      const result = await replayDlq(limit);
+      res.json(result);
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.get("/api/admin/ml/runs", async (req, res) => {
+    try {
+      if (!requirePermission("manage_config")(req, res)) return;
+      res.json({
+        items: mlRunHistory,
+      });
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.post("/api/admin/ml/run", async (req, res) => {
+    try {
+      if (!requirePermission("manage_config")(req, res)) return;
+      const input = z.object({
+        action: z.enum(["export", "train", "train-ranker", "eval", "build"]),
+      }).parse(req.body ?? {});
+
+      const startedAt = new Date().toISOString();
+      const runResult = await runMlScript(input.action);
+      const finishedAt = new Date().toISOString();
+      const record: MlRunRecord = {
+        id: crypto.randomUUID(),
+        action: input.action,
+        startedAt,
+        finishedAt,
+        success: runResult.success,
+        durationMs: runResult.durationMs,
+        stdout: runResult.stdout,
+        stderr: runResult.stderr,
+        exitCode: runResult.exitCode,
+        requestedBy: req.session?.username ?? req.session?.ownerEmail ?? "unknown",
+      };
+      mlRunHistory.unshift(record);
+      if (mlRunHistory.length > ML_RUN_HISTORY_LIMIT) {
+        mlRunHistory.length = ML_RUN_HISTORY_LIMIT;
+      }
+
+      res.json(record);
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid payload" });
+      }
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.post("/api/admin/ml/promote", async (req, res) => {
+    try {
+      if (!requirePermission("manage_config")(req, res)) return;
+      const input = z.object({
+        target: z.enum(["recommendation", "ranker"]),
+        sourcePath: z.string().min(1),
+        tag: z.string().min(1).max(64),
+      }).parse(req.body ?? {});
+
+      const cwd = process.cwd();
+      const resolvePath = (rawPath: string | undefined, fallback: string): string => {
+        const source = rawPath?.trim() ? rawPath : fallback;
+        return path.resolve(cwd, source);
+      };
+
+      const targetPath = input.target === "recommendation"
+        ? resolvePath(process.env.ML_MODEL_PATH, "models/recommendation-model.json")
+        : resolvePath(process.env.ML_RANKER_MODEL_PATH, "models/recommendation-ranker-v1.json");
+      const sourcePath = path.resolve(cwd, input.sourcePath);
+
+      if (!fs.existsSync(sourcePath)) {
+        return res.status(400).json({ message: "Source model file does not exist" });
+      }
+      if (!sourcePath.endsWith(".json")) {
+        return res.status(400).json({ message: "Source model file must be .json" });
+      }
+
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      fs.copyFileSync(sourcePath, targetPath);
+
+      const nowIso = new Date().toISOString();
+      const existing = await storage.getAdminConfig("ml_promotions");
+      const current = typeof existing?.value === "object" && existing?.value != null
+        ? existing.value as Record<string, unknown>
+        : {};
+      const next = {
+        ...current,
+        [input.target]: {
+          tag: input.tag.trim(),
+          sourcePath,
+          targetPath,
+          promotedAt: nowIso,
+          promotedBy: req.session?.username ?? req.session?.ownerEmail ?? "unknown",
+        },
+        updatedAt: nowIso,
+      };
+      await storage.upsertAdminConfig("ml_promotions", next);
+
+      res.json({
+        target: input.target,
+        tag: input.tag.trim(),
+        sourcePath,
+        targetPath,
+        promotedAt: nowIso,
+      });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid payload" });
+      }
       res.status(500).json({ message: "Internal server error" });
     }
   });
@@ -7412,6 +9250,547 @@ export async function registerRoutes(
       if (err instanceof z.ZodError) {
         return res.status(400).json({ message: err.errors[0]?.message ?? "Invalid payload" });
       }
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // ── Stripe / Omise webhooks ───────────────────────────────────────────────
+  app.post("/api/webhooks/stripe", stripeWebhookHandler);
+  app.post("/api/webhooks/omise", omiseWebhookHandler);
+
+  // ── Admin Payment endpoints ───────────────────────────────────────────────
+  app.get("/api/admin/payments/summary", async (req, res) => {
+    if (!requireAdminSession(req, res)) return;
+    try {
+      const allTx = await db.select().from(paymentTransactions);
+      const succeeded = allTx.filter((t) => t.status === "succeeded");
+      const monthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const recentSucceeded = succeeded.filter((t) => new Date(t.createdAt) >= monthAgo);
+      const mrr = recentSucceeded.reduce((s, t) => s + t.amount, 0);
+
+      const allOwners = await db.select().from(restaurantOwners);
+      const now = new Date().toISOString().split("T")[0];
+      const activeSubscriptions = allOwners.filter(
+        (o) => o.subscriptionTier !== "free" && o.subscriptionExpiry && o.subscriptionExpiry >= now,
+      ).length;
+
+      const pendingSlips = allTx.filter((t) => t.method === "bank_transfer" && t.status === "pending").length;
+      const failedPayments = allTx.filter((t) => t.status === "failed").length;
+
+      res.json({
+        mrr: Math.round(mrr / 100),
+        activeSubscriptions,
+        pendingSlips,
+        failedPayments,
+      });
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.get("/api/admin/payments/transactions", async (req, res) => {
+    if (!requireAdminSession(req, res)) return;
+    try {
+      const limit = Math.min(parseInt(String(req.query.limit ?? "50"), 10) || 50, 200);
+      const offset = parseInt(String(req.query.offset ?? "0"), 10) || 0;
+
+      const rows = await db
+        .select()
+        .from(paymentTransactions)
+        .orderBy(desc(paymentTransactions.createdAt))
+        .limit(limit)
+        .offset(offset);
+
+      const ownerIds = [...new Set(rows.map((r) => r.ownerId))];
+      const ownerRows = ownerIds.length
+        ? await db.select().from(restaurantOwners).where(inArray(restaurantOwners.id, ownerIds))
+        : [];
+      const ownerMap = Object.fromEntries(ownerRows.map((o) => [o.id, o]));
+
+      const enriched = rows.map((t) => {
+        const owner = ownerMap[t.ownerId];
+        return {
+          ...t,
+          amountThb: Math.round(t.amount / 100),
+          ownerName: owner?.displayName ?? "Unknown",
+          ownerEmail: owner?.email ?? "",
+          restaurantId: owner?.restaurantId ?? null,
+        };
+      });
+
+      res.json({ transactions: enriched, total: enriched.length, limit, offset });
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.get("/api/admin/payments/gateway-config", async (req, res) => {
+    if (!requireAdminSession(req, res)) return;
+    try {
+      const config = await storage.getAdminConfig("payment_gateway");
+      const value = (config?.value ?? {}) as Record<string, unknown>;
+      res.json({
+        activeGateway: value.activeGateway ?? "stripe",
+        stripeConfigured: !!process.env.STRIPE_SECRET_KEY,
+        omiseConfigured: !!process.env.OMISE_SECRET_KEY,
+        stripePublishableKeyMasked: process.env.STRIPE_PUBLISHABLE_KEY
+          ? process.env.STRIPE_PUBLISHABLE_KEY.slice(0, 10) + "..."
+          : null,
+        omisePublicKeyMasked: process.env.OMISE_PUBLIC_KEY
+          ? process.env.OMISE_PUBLIC_KEY.slice(0, 10) + "..."
+          : null,
+      });
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.put("/api/admin/payments/gateway-config", async (req, res) => {
+    if (!requireAdminSession(req, res)) return;
+    try {
+      const { activeGateway } = z.object({
+        activeGateway: z.enum(["stripe", "omise"]),
+      }).parse(req.body ?? {});
+      const current = await storage.getAdminConfig("payment_gateway");
+      const currentVal = (current?.value ?? {}) as Record<string, unknown>;
+      await storage.upsertAdminConfig("payment_gateway", { ...currentVal, activeGateway });
+      res.json({ ok: true, activeGateway });
+    } catch (err) {
+      if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors[0]?.message });
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.post("/api/admin/payments/transactions/:id/approve-slip", async (req, res) => {
+    if (!requireAdminSession(req, res)) return;
+    try {
+      const id = parseInt(req.params.id, 10);
+      const [tx] = await db.select().from(paymentTransactions).where(eq(paymentTransactions.id, id)).limit(1);
+      if (!tx) return res.status(404).json({ message: "Transaction not found" });
+      if (tx.status !== "pending") return res.status(400).json({ message: "Transaction is not pending" });
+
+      await db
+        .update(paymentTransactions)
+        .set({ status: "succeeded", notes: req.body?.notes ?? null, updatedAt: new Date() })
+        .where(eq(paymentTransactions.id, id));
+
+      const expiry = new Date();
+      expiry.setMonth(expiry.getMonth() + 1);
+      await db
+        .update(restaurantOwners)
+        .set({
+          subscriptionTier: tx.tier,
+          subscriptionExpiry: expiry.toISOString().split("T")[0],
+          paymentConnected: true,
+        })
+        .where(eq(restaurantOwners.id, tx.ownerId));
+
+      res.json({ ok: true });
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.post("/api/admin/payments/transactions/:id/reject-slip", async (req, res) => {
+    if (!requireAdminSession(req, res)) return;
+    try {
+      const id = parseInt(req.params.id, 10);
+      const [tx] = await db.select().from(paymentTransactions).where(eq(paymentTransactions.id, id)).limit(1);
+      if (!tx) return res.status(404).json({ message: "Transaction not found" });
+
+      const { notes } = z.object({ notes: z.string().optional() }).parse(req.body ?? {});
+      await db
+        .update(paymentTransactions)
+        .set({ status: "failed", notes: notes ?? "Rejected by admin", updatedAt: new Date() })
+        .where(eq(paymentTransactions.id, id));
+
+      res.json({ ok: true });
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // ── Owner Billing endpoints ───────────────────────────────────────────────
+  app.get("/api/owner/billing/plan", async (req, res) => {
+    const scope = await getOwnerScope(req);
+    if (!scope) return res.status(403).json({ message: "Owner session required" });
+    try {
+      const owner = await storage.getRestaurantOwnerById(scope.ownerId);
+      if (!owner) return res.status(404).json({ message: "Owner not found" });
+
+      const tier = (owner.subscriptionTier ?? "free") as TierKey;
+      const tierData = SUBSCRIPTION_TIERS[tier] ?? SUBSCRIPTION_TIERS.free;
+      const features: Record<string, string[]> = {
+        free: ["Basic listing", "View analytics", "Reply to reviews"],
+        growth: ["Everything in Free", "Run promotions", "Priority support", "Verified badge"],
+        pro: ["Everything in Growth", "Featured placement", "Advanced analytics", "Custom branding"],
+        enterprise: ["Everything in Pro", "Multi-location", "Dedicated manager", "API access"],
+      };
+
+      res.json({
+        tier,
+        label: tierData.label,
+        priceThb: tierData.priceThb,
+        expiry: owner.subscriptionExpiry ?? null,
+        features: features[tier] ?? features.free,
+        isVerified: owner.isVerified,
+        paymentConnected: owner.paymentConnected,
+      });
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.get("/api/owner/billing/invoices", async (req, res) => {
+    const scope = await getOwnerScope(req);
+    if (!scope) return res.status(403).json({ message: "Owner session required" });
+    try {
+      const txs = await db
+        .select()
+        .from(paymentTransactions)
+        .where(eq(paymentTransactions.ownerId, scope.ownerId))
+        .orderBy(desc(paymentTransactions.createdAt))
+        .limit(50);
+
+      const invoices = txs.map((t) => ({
+        id: `INV-${String(t.id).padStart(6, "0")}`,
+        date: t.createdAt.toISOString().split("T")[0],
+        tier: SUBSCRIPTION_TIERS[t.tier as TierKey]?.label ?? t.tier,
+        amountThb: Math.round(t.amount / 100),
+        method: t.method,
+        provider: t.provider,
+        status: t.status,
+        slipUrl: t.slipUrl ?? null,
+      }));
+
+      res.json({ invoices });
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.post("/api/owner/billing/stripe/setup-intent", async (req, res) => {
+    const scope = await getOwnerScope(req);
+    if (!scope) return res.status(403).json({ message: "Owner session required" });
+    try {
+      const owner = await storage.getRestaurantOwnerById(scope.ownerId);
+      if (!owner) return res.status(404).json({ message: "Owner not found" });
+
+      let stripeCustomerId = owner.stripeCustomerId;
+      if (!stripeCustomerId) {
+        const customer = await createStripeCustomer(owner.email, owner.displayName);
+        stripeCustomerId = customer.id;
+        await storage.updateRestaurantOwner(scope.ownerId, { stripeCustomerId } as any);
+      }
+
+      const setupIntent = await createStripeSetupIntent(stripeCustomerId);
+      res.json({ clientSecret: setupIntent.client_secret });
+    } catch (err: any) {
+      res.status(500).json({ message: err.message ?? "Failed to create setup intent" });
+    }
+  });
+
+  app.post("/api/owner/billing/stripe/subscribe", async (req, res) => {
+    const scope = await getOwnerScope(req);
+    if (!scope) return res.status(403).json({ message: "Owner session required" });
+    try {
+      const { paymentMethodId, tier } = z.object({
+        paymentMethodId: z.string().min(1),
+        tier: z.enum(["growth", "pro", "enterprise"]),
+      }).parse(req.body ?? {});
+
+      const owner = await storage.getRestaurantOwnerById(scope.ownerId);
+      if (!owner) return res.status(404).json({ message: "Owner not found" });
+
+      let stripeCustomerId = owner.stripeCustomerId;
+      if (!stripeCustomerId) {
+        const customer = await createStripeCustomer(owner.email, owner.displayName);
+        stripeCustomerId = customer.id;
+        await storage.updateRestaurantOwner(scope.ownerId, { stripeCustomerId } as any);
+      }
+
+      const tierData = SUBSCRIPTION_TIERS[tier as TierKey];
+      const subscription = await createStripeSubscription(stripeCustomerId, paymentMethodId, tier as TierKey);
+      const latestInvoice = (subscription as any).latest_invoice;
+      const paymentIntent = latestInvoice?.payment_intent;
+
+      await db.insert(paymentTransactions).values({
+        ownerId: scope.ownerId,
+        amount: tierData.priceSatang ?? 0,
+        currency: "thb",
+        provider: "stripe",
+        method: "card",
+        status: "pending",
+        providerChargeId: paymentIntent?.id ?? null,
+        tier,
+      });
+
+      res.json({
+        subscriptionId: subscription.id,
+        status: subscription.status,
+        clientSecret: paymentIntent?.client_secret ?? null,
+      });
+    } catch (err: any) {
+      if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors[0]?.message });
+      res.status(500).json({ message: err.message ?? "Failed to create subscription" });
+    }
+  });
+
+  app.post("/api/owner/billing/stripe/promptpay", async (req, res) => {
+    const scope = await getOwnerScope(req);
+    if (!scope) return res.status(403).json({ message: "Owner session required" });
+    try {
+      const { tier } = z.object({ tier: z.enum(["growth", "pro"]) }).parse(req.body ?? {});
+      const tierData = SUBSCRIPTION_TIERS[tier as TierKey];
+      if (!tierData.priceSatang) return res.status(400).json({ message: "Invalid tier" });
+
+      const pi = await createStripePromptPayIntent(tierData.priceSatang, {
+        ownerId: String(scope.ownerId),
+        tier,
+      });
+
+      const [txRow] = await db.insert(paymentTransactions).values({
+        ownerId: scope.ownerId,
+        amount: tierData.priceSatang,
+        currency: "thb",
+        provider: "stripe",
+        method: "promptpay",
+        status: "pending",
+        providerChargeId: pi.id,
+        tier,
+      }).returning();
+
+      res.json({
+        clientSecret: pi.client_secret,
+        transactionId: txRow.id,
+        qrImageUrl: (pi as any).next_action?.promptpay_display_qr_code?.image_url_png ?? null,
+      });
+    } catch (err: any) {
+      if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors[0]?.message });
+      res.status(500).json({ message: err.message ?? "Failed to create PromptPay intent" });
+    }
+  });
+
+  app.post("/api/owner/billing/omise/charge", async (req, res) => {
+    const scope = await getOwnerScope(req);
+    if (!scope) return res.status(403).json({ message: "Owner session required" });
+    try {
+      const { token, tier } = z.object({
+        token: z.string().min(1),
+        tier: z.enum(["growth", "pro"]),
+      }).parse(req.body ?? {});
+
+      const owner = await storage.getRestaurantOwnerById(scope.ownerId);
+      if (!owner) return res.status(404).json({ message: "Owner not found" });
+
+      const tierData = SUBSCRIPTION_TIERS[tier as TierKey];
+      if (!tierData.priceSatang) return res.status(400).json({ message: "Invalid tier" });
+
+      if (!owner.omiseCustomerId) {
+        const customer = await createOmiseCustomer(owner.email, token);
+        await storage.updateRestaurantOwner(scope.ownerId, { omiseCustomerId: customer.id } as any);
+      }
+
+      const charge = await createOmiseTokenCharge(token, tierData.priceSatang, `Toast ${tierData.label} subscription`);
+      const succeeded = charge.status === "successful";
+
+      const [txRow] = await db.insert(paymentTransactions).values({
+        ownerId: scope.ownerId,
+        amount: tierData.priceSatang,
+        currency: "thb",
+        provider: "omise",
+        method: "card",
+        status: succeeded ? "succeeded" : "pending",
+        providerChargeId: charge.id,
+        tier,
+      }).returning();
+
+      if (succeeded) {
+        const expiry = new Date();
+        expiry.setMonth(expiry.getMonth() + 1);
+        await storage.updateRestaurantOwner(scope.ownerId, {
+          subscriptionTier: tier,
+          subscriptionExpiry: expiry.toISOString().split("T")[0],
+          paymentConnected: true,
+        });
+      }
+
+      res.json({ chargeId: charge.id, status: charge.status, transactionId: txRow.id, succeeded });
+    } catch (err: any) {
+      if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors[0]?.message });
+      res.status(500).json({ message: err.message ?? "Charge failed" });
+    }
+  });
+
+  app.post("/api/owner/billing/omise/source-charge", async (req, res) => {
+    const scope = await getOwnerScope(req);
+    if (!scope) return res.status(403).json({ message: "Owner session required" });
+    try {
+      const { tier, sourceType } = z.object({
+        tier: z.enum(["growth", "pro"]),
+        sourceType: z.enum([
+          "promptpay",
+          "mobile_banking_scb",
+          "mobile_banking_kbank",
+          "mobile_banking_bay",
+          "mobile_banking_bbl",
+          "internet_banking_scb",
+          "internet_banking_bay",
+        ]),
+      }).parse(req.body ?? {});
+
+      const tierData = SUBSCRIPTION_TIERS[tier as TierKey];
+      if (!tierData.priceSatang) return res.status(400).json({ message: "Invalid tier" });
+
+      const source = await createOmiseSource(sourceType as any, tierData.priceSatang);
+      const returnUri = `${process.env.ADMIN_BASE_URL ?? "http://localhost:5001"}/admin/owner/billing`;
+      const charge = await createOmiseSourceCharge(source.id, tierData.priceSatang, returnUri, `Toast ${tierData.label} via ${sourceType}`);
+
+      await db.insert(paymentTransactions).values({
+        ownerId: scope.ownerId,
+        amount: tierData.priceSatang,
+        currency: "thb",
+        provider: "omise",
+        method: sourceType.startsWith("mobile_banking") ? "mobile_banking" : "promptpay",
+        status: "pending",
+        providerChargeId: charge.id,
+        tier,
+      });
+
+      res.json({ chargeId: charge.id, authorizeUri: charge.authorize_uri ?? null, status: charge.status });
+    } catch (err: any) {
+      if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors[0]?.message });
+      res.status(500).json({ message: err.message ?? "Source charge failed" });
+    }
+  });
+
+  app.post("/api/owner/billing/slip/upload", async (req, res) => {
+    const scope = await getOwnerScope(req);
+    if (!scope) return res.status(403).json({ message: "Owner session required" });
+    try {
+      const { name, type, data, tier } = z.object({
+        name: z.string().min(1).max(200),
+        type: z.string().regex(/^image\//),
+        data: z.string().min(1),
+        tier: z.enum(["growth", "pro"]),
+      }).parse(req.body ?? {});
+
+      const tierData = SUBSCRIPTION_TIERS[tier as TierKey];
+      if (!tierData.priceSatang) return res.status(400).json({ message: "Invalid tier" });
+
+      const ext = name.split(".").pop()?.toLowerCase() ?? "png";
+      if (!["png", "jpg", "jpeg", "webp"].includes(ext)) return res.status(400).json({ message: "Unsupported file type" });
+
+      const filename = `slip_${crypto.randomUUID()}.${ext}`;
+      const UPLOADS_DIR = path.resolve(process.cwd(), "uploads");
+      if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+      const buffer = Buffer.from(data, "base64");
+      if (buffer.length > 10 * 1024 * 1024) return res.status(413).json({ message: "Image too large" });
+      fs.writeFileSync(path.join(UPLOADS_DIR, filename), buffer);
+
+      const slipUrl = `/api/uploads/${filename}`;
+      const [txRow] = await db.insert(paymentTransactions).values({
+        ownerId: scope.ownerId,
+        amount: tierData.priceSatang,
+        currency: "thb",
+        provider: "omise",
+        method: "bank_transfer",
+        status: "pending",
+        tier,
+        slipUrl,
+        notes: "Awaiting admin approval",
+      }).returning();
+
+      res.json({ ok: true, slipUrl, transactionId: txRow.id });
+    } catch (err: any) {
+      if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors[0]?.message });
+      res.status(500).json({ message: err.message ?? "Upload failed" });
+    }
+  });
+
+  app.delete("/api/owner/billing/cancel", async (req, res) => {
+    const scope = await getOwnerScope(req);
+    if (!scope) return res.status(403).json({ message: "Owner session required" });
+    try {
+      await storage.updateRestaurantOwner(scope.ownerId, {
+        subscriptionTier: "free",
+        subscriptionExpiry: null,
+        paymentConnected: false,
+      });
+      res.json({ ok: true });
+    } catch {
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  // ── Owner Reviews ────────────────────────────────────────────────────────────
+
+  app.get("/api/owner/reviews", async (req, res) => {
+    const scope = await getOwnerScope(req);
+    if (!scope) return res.status(403).json({ message: "Owner session required" });
+    try {
+      const owner = await storage.getRestaurantOwnerById(scope.ownerId);
+      if (!owner?.restaurantId) return res.json({ stats: { avgRating: 0, total: 0, unreplied: 0, responseRate: 0 }, reviews: [] });
+
+      const restaurant = await storage.getRestaurantById(owner.restaurantId);
+      if (!restaurant) return res.json({ stats: { avgRating: 0, total: 0, unreplied: 0, responseRate: 0 }, reviews: [] });
+
+      const rawReviews: Array<{ author: string; rating: number; text: string; timeAgo?: string }> = restaurant.reviews ?? [];
+      const replies: Record<string, { text: string; repliedAt: string }> = (restaurant as any).reviewReplies ?? {};
+
+      const reviews = rawReviews.map((r, i) => {
+        const key = `${restaurant.id}_${i}`;
+        const reply = replies[key] ?? null;
+        return {
+          key,
+          restaurantId: restaurant.id,
+          restaurantName: restaurant.name,
+          author: r.author,
+          rating: r.rating,
+          text: r.text,
+          timeAgo: r.timeAgo ?? "",
+          ownerReply: reply ? reply.text : null,
+          repliedAt: reply ? reply.repliedAt : null,
+        };
+      });
+
+      const total = reviews.length;
+      const avgRating = total > 0 ? parseFloat((reviews.reduce((s, r) => s + r.rating, 0) / total).toFixed(1)) : 0;
+      const repliedCount = reviews.filter((r) => r.ownerReply !== null).length;
+      const unreplied = total - repliedCount;
+      const responseRate = total > 0 ? Math.round((repliedCount / total) * 100) : 0;
+
+      res.json({ stats: { avgRating, total, unreplied, responseRate }, reviews });
+    } catch (err) {
+      console.error("[owner/reviews GET]", err);
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  app.post("/api/owner/reviews/reply", async (req, res) => {
+    const scope = await getOwnerScope(req);
+    if (!scope) return res.status(403).json({ message: "Owner session required" });
+    const { key, text } = req.body as { key?: string; text?: string };
+    if (!key || !text?.trim()) return res.status(400).json({ message: "key and text required" });
+
+    // key = "${restaurantId}_${index}"
+    const restaurantId = parseInt(key.split("_")[0], 10);
+    if (isNaN(restaurantId)) return res.status(400).json({ message: "Invalid key" });
+
+    try {
+      const owner = await storage.getRestaurantOwnerById(scope.ownerId);
+      if (!owner || owner.restaurantId !== restaurantId) return res.status(403).json({ message: "Forbidden" });
+
+      const restaurant = await storage.getRestaurantById(restaurantId);
+      if (!restaurant) return res.status(404).json({ message: "Restaurant not found" });
+
+      const existing: Record<string, { text: string; repliedAt: string }> = (restaurant as any).reviewReplies ?? {};
+      const updated = { ...existing, [key]: { text: text.trim(), repliedAt: new Date().toISOString() } };
+
+      await db.update(restaurants).set({ reviewReplies: updated } as any).where(eq(restaurants.id, restaurantId));
+      res.json({ ok: true });
+    } catch (err) {
+      console.error("[owner/reviews/reply POST]", err);
       res.status(500).json({ message: "Internal server error" });
     }
   });

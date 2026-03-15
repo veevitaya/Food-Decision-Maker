@@ -12,11 +12,6 @@ import {
   UserCog,
   Search,
   Store,
-  Pencil,
-  Mail,
-  Phone,
-  Link2,
-  ChevronRight,
   Clock,
   Loader2,
 } from "lucide-react";
@@ -90,28 +85,21 @@ const emptyForm: UserFormData = {
   permissions: [...(ROLE_DEFAULT_PERMISSIONS["viewer"] || [])],
 };
 
-type OwnerEntry = {
+type ClaimEntry = {
   id: number;
-  name: string;
-  email: string;
-  restaurant: string;
-  status: "verified" | "pending" | "rejected";
-  tier: string;
-  lastActive: string;
-  restaurants: number;
-  phone: string;
-  lineId: string;
-  joinedDate: string;
+  ownerId: number;
+  restaurantId: number;
+  status: "pending" | "approved" | "rejected";
+  ownershipType: string;
+  submittedAt: string;
+  ownerName: string;
+  ownerEmail: string;
+  ownerPhone: string;
+  restaurantName: string;
+  restaurantAddress: string;
+  restaurantCategory: string;
+  restaurantImageUrl: string;
 };
-
-const MOCK_OWNERS: OwnerEntry[] = [
-  { id: 1, name: "Jay Fai", email: "owner@toastbkk.com", restaurant: "Jay Fai", status: "verified", tier: "Premium", lastActive: "2h ago", restaurants: 1, phone: "+66 81 xxx xxxx", lineId: "jayfai_bkk", joinedDate: "Jan 15, 2026" },
-  { id: 2, name: "Somchai K.", email: "somchai@email.com", restaurant: "Som Tam Nua", status: "verified", tier: "Basic", lastActive: "1d ago", restaurants: 1, phone: "+66 82 xxx xxxx", lineId: "somchai_k", joinedDate: "Feb 1, 2026" },
-  { id: 3, name: "Nattaya P.", email: "nattaya@email.com", restaurant: "Bo.Lan", status: "pending", tier: "Free", lastActive: "3d ago", restaurants: 1, phone: "+66 83 xxx xxxx", lineId: "", joinedDate: "Mar 1, 2026" },
-  { id: 4, name: "Marcus W.", email: "marcus@email.com", restaurant: "Paste Bangkok", status: "verified", tier: "Premium", lastActive: "5h ago", restaurants: 2, phone: "+66 84 xxx xxxx", lineId: "marcus_w", joinedDate: "Dec 10, 2025" },
-  { id: 5, name: "Arunee S.", email: "arunee@email.com", restaurant: "Sorn", status: "pending", tier: "Free", lastActive: "1w ago", restaurants: 1, phone: "+66 85 xxx xxxx", lineId: "", joinedDate: "Mar 5, 2026" },
-  { id: 6, name: "Chen W.", email: "chen@email.com", restaurant: "Gaggan Anand", status: "verified", tier: "Enterprise", lastActive: "1h ago", restaurants: 3, phone: "+66 86 xxx xxxx", lineId: "chen_gaggan", joinedDate: "Nov 20, 2025" },
-];
 
 export default function AdminUsers() {
   const { toast } = useToast();
@@ -120,14 +108,15 @@ export default function AdminUsers() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<AdminUserSafe | null>(null);
   const [formData, setFormData] = useState<UserFormData>(emptyForm);
-  const [owners, setOwners] = useState(MOCK_OWNERS);
   const [ownerSearch, setOwnerSearch] = useState("");
   const [ownerStatusFilter, setOwnerStatusFilter] = useState("all");
-  const [ownerDetail, setOwnerDetail] = useState<OwnerEntry | null>(null);
-  const [editingOwner, setEditingOwner] = useState<OwnerEntry | null>(null);
-  const [ownerEditForm, setOwnerEditForm] = useState({ name: "", email: "", tier: "", phone: "" });
-  const [reviewOwner, setReviewOwner] = useState<OwnerEntry | null>(null);
+  const [reviewClaim, setReviewClaim] = useState<ClaimEntry | null>(null);
   const [ownerProcessing, setOwnerProcessing] = useState(false);
+
+  const { data: claims = [], isLoading: claimsLoading } = useQuery<ClaimEntry[]>({
+    queryKey: ["/api/admin/claims"],
+    enabled: activeTab === "owners",
+  });
 
   const { data: adminUsers = [], isLoading } = useQuery<AdminUserSafe[]>({
     queryKey: ["/api/admin/admin-users"],
@@ -181,10 +170,11 @@ export default function AdminUsers() {
   };
 
   const handleRoleChange = (role: string) => {
+    const roleKey = role as keyof typeof ROLE_DEFAULT_PERMISSIONS;
     setFormData({
       ...formData,
       role,
-      permissions: [...(ROLE_DEFAULT_PERMISSIONS[role] || [])],
+      permissions: [...(ROLE_DEFAULT_PERMISSIONS[roleKey] || [])],
     });
   };
 
@@ -225,40 +215,32 @@ export default function AdminUsers() {
 
   const activeCount = adminUsers.filter((u) => u.isActive).length;
 
-  const filteredOwners = owners.filter(o => {
-    const matchSearch = !ownerSearch || o.name.toLowerCase().includes(ownerSearch.toLowerCase()) || o.email.toLowerCase().includes(ownerSearch.toLowerCase());
-    const matchStatus = ownerStatusFilter === "all" || o.status === ownerStatusFilter;
+  const filteredClaims = claims.filter(c => {
+    const matchSearch = !ownerSearch ||
+      c.ownerName.toLowerCase().includes(ownerSearch.toLowerCase()) ||
+      c.ownerEmail.toLowerCase().includes(ownerSearch.toLowerCase()) ||
+      c.restaurantName.toLowerCase().includes(ownerSearch.toLowerCase());
+    const matchStatus = ownerStatusFilter === "all" || c.status === ownerStatusFilter;
     return matchSearch && matchStatus;
   });
 
-  const handleOwnerReview = (action: "approve" | "reject") => {
-    if (!reviewOwner) return;
+  const handleClaimReview = async (action: "approve" | "reject") => {
+    if (!reviewClaim) return;
     setOwnerProcessing(true);
-    setTimeout(() => {
-      setOwners(prev => prev.map(o =>
-        o.id === reviewOwner.id ? { ...o, status: (action === "approve" ? "verified" : "rejected") as OwnerEntry["status"] } : o
-      ));
+    try {
+      const res = await apiRequest("PATCH", `/api/admin/claims/${reviewClaim.id}`, { status: action === "approve" ? "approved" : "rejected" });
+      if (!res.ok) throw new Error("Failed");
       toast({
-        title: action === "approve" ? "Owner Verified" : "Claim Rejected",
-        description: `${reviewOwner.name}'s claim for ${reviewOwner.restaurant} has been ${action === "approve" ? "approved" : "rejected"}`
+        title: action === "approve" ? "Claim Approved" : "Claim Rejected",
+        description: `${reviewClaim.ownerName}'s claim for ${reviewClaim.restaurantName} has been ${action === "approve" ? "approved" : "rejected"}`,
       });
-      setReviewOwner(null);
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/claims"] });
+      setReviewClaim(null);
+    } catch {
+      toast({ title: "Error", description: "Could not update claim", variant: "destructive" });
+    } finally {
       setOwnerProcessing(false);
-    }, 1000);
-  };
-
-  const openOwnerEdit = (owner: OwnerEntry) => {
-    setEditingOwner(owner);
-    setOwnerEditForm({ name: owner.name, email: owner.email, tier: owner.tier, phone: owner.phone });
-  };
-
-  const saveOwnerEdit = () => {
-    if (!editingOwner) return;
-    setOwners(prev => prev.map(o =>
-      o.id === editingOwner.id ? { ...o, name: ownerEditForm.name, email: ownerEditForm.email, tier: ownerEditForm.tier, phone: ownerEditForm.phone } : o
-    ));
-    toast({ title: "Owner Updated", description: `${ownerEditForm.name}'s profile has been updated` });
-    setEditingOwner(null);
+    }
   };
 
   return (
@@ -542,14 +524,14 @@ export default function AdminUsers() {
         <>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3" data-testid="section-owner-kpis">
             {[
-              { label: "Total Owners", value: owners.length, color: "var(--admin-deep-purple)" },
-              { label: "Verified", value: owners.filter(o => o.status === "verified").length, color: "var(--admin-cyan)" },
-              { label: "Pending", value: owners.filter(o => o.status === "pending").length, color: "var(--admin-teal)" },
-              { label: "Rejected", value: owners.filter(o => o.status === "rejected").length, color: "var(--admin-pink)" },
+              { label: "Total Claims", value: claims.length },
+              { label: "Approved", value: claims.filter(c => c.status === "approved").length },
+              { label: "Pending", value: claims.filter(c => c.status === "pending").length },
+              { label: "Rejected", value: claims.filter(c => c.status === "rejected").length },
             ].map(kpi => (
               <Card key={kpi.label} className="p-4" data-testid={`card-owner-kpi-${kpi.label.toLowerCase().replace(/\s+/g, "-")}`}>
                 <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1">{kpi.label}</p>
-                <p className="text-2xl font-bold tracking-tight text-gray-800">{kpi.value}</p>
+                <p className="text-2xl font-bold tracking-tight text-gray-800">{claimsLoading ? "…" : kpi.value}</p>
               </Card>
             ))}
           </div>
@@ -559,7 +541,7 @@ export default function AdminUsers() {
               <div className="relative flex-1 min-w-[200px]">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                 <Input
-                  placeholder="Search owners..."
+                  placeholder="Search owner or restaurant..."
                   value={ownerSearch}
                   onChange={(e) => setOwnerSearch(e.target.value)}
                   className="pl-9"
@@ -573,166 +555,92 @@ export default function AdminUsers() {
                 data-testid="select-owner-status"
               >
                 <option value="all">All Status</option>
-                <option value="verified">Verified</option>
+                <option value="approved">Approved</option>
                 <option value="pending">Pending</option>
                 <option value="rejected">Rejected</option>
               </select>
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-gray-100 bg-gray-50">
-                    <th className="text-left py-3 px-4 text-xs uppercase tracking-wider text-muted-foreground font-medium">Owner</th>
-                    <th className="text-left py-3 px-4 text-xs uppercase tracking-wider text-muted-foreground font-medium">Restaurant</th>
-                    <th className="text-center py-3 px-4 text-xs uppercase tracking-wider text-muted-foreground font-medium">Status</th>
-                    <th className="text-center py-3 px-4 text-xs uppercase tracking-wider text-muted-foreground font-medium">Tier</th>
-                    <th className="text-center py-3 px-4 text-xs uppercase tracking-wider text-muted-foreground font-medium">Last Active</th>
-                    <th className="text-center py-3 px-4 text-xs uppercase tracking-wider text-muted-foreground font-medium">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredOwners.map((owner) => (
-                    <tr key={owner.id} className="border-b border-gray-100" data-testid={`row-owner-${owner.id}`}>
-                      <td className="py-3 px-4">
-                        <div className="flex items-center gap-3">
-                          <div className={`w-8 h-8 rounded-md flex items-center justify-center text-xs font-bold ${
-                            owner.status === "verified" ? "bg-[#00B14F]/10 text-[#00B14F]" :
-                            owner.status === "pending" ? "bg-amber-100 text-amber-700" :
-                            "bg-red-100 text-red-600"
-                          }`}>
-                            {owner.name.charAt(0)}
-                          </div>
-                          <div>
-                            <span className="font-medium text-foreground">{owner.name}</span>
-                            <p className="text-[10px] text-muted-foreground">{owner.email}</p>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="py-3 px-4">
-                        <span className="text-sm text-gray-700">{owner.restaurant}</span>
-                        {owner.restaurants > 1 && <span className="text-[10px] text-gray-400 ml-1">+{owner.restaurants - 1}</span>}
-                      </td>
-                      <td className="py-3 px-4 text-center">
-                        <Badge
-                          variant="secondary"
-                          className={
-                            owner.status === "verified" ? "bg-[#00B14F]/10 text-[#00B14F]" :
-                            owner.status === "pending" ? "bg-amber-100 text-amber-700" :
-                            "bg-red-100 text-red-600"
-                          }
-                          data-testid={`badge-owner-status-${owner.id}`}
-                        >
-                          {owner.status === "verified" && <ShieldCheck className="w-3 h-3 mr-1" />}
-                          {owner.status === "pending" && <Clock className="w-3 h-3 mr-1" />}
-                          {owner.status === "rejected" && <X className="w-3 h-3 mr-1" />}
-                          <span className="capitalize">{owner.status}</span>
-                        </Badge>
-                      </td>
-                      <td className="py-3 px-4 text-center">
-                        <Badge variant="outline" className="text-[10px]" data-testid={`badge-owner-tier-${owner.id}`}>
-                          {owner.tier}
-                        </Badge>
-                      </td>
-                      <td className="py-3 px-4 text-center text-xs text-muted-foreground">{owner.lastActive}</td>
-                      <td className="py-3 px-4 text-center">
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button size="icon" variant="ghost" data-testid={`button-owner-actions-${owner.id}`}>
-                              <MoreHorizontal className="w-4 h-4" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => setOwnerDetail(owner)} data-testid={`button-owner-view-${owner.id}`}>
-                              <Eye className="w-3.5 h-3.5 mr-2" /> View Details
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => openOwnerEdit(owner)} data-testid={`button-owner-edit-${owner.id}`}>
-                              <Pencil className="w-3.5 h-3.5 mr-2" /> Edit Profile
-                            </DropdownMenuItem>
-                            {owner.status === "pending" && (
-                              <DropdownMenuItem onClick={() => setReviewOwner(owner)} data-testid={`button-owner-review-${owner.id}`}>
-                                <ShieldCheck className="w-3.5 h-3.5 mr-2" /> Review Claim
-                              </DropdownMenuItem>
-                            )}
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </td>
+              {claimsLoading ? (
+                <div className="space-y-2 p-4">{[1,2,3].map(i => <div key={i} className="h-10 bg-gray-100 rounded animate-pulse" />)}</div>
+              ) : filteredClaims.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 text-center text-muted-foreground gap-2">
+                  <Store className="w-6 h-6 opacity-30" />
+                  <span className="text-sm">No claims found</span>
+                </div>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-100 bg-gray-50">
+                      <th className="text-left py-3 px-4 text-xs uppercase tracking-wider text-muted-foreground font-medium">Owner</th>
+                      <th className="text-left py-3 px-4 text-xs uppercase tracking-wider text-muted-foreground font-medium">Restaurant</th>
+                      <th className="text-center py-3 px-4 text-xs uppercase tracking-wider text-muted-foreground font-medium">Status</th>
+                      <th className="text-center py-3 px-4 text-xs uppercase tracking-wider text-muted-foreground font-medium">Submitted</th>
+                      <th className="text-center py-3 px-4 text-xs uppercase tracking-wider text-muted-foreground font-medium">Actions</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {filteredClaims.map((claim) => (
+                      <tr key={claim.id} className="border-b border-gray-100" data-testid={`row-claim-${claim.id}`}>
+                        <td className="py-3 px-4">
+                          <div className="flex items-center gap-3">
+                            <div className={`w-8 h-8 rounded-md flex items-center justify-center text-xs font-bold ${
+                              claim.status === "approved" ? "bg-[#00B14F]/10 text-[#00B14F]" :
+                              claim.status === "pending" ? "bg-amber-100 text-amber-700" :
+                              "bg-red-100 text-red-600"
+                            }`}>
+                              {claim.ownerName.charAt(0).toUpperCase()}
+                            </div>
+                            <div>
+                              <span className="font-medium text-foreground">{claim.ownerName}</span>
+                              <p className="text-[10px] text-muted-foreground">{claim.ownerEmail}</p>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="py-3 px-4">
+                          <span className="text-sm text-gray-700">{claim.restaurantName}</span>
+                          <p className="text-[10px] text-gray-400">{claim.restaurantCategory}</p>
+                        </td>
+                        <td className="py-3 px-4 text-center">
+                          <Badge
+                            variant="secondary"
+                            className={
+                              claim.status === "approved" ? "bg-[#00B14F]/10 text-[#00B14F]" :
+                              claim.status === "pending" ? "bg-amber-100 text-amber-700" :
+                              "bg-red-100 text-red-600"
+                            }
+                            data-testid={`badge-claim-status-${claim.id}`}
+                          >
+                            {claim.status === "approved" && <ShieldCheck className="w-3 h-3 mr-1" />}
+                            {claim.status === "pending" && <Clock className="w-3 h-3 mr-1" />}
+                            {claim.status === "rejected" && <X className="w-3 h-3 mr-1" />}
+                            <span className="capitalize">{claim.status}</span>
+                          </Badge>
+                        </td>
+                        <td className="py-3 px-4 text-center text-xs text-muted-foreground">
+                          {new Date(claim.submittedAt).toLocaleDateString()}
+                        </td>
+                        <td className="py-3 px-4 text-center">
+                          {claim.status === "pending" && (
+                            <button
+                              onClick={() => setReviewClaim(claim)}
+                              className="flex items-center gap-1 text-xs font-medium px-3 py-1.5 rounded-lg bg-amber-50 text-amber-700 hover:bg-amber-100 transition-colors mx-auto"
+                              data-testid={`btn-review-claim-${claim.id}`}
+                            >
+                              <ShieldCheck className="w-3.5 h-3.5" /> Review
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
           </Card>
 
-          {ownerDetail && !editingOwner && !reviewOwner && (
-            <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-6" data-testid="owner-detail-modal">
-              <div className="bg-white rounded-2xl border border-gray-100 shadow-2xl w-full max-w-md overflow-hidden">
-                <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-                  <div className="flex items-center gap-3">
-                    <div className={`w-8 h-8 rounded-xl flex items-center justify-center text-xs font-bold ${
-                      ownerDetail.status === "verified" ? "bg-[#00B14F]/10 text-[#00B14F]" : "bg-amber-100 text-amber-700"
-                    }`}>{ownerDetail.name.charAt(0)}</div>
-                    <h3 className="text-sm font-semibold text-gray-800">{ownerDetail.name}</h3>
-                  </div>
-                  <button onClick={() => setOwnerDetail(null)} className="w-7 h-7 rounded-lg bg-gray-100 flex items-center justify-center hover:bg-gray-200" data-testid="btn-close-owner-detail">
-                    <X className="w-3.5 h-3.5 text-gray-500" />
-                  </button>
-                </div>
-                <div className="px-6 py-5 space-y-3">
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="p-3 rounded-xl bg-gray-50"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Email</p><p className="text-xs text-gray-700">{ownerDetail.email}</p></div>
-                    <div className="p-3 rounded-xl bg-gray-50"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Phone</p><p className="text-xs text-gray-700">{ownerDetail.phone}</p></div>
-                    <div className="p-3 rounded-xl bg-gray-50"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Status</p><span className={`text-xs font-medium ${ownerDetail.status === "verified" ? "text-emerald-600" : ownerDetail.status === "pending" ? "text-amber-600" : "text-red-500"}`}>{ownerDetail.status}</span></div>
-                    <div className="p-3 rounded-xl bg-gray-50"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Tier</p><p className="text-xs text-gray-700">{ownerDetail.tier}</p></div>
-                    <div className="p-3 rounded-xl bg-gray-50"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Restaurant</p><p className="text-xs text-gray-700">{ownerDetail.restaurant}</p></div>
-                    <div className="p-3 rounded-xl bg-gray-50"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">LINE ID</p><p className="text-xs text-gray-700">{ownerDetail.lineId || "Not linked"}</p></div>
-                    <div className="p-3 rounded-xl bg-gray-50"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Joined</p><p className="text-xs text-gray-700">{ownerDetail.joinedDate}</p></div>
-                    <div className="p-3 rounded-xl bg-gray-50"><p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Last Active</p><p className="text-xs text-gray-700">{ownerDetail.lastActive}</p></div>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between px-6 py-4 border-t border-gray-100 bg-gray-50">
-                  <button onClick={() => { openOwnerEdit(ownerDetail); setOwnerDetail(null); }} className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-800 rounded-lg bg-white border border-gray-200" data-testid="btn-edit-from-detail">
-                    <Pencil className="w-3.5 h-3.5" /> Edit
-                  </button>
-                  <button onClick={() => setOwnerDetail(null)} className="px-4 py-2 text-sm text-gray-500 hover:text-gray-800 rounded-lg">Close</button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {editingOwner && (
-            <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-6" data-testid="edit-owner-dialog">
-              <div className="bg-white rounded-2xl border border-gray-100 shadow-2xl w-full max-w-md overflow-hidden">
-                <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-                  <h3 className="text-sm font-semibold text-gray-800">Edit Owner Profile</h3>
-                  <button onClick={() => setEditingOwner(null)} className="w-7 h-7 rounded-lg bg-gray-100 flex items-center justify-center hover:bg-gray-200" data-testid="btn-close-edit-owner">
-                    <X className="w-3.5 h-3.5 text-gray-500" />
-                  </button>
-                </div>
-                <div className="px-6 py-5 space-y-4">
-                  <div><label className="text-xs font-medium text-gray-500 block mb-1">Name</label>
-                    <input type="text" value={ownerEditForm.name} onChange={e => setOwnerEditForm({ ...ownerEditForm, name: e.target.value })} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-100" data-testid="input-edit-owner-name" /></div>
-                  <div><label className="text-xs font-medium text-gray-500 block mb-1">Email</label>
-                    <input type="email" value={ownerEditForm.email} onChange={e => setOwnerEditForm({ ...ownerEditForm, email: e.target.value })} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-100" data-testid="input-edit-owner-email" /></div>
-                  <div><label className="text-xs font-medium text-gray-500 block mb-1">Phone</label>
-                    <input type="text" value={ownerEditForm.phone} onChange={e => setOwnerEditForm({ ...ownerEditForm, phone: e.target.value })} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-100" data-testid="input-edit-owner-phone" /></div>
-                  <div><label className="text-xs font-medium text-gray-500 block mb-1">Tier</label>
-                    <select value={ownerEditForm.tier} onChange={e => setOwnerEditForm({ ...ownerEditForm, tier: e.target.value })} className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none" data-testid="select-edit-owner-tier">
-                      <option value="Free">Free</option>
-                      <option value="Basic">Basic</option>
-                      <option value="Premium">Premium</option>
-                      <option value="Enterprise">Enterprise</option>
-                    </select></div>
-                </div>
-                <div className="flex items-center justify-end gap-2 px-6 py-4 border-t border-gray-100 bg-gray-50">
-                  <button onClick={() => setEditingOwner(null)} className="px-4 py-2 text-sm text-gray-500 rounded-lg" data-testid="btn-cancel-edit-owner">Cancel</button>
-                  <button onClick={saveOwnerEdit} className="px-4 py-2 text-sm font-semibold bg-[var(--admin-deep-purple)] text-white rounded-lg hover:opacity-90" data-testid="btn-save-edit-owner">Save Changes</button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {reviewOwner && (
+          {reviewClaim && (
             <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-6" data-testid="review-owner-dialog">
               <div className="bg-white rounded-2xl border border-gray-100 shadow-2xl w-full max-w-md overflow-hidden">
                 <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
@@ -742,28 +650,37 @@ export default function AdminUsers() {
                     </div>
                     <h3 className="text-sm font-semibold text-gray-800">Review Ownership Claim</h3>
                   </div>
-                  <button onClick={() => setReviewOwner(null)} className="w-7 h-7 rounded-lg bg-gray-100 flex items-center justify-center hover:bg-gray-200" data-testid="btn-close-review-owner">
+                  <button onClick={() => setReviewClaim(null)} className="w-7 h-7 rounded-lg bg-gray-100 flex items-center justify-center hover:bg-gray-200" data-testid="btn-close-review-owner">
                     <X className="w-3.5 h-3.5 text-gray-500" />
                   </button>
                 </div>
                 <div className="px-6 py-5 space-y-4">
                   <div className="flex items-center gap-3 p-3 rounded-xl bg-gray-50">
-                    <div className="w-10 h-10 rounded-xl bg-amber-100 flex items-center justify-center text-sm font-bold text-amber-700">{reviewOwner.name.charAt(0)}</div>
+                    <div className="w-10 h-10 rounded-xl bg-amber-100 flex items-center justify-center text-sm font-bold text-amber-700">
+                      {reviewClaim.ownerName.charAt(0).toUpperCase()}
+                    </div>
                     <div>
-                      <p className="text-sm font-medium text-gray-800">{reviewOwner.name}</p>
-                      <p className="text-xs text-gray-400">{reviewOwner.email}</p>
+                      <p className="text-sm font-medium text-gray-800">{reviewClaim.ownerName}</p>
+                      <p className="text-xs text-gray-400">{reviewClaim.ownerEmail}</p>
+                      {reviewClaim.ownerPhone && <p className="text-xs text-gray-400">{reviewClaim.ownerPhone}</p>}
                     </div>
                   </div>
-                  <div className="p-3 rounded-xl border border-gray-100">
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Claiming Restaurant</p>
-                    <p className="text-sm font-medium text-gray-800">{reviewOwner.restaurant}</p>
-                    <p className="text-xs text-gray-400 mt-1">Submitted: {reviewOwner.joinedDate}</p>
+                  <div className="flex gap-3 p-3 rounded-xl border border-gray-100">
+                    {reviewClaim.restaurantImageUrl && (
+                      <img src={reviewClaim.restaurantImageUrl} alt="" className="w-14 h-14 rounded-lg object-cover flex-shrink-0" />
+                    )}
+                    <div>
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Claiming Restaurant</p>
+                      <p className="text-sm font-medium text-gray-800">{reviewClaim.restaurantName}</p>
+                      <p className="text-xs text-gray-400">{reviewClaim.restaurantCategory} · {reviewClaim.restaurantAddress}</p>
+                      <p className="text-xs text-gray-400 mt-1">Submitted: {new Date(reviewClaim.submittedAt).toLocaleDateString()}</p>
+                    </div>
                   </div>
                 </div>
                 <div className="flex items-center justify-end gap-2 px-6 py-4 border-t border-gray-100 bg-gray-50">
-                  <button onClick={() => setReviewOwner(null)} className="px-4 py-2 text-sm text-gray-500 rounded-lg" data-testid="btn-cancel-review-owner">Cancel</button>
+                  <button onClick={() => setReviewClaim(null)} className="px-4 py-2 text-sm text-gray-500 rounded-lg" data-testid="btn-cancel-review-owner">Cancel</button>
                   <button
-                    onClick={() => handleOwnerReview("reject")}
+                    onClick={() => handleClaimReview("reject")}
                     disabled={ownerProcessing}
                     className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-red-50 text-red-600 rounded-lg hover:bg-red-100 disabled:opacity-50"
                     data-testid="btn-reject-owner-claim"
@@ -772,7 +689,7 @@ export default function AdminUsers() {
                     Reject
                   </button>
                   <button
-                    onClick={() => handleOwnerReview("approve")}
+                    onClick={() => handleClaimReview("approve")}
                     disabled={ownerProcessing}
                     className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 disabled:opacity-50"
                     data-testid="btn-approve-owner-claim"
